@@ -22,34 +22,12 @@ function hasMobileSignal(): boolean {
 }
 
 export default function App() {
-  const bootState    = useBootStore((s) => s.bootState)
-  const setBootState = useBootStore((s) => s.setBootState)
+  const bootState = useBootStore((s) => s.bootState)
   const [transitionDone, setTransitionDone] = useState(false)
   const [awakeVisible, setAwakeVisible]     = useState(false)
   const [mobileState, setMobileState]       = useState<MobileState>(
     hasMobileSignal() ? 'checking' : 'desktop'
   )
-
-  // Listen for boot state pushes from the Electron tray menu
-  useEffect(() => {
-    const bridge = (window as any).electronBridge
-    if (!bridge?.onBootState) return
-    return bridge.onBootState((s: string) => {
-      if (s === 'DORMANT' || s === 'AWAKE') {
-        setBootState(s)
-      }
-    })
-  }, [setBootState])
-
-  // Push renderer-side bootState changes (e.g., wake-word match in
-  // ListeningLayer, "Dormir sistema" button in the Core panel) over to
-  // main.js so it can resize/show the window. Without this, the renderer
-  // thinks it's AWAKE but the window is still sized for the LISTENING
-  // dot — the user perceives "wake fires but app doesn't open".
-  useEffect(() => {
-    const bridge = (window as any).electronBridge
-    bridge?.setBootState?.(bootState)
-  }, [bootState])
 
   useEffect(() => {
     if (mobileState !== 'checking') return
