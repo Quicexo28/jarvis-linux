@@ -1,0 +1,16 @@
+[Unit]
+Description=Jarvis Backend (Node.js API + static frontend)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-linux/backend
+ExecStart=/usr/bin/node src/server.js
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+Environment=PORT=8788
+Environment=HOST=127.0.0.1
+
+[Install]
+WantedBy=default.target

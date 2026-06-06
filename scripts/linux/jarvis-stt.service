@@ -1,0 +1,13 @@
+[Unit]
+Description=Jarvis STT Service (faster-whisper)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-linux/backend/voice/python
+ExecStart=%h/jarvis-linux/backend/voice/python/.venv/bin/python stt_service.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,24 @@
+[Unit]
+Description=Jarvis UI (Chromium app-mode)
+After=jarvis-backend.service
+Requires=jarvis-backend.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/bin/chromium \
+  --app=http://localhost:8788 \
+  --no-default-browser-check \
+  --disable-infobars \
+  --autoplay-policy=no-user-gesture-required \
+  --use-fake-ui-for-media-stream=false \
+  --ozone-platform-hint=auto \
+  --enable-features=UseOzonePlatform
+Restart=on-failure
+RestartSec=3
+# Supports both X11 and Wayland. --ozone-platform-hint=auto picks at runtime.
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+
+[Install]
+WantedBy=default.target
