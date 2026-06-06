@@ -19,6 +19,11 @@ import { handleSelfBuild } from './selfBuild.js'
 import { activateSkill } from '../lib/skillRegistry.js'
 import { findSkillByText, invokeRoute } from '../lib/skillManifest.js'
 import { routes } from '../routes.js'
+import {
+  setSpeakerMode,
+  filterIntentsByMode,
+  incrementTurnCount,
+} from '../lib/speakerContext.js'
 
 const SPEECH_SYSTEM_PROMPT_BASE = `Eres Jarvis, el asistente personal de inteligencia artificial de Santiago. Hablas por voz, en español de Colombia.
 
@@ -121,6 +126,36 @@ function makeSentencer(onSentence) {
   }
 }
 
+const OWNER_SPEAKER = process.env.JARVIS_OWNER_SPEAKER ?? null
+const OWNER_CONFIDENCE_THRESHOLD = 0.85
+const KNOWN_CONFIDENCE_THRESHOLD = 0.65
+
+const UNKNOWN_OPENERS = [
+  'Usuario no reconocido. Sistema limitado activado.',
+  'Sistema comprometido. Autodestrucción en 3... 2... 1... — es broma. Hola desconocido, ¿quién sos?',
+  'Alerta de intruso. Iniciando protocolo... — es broma. ¿Con quién tengo el gusto?',
+]
+
+function _resolveSpeakerMode(speakerName, speakerConfidence) {
+  // If no speaker info provided at all (legacy path / tests), treat as OWNER
+  // so existing behavior is unchanged. Real production turns always include
+  // speakerName from the STT service.
+  if (speakerName === null && speakerConfidence === 0) {
+    setSpeakerMode('OWNER', null)
+    return 'OWNER'
+  }
+  if (!speakerName || speakerConfidence < KNOWN_CONFIDENCE_THRESHOLD) {
+    setSpeakerMode('LOW_CONF', null)
+    return 'LOW_CONF'
+  }
+  if (OWNER_SPEAKER && speakerName === OWNER_SPEAKER && speakerConfidence >= OWNER_CONFIDENCE_THRESHOLD) {
+    setSpeakerMode('OWNER', speakerName)
+    return 'OWNER'
+  }
+  setSpeakerMode('KNOWN', speakerName)
+  return 'KNOWN'
+}
+
 /**
  * Core turn pipeline shared by the buffered (process-speech) and streaming
  * (converse) endpoints. onSentence is invoked for each spoken chunk: once per
@@ -153,7 +188,35 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
   markInteraction()
 
   const speakerName = body.speakerName ?? null
+
+  // ── Speaker mode gate ────────────────────────────────────────────────────
+  const currentMode = _resolveSpeakerMode(speakerName, speakerConfidence)
+
+  if (currentMode === 'LOW_CONF') {
+    const reply = 'No pude identificar quién habla. ¿Puede repetir, por favor?'
+    onSentence(reply)
+    return { action: 'low_conf', reply, state }
+  }
+
+  if (currentMode === 'UNKNOWN') {
+    const opener = UNKNOWN_OPENERS[Math.floor(Math.random() * UNKNOWN_OPENERS.length)]
+    onSentence(opener)
+    return { action: 'unknown_greeting', reply: opener, state }
+  }
+
+  const turnCount = incrementTurnCount(speakerName ?? 'unknown')
+  if (turnCount % 5 === 0) {
+    console.log(`[speaker] reinforcement turn ${turnCount} for ${speakerName}`)
+  }
+  // ── End speaker mode gate ────────────────────────────────────────────────
+
   const intentTag = classification.intentTag || 'chat'
+
+  if (!filterIntentsByMode(intentTag, currentMode)) {
+    const reply = 'Lo siento, esa función no está disponible para este usuario.'
+    onSentence(reply)
+    return { action: 'intent_blocked', reply, intentTag, mode: currentMode, state }
+  }
 
   // self_build: generate a new dynamic capability — cannot go through MCP (FS + restart).
   if (intentTag === 'self_build') {
