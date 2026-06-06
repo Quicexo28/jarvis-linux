@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises'
 import os from 'os'
 import { json } from '../lib/http.js'
 import { execCmd } from '../lib/exec.js'
@@ -33,14 +34,27 @@ async function getGpuTelemetry() {
   return { available: true, gpus: parsed, avgUtilizationPct: avgUtil }
 }
 
+// Exported for unit testing.
+export function parseNetDev(content) {
+  let totalRx = 0
+  let totalTx = 0
+  const lines = content.split('\n').slice(2) // skip 2 header lines
+  for (const line of lines) {
+    const colonIdx = line.indexOf(':')
+    if (colonIdx === -1) continue
+    const parts = line.slice(colonIdx + 1).trim().split(/\s+/)
+    // /proc/net/dev columns (0-indexed after the colon):
+    //  0=rx_bytes  1=rx_pkt  2=rx_err … 8=tx_bytes  9=tx_pkt …
+    totalRx += parseInt(parts[0] ?? '0', 10) || 0
+    totalTx += parseInt(parts[8] ?? '0', 10) || 0
+  }
+  return { totalRx, totalTx }
+}
+
 async function getNetworkTelemetry() {
-  const raw = await execCmd('powershell -NoProfile -Command "Get-NetAdapterStatistics | Select-Object Name,ReceivedBytes,SentBytes | ConvertTo-Json -Compress"')
-  if (!raw) return { rxMbps: 0, txMbps: 0 }
   try {
-    const parsed = JSON.parse(raw)
-    const list = Array.isArray(parsed) ? parsed : [parsed]
-    const totalRx = list.reduce((acc, item) => acc + Number(item?.ReceivedBytes || 0), 0)
-    const totalTx = list.reduce((acc, item) => acc + Number(item?.SentBytes || 0), 0)
+    const content = await fs.readFile('/proc/net/dev', 'utf8')
+    const { totalRx, totalTx } = parseNetDev(content)
     const now = Date.now()
 
     if (!lastNetSnapshot) {
