@@ -6,6 +6,7 @@ import { loadLocalSecrets } from './lib/secrets.js'
 loadLocalSecrets()
 
 import { dispatch, loadDynamicRoutes } from './routes.js'
+import { serveStatic } from './handlers/static.js'
 import { handleSttStreamUpgrade } from './handlers/stt.js'
 import { handleJarvisTtsStreamUpgrade } from './handlers/jarvis.js'
 import { warmupSpeechSession } from './handlers/speech.js'
@@ -19,6 +20,9 @@ const host = env.HOST ?? '0.0.0.0'
 
 const server = http.createServer(async (req, res) => {
   try {
+    // Serve built frontend before API routes. Returns false when no file matches,
+    // allowing API dispatch to proceed normally.
+    if (await serveStatic(req, res)) return
     await dispatch(req, res)
   } catch (err) {
     console.error('unhandled', err)
