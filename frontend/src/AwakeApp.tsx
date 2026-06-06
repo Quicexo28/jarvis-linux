@@ -48,8 +48,6 @@ import { useModel3dStore } from './state/model3dStore'
 
 // Modes that fully replace the world canvas when zoomed
 const CANVAS_MODES = new Set(['plan2d', 'plan3d', 'space'])
-// Ventana tras apuntar dentro de la cual un click cuenta como mouse virtual (no entrada al ring).
-const POINTER_CLICK_WINDOW_MS = 1500
 
 export function AwakeApp() {
   const mode            = useJarvisStore(s => s.mode)
@@ -110,8 +108,6 @@ export function AwakeApp() {
   const [processingReply] = useState(false)
   const [copiedUrl, setCopiedUrl]           = useState<string | null>(null)
   const qrCanvasRef        = useRef<HTMLCanvasElement>(null)
-  const lastPointerRef     = useRef<{ x: number; y: number } | null>(null)
-  const lastPointTimeRef   = useRef(0)
   const housePlans = useMemo(() => loadSavedPlans(), [zoomedMode])
 
   const handleBack = useCallback(() => {
@@ -158,12 +154,10 @@ export function AwakeApp() {
     return () => window.removeEventListener('keydown', handler)
   }, [zoomedMode, handleBack, ringLevel, activeRingMode, setRingLevel, rotateRing, enterMode])
 
-  // Gesture: click → enter zoomed mode. Se ignora si el usuario venía apuntando (modo puntero):
-  // en ese caso el click es del mouse virtual, no una entrada al ring.
+  // Gesture: click → enter zoomed mode
   useEffect(() => {
     if (!gestureOutput.click || zoomedMode) return
-    const pointing = performance.now() - lastPointTimeRef.current < POINTER_CLICK_WINDOW_MS
-    if (!pointing) enterMode(activeRingMode)
+    enterMode(activeRingMode)
   }, [gestureOutput.click])
 
   // Gesture: back → handle back
@@ -205,26 +199,6 @@ export function AwakeApp() {
   }, [gestureOutput.grab.active, gestureOutput.grab.deltaX, gestureOutput.grab.deltaY,
       gestureOutput.pinch.active, zoomedMode, ringAngle, ringLevel,
       setRingAngle, setActiveRingMode])
-
-  // Gesture: point → mouse virtual. Mueve el cursor real de la ventana (Electron sendInputEvent),
-  // así funciona sobre botones HUD y hologramas R3F (canvas). Latcheamos la última posición para
-  // poder clickear ahí aunque al pasar a peace el point se desactive.
-  useEffect(() => {
-    if (!gestureOutput.point.active) return
-    const x = Math.round((1 - gestureOutput.point.screenX) * window.innerWidth)  // flip espejo
-    const y = Math.round(gestureOutput.point.screenY * window.innerHeight)
-    lastPointerRef.current = { x, y }
-    lastPointTimeRef.current = performance.now()
-    ;(window as any).electronBridge?.moveMouse?.(x, y)
-  }, [gestureOutput.point.active, gestureOutput.point.screenX, gestureOutput.point.screenY])
-
-  // Gesture: click (peace + release) → click del mouse virtual, solo si venía apuntando.
-  useEffect(() => {
-    if (!gestureOutput.click) return
-    const pointing = performance.now() - lastPointTimeRef.current < POINTER_CLICK_WINDOW_MS
-    const p = lastPointerRef.current
-    if (pointing && p) (window as any).electronBridge?.clickMouse?.(p.x, p.y)
-  }, [gestureOutput.click])
 
   // Gesture: pinch → zoom into hologram (ring only)
   useEffect(() => {

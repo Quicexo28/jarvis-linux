@@ -23,12 +23,6 @@ function copy(text: string) {
   navigator.clipboard?.writeText(text).catch(() => {})
 }
 
-// Reveal a path/file in the OS file explorer, if the Electron bridge exposes it.
-function revealInExplorer(path: string) {
-  const bridge = (window as any).electronBridge
-  if (bridge?.showInFolder) bridge.showInFolder(path)
-}
-
 function Formula({ latex }: { latex: string }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -157,10 +151,7 @@ function Body({ card }: { card: DisplayCardData }) {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={mono}>{card.body}</div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Btn onClick={() => copy(card.body ?? '')}>Copiar</Btn>
-            <Btn onClick={() => revealInExplorer(card.body ?? '')}>Abrir carpeta</Btn>
-          </div>
+          <Btn onClick={() => copy(card.body ?? '')}>Copiar</Btn>
         </div>
       )
 

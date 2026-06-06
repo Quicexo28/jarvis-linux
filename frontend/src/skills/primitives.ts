@@ -114,14 +114,8 @@ async function model3dHide(): Promise<unknown> {
   return { hidden: true }
 }
 
-/**
- * Open a native OS file/folder picker (Electron main process via preload).
- * payload: { title?, multiple?, directory? }. Returns { canceled, paths }.
- */
-async function pickFile(payload: { title?: string; multiple?: boolean; directory?: boolean } = {}): Promise<unknown> {
-  const bridge = (window as any).electronBridge
-  if (!bridge?.pickFile) throw new Error('picker_unavailable')
-  return bridge.pickFile(payload)
+async function pickFile(_payload: { title?: string; multiple?: boolean; directory?: boolean } = {}): Promise<unknown> {
+  throw new Error('picker_unavailable')
 }
 
 import { useJarvisStore } from '../state/jarvisStore'

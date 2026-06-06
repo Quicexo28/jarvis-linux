@@ -6,13 +6,6 @@ import '@xterm/xterm/css/xterm.css'
 
 type TabId = 'claude' | 'stt' | 'xtts' | 'backend' | 'all'
 
-interface ProcLogEntry {
-  service: string
-  stream: string
-  text: string
-  timestamp: number
-}
-
 const TABS: { id: TabId; label: string }[] = [
   { id: 'claude', label: 'Claude' },
   { id: 'backend', label: 'Backend' },
@@ -55,16 +48,12 @@ const THEME = {
   brightWhite: '#ffffff',
 }
 
-const bridge = (window as any).electronBridge
-
 export function CoreTerminal({ onClose }: { onClose?: () => void }) {
   const [activeTab, setActiveTab] = useState<TabId>('claude')
-  const [services, setServices] = useState<Record<string, boolean>>({})
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const inputLineRef = useRef('')
-  const busyRef = useRef(false)
   const logsRef = useRef<Record<string, string[]>>({ xtts: [], stt: [], backend: [], all: [] })
   const activeTabRef = useRef<TabId>(activeTab)
 
@@ -118,23 +107,6 @@ export function CoreTerminal({ onClose }: { onClose?: () => void }) {
       const term = createTerminal()
       if (!term) return
 
-      if (bridge?.getServices) {
-        bridge.getServices().then((info: any) => {
-          if (disposed) return
-          setServices({ xtts: info.xtts, stt: info.stt, backend: info.backend })
-          if (info.buffers) {
-            for (const [svc, entries] of Object.entries(info.buffers)) {
-              for (const entry of entries as ProcLogEntry[]) {
-                const line = `${SERVICE_COLORS[svc] || ''}[${svc}]${RESET} ${entry.text}`
-                if (!logsRef.current[svc]) logsRef.current[svc] = []
-                logsRef.current[svc].push(line)
-                logsRef.current.all.push(line)
-              }
-            }
-          }
-        })
-      }
-
       writePrompt()
     }, 150)
 
@@ -148,17 +120,11 @@ export function CoreTerminal({ onClose }: { onClose?: () => void }) {
 
     const disposable = term.onData((data) => {
       if (activeTabRef.current !== 'claude') return
-      if (busyRef.current) return
 
       if (data === '\r') {
         term.write('\r\n')
-        const line = inputLineRef.current.trim()
         inputLineRef.current = ''
-        if (!line) { writePrompt(); return }
-        busyRef.current = true
-        if (bridge?.execClaude) {
-          bridge.execClaude(line)
-        }
+        writePrompt()
       } else if (data === '\x7f') {
         if (inputLineRef.current.length > 0) {
           inputLineRef.current = inputLineRef.current.slice(0, -1)
@@ -172,52 +138,6 @@ export function CoreTerminal({ onClose }: { onClose?: () => void }) {
 
     return () => disposable.dispose()
   }, [writePrompt])
-
-  // Subscribe to Claude stream
-  useEffect(() => {
-    if (!bridge?.onClaudeStream) return
-    const unsub = bridge.onClaudeStream((msg: { stream: string; text: string }) => {
-      const term = termRef.current
-      if (!term) return
-      if (msg.stream === 'stdout') {
-        term.write(msg.text)
-      } else if (msg.stream === 'stderr') {
-        term.write(`${RED}${msg.text}${RESET}`)
-      } else if (msg.stream === 'done') {
-        term.write('\r\n')
-        busyRef.current = false
-        writePrompt()
-      } else if (msg.stream === 'error') {
-        term.write(`\r\n${RED}Error: ${msg.text}${RESET}\r\n`)
-        busyRef.current = false
-        writePrompt()
-      }
-    })
-    return unsub
-  }, [writePrompt])
-
-  // Subscribe to process logs
-  useEffect(() => {
-    if (!bridge?.onProcLog) return
-    const unsub = bridge.onProcLog((entry: ProcLogEntry) => {
-      const color = entry.stream === 'stderr' ? RED : (SERVICE_COLORS[entry.service] || '')
-      const line = `${color}[${entry.service}]${RESET} ${entry.text}`
-
-      if (!logsRef.current[entry.service]) logsRef.current[entry.service] = []
-      logsRef.current[entry.service].push(line)
-      if (logsRef.current[entry.service].length > 5000) logsRef.current[entry.service].shift()
-      logsRef.current.all.push(line)
-      if (logsRef.current.all.length > 5000) logsRef.current.all.shift()
-
-      const term = termRef.current
-      if (!term) return
-      const tab = activeTabRef.current
-      if (tab === entry.service || tab === 'all') {
-        term.write(line)
-      }
-    })
-    return unsub
-  }, [])
 
   // Resize observer
   useEffect(() => {
@@ -242,9 +162,6 @@ export function CoreTerminal({ onClose }: { onClose?: () => void }) {
               className={`core-terminal-tab${activeTab === t.id ? ' active' : ''}`}
               onClick={() => setActiveTab(t.id)}
             >
-              {(t.id !== 'claude' && services[t.id] !== undefined) && (
-                <span className={`proc-dot ${services[t.id] ? 'on' : 'off'}`} />
-              )}
               {t.label}
             </button>
           ))}

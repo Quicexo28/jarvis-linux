@@ -66,30 +66,9 @@ export function ObsidianStatusBadge() {
         <span style={{ flex: 1 }}>{label}</span>
       </div>
       {status?.vaultPath && (
-        <>
-          <div style={{ fontSize: 8, opacity: 0.5, marginTop: 4, wordBreak: 'break-all' }}>
-            {status.vaultPath}
-          </div>
-          <button
-            onClick={() => {
-              const bridge = (window as any).electronBridge
-              if (bridge?.openVault) bridge.openVault(status.vaultPath)
-            }}
-            style={{
-              marginTop: 6,
-              background: 'rgba(0,0,0,0.3)',
-              border: '1px solid #00e5ff44',
-              color: '#00e5ff',
-              padding: '3px 8px',
-              fontSize: 9,
-              letterSpacing: '1px',
-              borderRadius: 3,
-              cursor: 'pointer',
-            }}
-          >
-            ABRIR BÓVEDA
-          </button>
-        </>
+        <div style={{ fontSize: 8, opacity: 0.5, marginTop: 4, wordBreak: 'break-all' }}>
+          {status.vaultPath}
+        </div>
       )}
       {!configured && (
         <div style={{ fontSize: 8, opacity: 0.6, marginTop: 4 }}>
