@@ -87,3 +87,9 @@ test('rejects path traversal attempts', async () => {
   const handled = await serveStatic(makeReq('GET', '/../../../etc/passwd'), res, distDir)
   expect(handled).toBe(false)
 })
+
+test('single-segment unknown path falls through to API dispatch', async () => {
+  const res = makeRes()
+  const handled = await serveStatic(makeReq('GET', '/health'), res, distDir)
+  expect(handled).toBe(false)
+})

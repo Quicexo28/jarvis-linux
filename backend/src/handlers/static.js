@@ -52,8 +52,11 @@ export async function serveStatic(req, res, distPath = process.env.JARVIS_FRONTE
   let stat = null
   try { stat = await fs.stat(filePath) } catch {}
 
-  // SPA fallback: path with no file extension and not an API route → index.html
-  if ((!stat || !stat.isFile()) && !path.extname(url.pathname)) {
+  // SPA fallback: root path or deep paths (depth > 1) with no file extension.
+  // Single-segment paths like /health, /modules fall through to dispatch()
+  // so backend root-level routes are not masked by the SPA fallback.
+  const isSpaCandidate = url.pathname === '/' || url.pathname.split('/').length > 2
+  if ((!stat || !stat.isFile()) && !path.extname(url.pathname) && isSpaCandidate) {
     filePath = path.join(distPath, 'index.html')
     try { stat = await fs.stat(filePath) } catch {}
   }
