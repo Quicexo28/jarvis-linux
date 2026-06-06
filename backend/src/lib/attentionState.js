@@ -10,6 +10,15 @@ const ATTENTIVE_TIMEOUT_MS = 60000
 
 let lastInteractionAt = 0
 let forcedPassive = false
+let voiceMuted = false
+
+export function setVoiceMuted(v) {
+  voiceMuted = Boolean(v)
+}
+
+export function isVoiceMuted() {
+  return voiceMuted
+}
 
 export function getAttentionState() {
   if (forcedPassive) return 'PASSIVE'
