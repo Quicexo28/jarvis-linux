@@ -1,7 +1,0 @@
-Coloca aqui los archivos de icono:
-  - icon.ico  (256x256, para Windows installer NSIS)
-  - icon.png  (256x256, para el tray icon en runtime)
-
-Puedes generar el .ico desde un .png con herramientas como:
-  https://www.icoconverter.com/
-  magick convert icon.png -resize 256x256 icon.ico   (ImageMagick)

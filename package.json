@@ -1,69 +1,13 @@
 {
-  "name": "jarvis-desktop",
+  "name": "jarvis-linux",
   "version": "1.0.0",
-  "description": "Jarvis home-control desktop app",
-  "main": "electron/main.js",
+  "description": "Jarvis system shell for Linux",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"cd frontend && npm run dev\" \"electron .\"",
     "build:frontend": "cd frontend && npm run build",
-    "build:app": "npm run build:frontend && electron-builder",
-    "dist": "npm run build:app"
-  },
-  "devDependencies": {
-    "concurrently": "^8.2.2",
-    "electron": "^30.0.0",
-    "electron-builder": "^24.13.3"
-  },
-  "build": {
-    "appId": "com.jarvis.desktop",
-    "productName": "Jarvis",
-    "directories": {
-      "output": "dist-electron"
-    },
-    "files": [
-      "electron/**",
-      "frontend/dist/**",
-      "backend/src/**",
-      "backend/package.json",
-      "!**/node_modules/**",
-      "!frontend/src/**"
-    ],
-    "extraResources": [
-      {
-        "from": "backend",
-        "to": "backend",
-        "filter": [
-          "src/**",
-          "mcp-server/**",
-          "package.json",
-          "node_modules/ws/**",
-          "voice/python/*.py",
-          "voice/python/*.cmd",
-          "voice/python/*.md",
-          "voice/python/*.txt",
-          "voice/samples/**",
-          "!node_modules/.package-lock.json",
-          "!tests/**",
-          "!vitest.config.js",
-          "!package-lock.json",
-          "!voice/python/.venv/**"
-        ]
-      },
-      {
-        "from": "electron/assets",
-        "to": "electron/assets"
-      }
-    ],
-    "win": {
-      "target": "nsis",
-      "icon": "electron/assets/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
-    }
+    "dev:backend":    "cd backend && npm run dev",
+    "dev:frontend":   "cd frontend && npm run dev",
+    "test:backend":   "cd backend && npm test",
+    "test:frontend":  "cd frontend && npm test -- --run"
   }
 }
