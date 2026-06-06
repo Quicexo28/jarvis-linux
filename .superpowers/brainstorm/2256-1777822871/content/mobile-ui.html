@@ -1,0 +1,112 @@
+<h2>Diseño del Modo Móvil</h2>
+<p class="subtitle">UI simplificada en el celular — elige el layout que prefieras</p>
+
+<div class="split">
+
+  <!-- Option A: Tab bar bottom -->
+  <div class="mockup" data-choice="a" onclick="toggleSelect(this)" style="cursor:pointer;">
+    <div class="mockup-header">A · Tab bar inferior</div>
+    <div class="mockup-body" style="background:#050510;padding:0;border-radius:0 0 6px 6px;overflow:hidden;">
+      <div style="font-family:monospace;font-size:10px;color:#ccd6f6;height:340px;display:flex;flex-direction:column;">
+
+        <!-- Status bar -->
+        <div style="background:#00e5ff18;border-bottom:1px solid #00e5ff33;padding:6px 12px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:9px;color:#00e5ff;letter-spacing:1px;">JARVIS</span>
+          <span style="font-size:8px;opacity:.5;">● Tailscale · 100.x.x.x</span>
+        </div>
+
+        <!-- Main content area (Jarvis chat) -->
+        <div style="flex:1;padding:10px;overflow:hidden;display:flex;flex-direction:column;gap:6px;">
+          <!-- reply bubble -->
+          <div style="background:#00e5ff18;border:1px solid #00e5ff33;border-radius:4px;padding:8px;font-size:9px;line-height:1.5;max-width:85%;">
+            Hola. ¿Qué necesitas?
+          </div>
+          <!-- user message -->
+          <div style="background:#ffffff14;border-radius:4px;padding:8px;font-size:9px;line-height:1.5;max-width:85%;align-self:flex-end;">
+            Apaga la sala
+          </div>
+          <!-- reply -->
+          <div style="background:#00e5ff18;border:1px solid #00e5ff33;border-radius:4px;padding:8px;font-size:9px;line-height:1.5;max-width:85%;">
+            Sala apagada ✓
+          </div>
+        </div>
+
+        <!-- Input bar -->
+        <div style="border-top:1px solid #ffffff22;padding:6px 8px;display:flex;gap:6px;align-items:center;background:#0a0a1a;">
+          <div style="flex:1;border:1px solid #ffffff33;border-radius:3px;padding:4px 8px;font-size:8px;opacity:.5;">Escribe a Jarvis...</div>
+          <div style="width:24px;height:24px;border-radius:50%;border:1px solid #00e5ff;display:flex;align-items:center;justify-content:center;font-size:10px;">🎤</div>
+        </div>
+
+        <!-- Tab bar -->
+        <div style="border-top:1px solid #ffffff22;display:flex;background:#0d0d1a;">
+          <div style="flex:1;padding:6px 4px;text-align:center;border-top:2px solid #00e5ff;">
+            <div style="font-size:12px;">💬</div>
+            <div style="font-size:7px;color:#00e5ff;margin-top:1px;">Jarvis</div>
+          </div>
+          <div style="flex:1;padding:6px 4px;text-align:center;opacity:.5;">
+            <div style="font-size:12px;">💡</div>
+            <div style="font-size:7px;margin-top:1px;">Dispositivos</div>
+          </div>
+          <div style="flex:1;padding:6px 4px;text-align:center;opacity:.5;">
+            <div style="font-size:12px;">📊</div>
+            <div style="font-size:7px;margin-top:1px;">Sistema</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Option B: Single scroll page -->
+  <div class="mockup" data-choice="b" onclick="toggleSelect(this)" style="cursor:pointer;">
+    <div class="mockup-header">B · Página única scrolleable</div>
+    <div class="mockup-body" style="background:#050510;padding:0;border-radius:0 0 6px 6px;overflow:hidden;">
+      <div style="font-family:monospace;font-size:10px;color:#ccd6f6;height:340px;display:flex;flex-direction:column;">
+
+        <!-- Status bar -->
+        <div style="background:#00e5ff18;border-bottom:1px solid #00e5ff33;padding:6px 12px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:9px;color:#00e5ff;letter-spacing:1px;">JARVIS · CONTROL</span>
+          <span style="font-size:8px;opacity:.5;">● Online</span>
+        </div>
+
+        <div style="flex:1;overflow:hidden;padding:8px;display:flex;flex-direction:column;gap:8px;">
+
+          <!-- Jarvis turn section -->
+          <div style="border:1px solid #00e5ff33;border-radius:4px;padding:8px;background:#00e5ff06;">
+            <div style="font-size:8px;color:#00e5ff;margin-bottom:6px;letter-spacing:1px;">JARVIS</div>
+            <div style="font-size:8px;opacity:.7;margin-bottom:6px;">Sala apagada ✓</div>
+            <div style="display:flex;gap:4px;">
+              <div style="flex:1;border:1px solid #ffffff33;border-radius:3px;padding:3px 6px;font-size:7px;opacity:.5;">Escribe...</div>
+              <div style="padding:3px 6px;border:1px solid #00e5ff;border-radius:3px;font-size:9px;">🎤</div>
+            </div>
+          </div>
+
+          <!-- Quick actions -->
+          <div style="border:1px solid #ffffff22;border-radius:4px;padding:8px;background:#ffffff04;">
+            <div style="font-size:8px;opacity:.5;margin-bottom:6px;letter-spacing:1px;">ACCIONES RÁPIDAS</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+              <div style="border:1px solid #ffffff22;border-radius:3px;padding:5px;text-align:center;font-size:8px;">💡 Sala ON</div>
+              <div style="border:1px solid #ffffff22;border-radius:3px;padding:5px;text-align:center;font-size:8px;">🌙 Sala OFF</div>
+              <div style="border:1px solid #ffffff22;border-radius:3px;padding:5px;text-align:center;font-size:8px;">📺 TV ON</div>
+              <div style="border:1px solid #ffffff22;border-radius:3px;padding:5px;text-align:center;font-size:8px;">❄️ AC OFF</div>
+            </div>
+          </div>
+
+          <!-- System mini -->
+          <div style="border:1px solid #ffffff22;border-radius:4px;padding:8px;background:#ffffff04;">
+            <div style="font-size:8px;opacity:.5;margin-bottom:4px;letter-spacing:1px;">SISTEMA</div>
+            <div style="display:flex;gap:8px;font-size:8px;opacity:.7;">
+              <span>CPU 34%</span>
+              <span>RAM 8.2GB</span>
+              <span>GPU 12%</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:16px;">Haz click en el layout que prefieras y dime en el terminal.</p>

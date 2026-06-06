@@ -1,0 +1,23 @@
+# Normalize line endings to LF on checkout (Linux target)
+* text=auto eol=lf
+
+# Binary files — no line ending conversion
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.otf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.onnx binary
+*.db binary
+*.wav binary
+*.mp3 binary
+*.ogg binary

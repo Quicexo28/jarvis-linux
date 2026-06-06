@@ -1,0 +1,312 @@
+"""
+Multi-speaker identification for Jarvis.
+
+Structure on disk:
+    <root>/
+        _config.json          # per-speaker thresholds (underscore = ignored by scanners)
+        <speaker_name>/
+            <sample>.wav
+            <sample>.wav
+        <speaker_name>/
+            ...
+
+Each speaker keeps the per-sample embeddings of all their reference recordings.
+Identification scores the incoming utterance against every stored sample and
+picks the speaker with the highest cosine similarity. A match is accepted only
+when the best score clears that speaker's own threshold AND beats the runner-up
+speaker by a margin, so two similar profiles don't steal each other's turns.
+
+There is no "default" speaker: profiles are explicit, loose files at the root
+are ignored, and nothing is auto-migrated.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+
+AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}
+NATIVE_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg"}
+
+CONFIG_FILENAME = "_config.json"
+DEFAULT_THRESHOLD = 0.70
+# Minimum gap between the best and second-best speaker scores to accept a match.
+MATCH_MARGIN = 0.06
+# Minimum decoded length (samples @16kHz) for an utterance to be identified.
+IDENT_MIN_SAMPLES = 16000  # ~1.0 s
+# Minimum decoded length for an enrollment sample to count.
+ENROLL_MIN_SAMPLES = 8000  # ~0.5 s
+
+
+def _safe_name(name: str) -> str:
+    """Sanitize speaker name for use as a directory name. Empty if invalid."""
+    cleaned = "".join(c for c in (name or "").strip() if c.isalnum() or c in "-_ ").strip()
+    return cleaned
+
+
+def _convert_to_wav(src: Path) -> Path:
+    """Convert non-native audio to WAV via ffmpeg, fallback to soundfile."""
+    import soundfile as sf
+
+    tmp = Path(tempfile.mktemp(suffix=".wav"))
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1", tmp.name],
+            capture_output=True, timeout=30,
+        )
+        if tmp.exists() and tmp.stat().st_size > 44:
+            return tmp
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    try:
+        data, sr = sf.read(str(src))
+        sf.write(str(tmp), data, sr, format="WAV")
+        if tmp.exists():
+            return tmp
+    except Exception:
+        pass
+
+    tmp.unlink(missing_ok=True)
+    raise RuntimeError(f"Cannot decode {src.name} — install ffmpeg for webm support")
+
+
+class SpeakerIdentifier:
+    """Identifies which registered speaker (if any) is talking."""
+
+    def __init__(self, root_dir: Path):
+        from resemblyzer import VoiceEncoder, preprocess_wav
+
+        self.root_dir = Path(root_dir)
+        self.encoder = VoiceEncoder()
+        self._preprocess_wav = preprocess_wav
+        # name -> { "embeddings": [np.ndarray, ...], "threshold": float }
+        self.speakers: dict[str, dict] = {}
+        # persisted per-speaker thresholds: { name: threshold }
+        self._thresholds: dict[str, float] = {}
+
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        self._load_config()
+        self._load_all()
+
+        if not self.speakers:
+            raise FileNotFoundError(
+                f"No speaker samples found under {self.root_dir} — "
+                "record at least one from System panel"
+            )
+
+    # ----------------------------------------------------------------- config --
+
+    @property
+    def config_path(self) -> Path:
+        return self.root_dir / CONFIG_FILENAME
+
+    def _load_config(self) -> None:
+        self._thresholds = {}
+        if not self.config_path.exists():
+            return
+        try:
+            raw = json.loads(self.config_path.read_text(encoding="utf-8"))
+            for name, cfg in (raw.get("speakers") or {}).items():
+                thr = cfg.get("threshold") if isinstance(cfg, dict) else None
+                if isinstance(thr, (int, float)):
+                    self._thresholds[name] = float(thr)
+        except Exception as e:
+            print(f"[speaker_id] failed to read {CONFIG_FILENAME}: {e}", flush=True)
+
+    def _save_config(self) -> None:
+        payload = {"speakers": {n: {"threshold": t} for n, t in self._thresholds.items()}}
+        try:
+            self.config_path.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception as e:
+            print(f"[speaker_id] failed to write {CONFIG_FILENAME}: {e}", flush=True)
+
+    def set_threshold(self, name: str, value: float) -> bool:
+        """Persist a per-speaker threshold. Returns True if the speaker exists."""
+        safe = _safe_name(name)
+        if not safe:
+            return False
+        self._thresholds[safe] = float(value)
+        if safe in self.speakers:
+            self.speakers[safe]["threshold"] = float(value)
+        self._save_config()
+        return safe in self.speakers
+
+    def _threshold_for(self, name: str) -> float:
+        return self._thresholds.get(name, DEFAULT_THRESHOLD)
+
+    # ------------------------------------------------------------------- load --
+
+    def _load_all(self) -> None:
+        self.speakers.clear()
+        if not self.root_dir.exists():
+            return
+        for subdir in sorted(self.root_dir.iterdir()):
+            if not subdir.is_dir() or subdir.name.startswith("_"):
+                continue
+            embeddings = self._embeddings_for_dir(subdir)
+            if embeddings:
+                self.speakers[subdir.name] = {
+                    "embeddings": embeddings,
+                    "threshold": self._threshold_for(subdir.name),
+                }
+
+    def _embeddings_for_dir(self, speaker_dir: Path) -> list[np.ndarray]:
+        samples = [
+            p for p in speaker_dir.iterdir()
+            if p.is_file()
+            and p.suffix.lower() in AUDIO_EXTENSIONS
+            and not p.name.startswith("_")
+        ]
+        if not samples:
+            return []
+
+        embeddings: list[np.ndarray] = []
+        for sample_path in samples:
+            try:
+                if sample_path.suffix.lower() in NATIVE_EXTENSIONS:
+                    wav = self._preprocess_wav(sample_path)
+                else:
+                    converted = _convert_to_wav(sample_path)
+                    wav = self._preprocess_wav(converted)
+                    converted.unlink(missing_ok=True)
+            except Exception as e:
+                print(f"[speaker_id] skipping {sample_path.name}: {e}", flush=True)
+                continue
+            if len(wav) < ENROLL_MIN_SAMPLES:
+                continue
+            emb = self.encoder.embed_utterance(wav)
+            emb = emb / (np.linalg.norm(emb) + 1e-9)
+            embeddings.append(emb)
+
+        if embeddings:
+            print(
+                f"[speaker_id] '{speaker_dir.name}' loaded {len(embeddings)} sample(s) "
+                f"(threshold={self._threshold_for(speaker_dir.name):.2f})",
+                flush=True,
+            )
+        return embeddings
+
+    # ------------------------------------------------------------- management --
+
+    def reload(self) -> int:
+        self._load_config()
+        self._load_all()
+        return len(self.speakers)
+
+    def enroll_speaker(self, name: str) -> bool:
+        """Recompute embeddings for a single speaker. Returns True if loaded."""
+        safe = _safe_name(name)
+        if not safe:
+            return False
+        speaker_dir = self.root_dir / safe
+        if not speaker_dir.exists() or not speaker_dir.is_dir():
+            self.speakers.pop(safe, None)
+            return False
+        embeddings = self._embeddings_for_dir(speaker_dir)
+        if not embeddings:
+            self.speakers.pop(safe, None)
+            return False
+        self.speakers[safe] = {
+            "embeddings": embeddings,
+            "threshold": self._threshold_for(safe),
+        }
+        return True
+
+    def remove_speaker(self, name: str) -> bool:
+        safe = _safe_name(name)
+        if not safe:
+            return False
+        speaker_dir = self.root_dir / safe
+        if speaker_dir.exists():
+            try:
+                shutil.rmtree(speaker_dir)
+            except Exception as e:
+                print(f"[speaker_id] failed to remove {safe}: {e}", flush=True)
+                return False
+        existed = self.speakers.pop(safe, None) is not None
+        if safe in self._thresholds:
+            self._thresholds.pop(safe, None)
+            self._save_config()
+        return existed
+
+    def list_speakers(self) -> list[dict]:
+        out = []
+        for name, data in self.speakers.items():
+            speaker_dir = self.root_dir / name
+            count = 0
+            if speaker_dir.exists():
+                count = sum(
+                    1 for p in speaker_dir.iterdir()
+                    if p.is_file()
+                    and p.suffix.lower() in AUDIO_EXTENSIONS
+                    and not p.name.startswith("_")
+                )
+            out.append({"name": name, "samples": count, "threshold": data["threshold"]})
+        return out
+
+    # ---------------------------------------------------------- identification --
+
+    def _embedding_for_wav(self, wav: np.ndarray) -> Optional[np.ndarray]:
+        if len(wav) < IDENT_MIN_SAMPLES:
+            return None
+        emb = self.encoder.embed_utterance(wav)
+        return emb / (np.linalg.norm(emb) + 1e-9)
+
+    def identify_file(self, audio_path: str) -> tuple[Optional[str], float]:
+        wav = self._preprocess_wav(Path(audio_path))
+        emb = self._embedding_for_wav(wav)
+        return self._match(emb)
+
+    def identify_audio(self, audio: np.ndarray, sr: int) -> tuple[Optional[str], float]:
+        import soundfile as sf
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            sf.write(tmp.name, audio, sr, format="WAV")
+            tmp_path = tmp.name
+
+        try:
+            wav = self._preprocess_wav(Path(tmp_path))
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        emb = self._embedding_for_wav(wav)
+        return self._match(emb)
+
+    def _match(self, emb: Optional[np.ndarray]) -> tuple[Optional[str], float]:
+        if emb is None or not self.speakers:
+            return None, 0.0
+
+        # Score each speaker by the MAX cosine similarity across their samples.
+        scored: list[tuple[str, float, float]] = []
+        for name, data in self.speakers.items():
+            best = 0.0
+            for owner_emb in data["embeddings"]:
+                score = float(np.dot(emb, owner_emb))
+                if score > best:
+                    best = score
+            scored.append((name, best, data["threshold"]))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        best_name, best_score, best_thr = scored[0]
+        second_score = scored[1][1] if len(scored) > 1 else 0.0
+
+        # Reject if below this speaker's own threshold.
+        if best_score < best_thr:
+            return None, best_score
+        # Reject ambiguous matches: top two speakers too close together.
+        if (best_score - second_score) < MATCH_MARGIN:
+            return None, best_score
+
+        return best_name, best_score

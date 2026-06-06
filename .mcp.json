@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "jarvis": {
+      "command": "C:\\Users\\santi\\AppData\\Local\\Programs\\Jarvis\\Jarvis.exe",
+      "args": [
+        "C:\\Users\\santi\\AppData\\Local\\Programs\\Jarvis\\resources\\backend\\mcp-server\\jarvis-mcp.js"
+      ],
+      "env": {
+        "ELECTRON_RUN_AS_NODE": "1",
+        "JARVIS_BACKEND_URL": "http://localhost:8788"
+      }
+    },
+    "filesystem": {
+      "command": "C:\\Users\\santi\\AppData\\Local\\Programs\\Jarvis\\Jarvis.exe",
+      "args": [
+        "C:\\Users\\santi\\AppData\\Local\\Programs\\Jarvis\\resources\\backend\\mcp-server\\node_modules\\@modelcontextprotocol\\server-filesystem\\dist\\index.js",
+        "C:\\proyecto\\jarvis-desktop",
+        "C:\\",
+        "D:\\",
+        "F:\\"
+      ],
+      "env": {
+        "ELECTRON_RUN_AS_NODE": "1"
+      }
+    }
+  }
+}

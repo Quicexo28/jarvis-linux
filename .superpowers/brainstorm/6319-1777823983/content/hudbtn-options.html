@@ -1,0 +1,228 @@
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #03080d; color: #c8f4ff; font-family: 'Space Grotesk', sans-serif; }
+
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap');
+
+  .demo-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    padding: 8px 0 24px;
+  }
+
+  .demo-card {
+    background: rgba(0,240,255,0.03);
+    border: 1px solid rgba(0,240,255,0.12);
+    padding: 28px 24px 24px;
+    cursor: pointer;
+    position: relative;
+    transition: border-color 0.2s;
+  }
+  .demo-card:hover { border-color: rgba(0,240,255,0.3); }
+  .demo-card.selected { border-color: #00f0ff; box-shadow: 0 0 20px rgba(0,240,255,0.15); }
+  .demo-card.selected::after {
+    content: '✓ SELECCIONADO';
+    position: absolute;
+    top: 10px; right: 12px;
+    font-size: 9px; letter-spacing: 0.18em;
+    color: #00f0ff;
+  }
+
+  .variant-label {
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: rgba(0,240,255,0.4);
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(0,240,255,0.08);
+  }
+
+  /* ── VARIANTE A: Diamante + scan + flecha ── */
+  .btn-a {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 0;
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: rgba(200,244,255,0.55);
+    cursor: pointer; position: relative; width: 100%;
+    background: none; border: none; font-family: inherit;
+    transition: color 0.15s;
+  }
+  .btn-a::after {
+    content: '';
+    position: absolute; bottom: 4px; left: 0;
+    height: 1px; width: 0;
+    background: linear-gradient(90deg, rgba(0,240,255,0.6), transparent);
+    transition: none;
+  }
+  .btn-a:hover { color: #00f0ff; }
+  .btn-a:hover .ind-a { color: #00f0ff; text-shadow: 0 0 8px #00f0ff; }
+  .btn-a:hover .arrow-a { opacity: 1; transform: translateX(0); }
+  .btn-a:hover::after { animation: scan-a 0.22s ease-out forwards; }
+  .ind-a { color: rgba(0,240,255,0.35); font-size: 8px; transition: color 0.15s, text-shadow 0.15s; flex-shrink: 0; }
+  .ind-a.on { color: #00f0ff; text-shadow: 0 0 8px #00f0ff; }
+  .arrow-a { margin-left: auto; font-size: 10px; opacity: 0; transform: translateX(-4px); transition: opacity 0.15s, transform 0.15s; }
+  @keyframes scan-a { from { width: 0; opacity: 0.7; } to { width: 100%; opacity: 0; } }
+
+  /* ── VARIANTE B: Guion largo + bracket ── */
+  .btn-b {
+    display: flex; align-items: center; gap: 0;
+    padding: 9px 0;
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(200,244,255,0.5);
+    cursor: pointer; position: relative; width: 100%;
+    background: none; border: none; font-family: inherit;
+    transition: color 0.15s;
+  }
+  .bracket-b {
+    color: rgba(0,240,255,0.2);
+    font-size: 13px; font-weight: 300;
+    transition: color 0.15s;
+    padding: 0 4px;
+  }
+  .btn-b:hover { color: #00f0ff; }
+  .btn-b:hover .bracket-b { color: rgba(0,240,255,0.7); }
+  .btn-b:hover .line-b { width: 100%; opacity: 0.5; }
+  .line-b { position: absolute; bottom: 3px; left: 0; height: 1px; width: 0; background: rgba(0,240,255,0.4); transition: width 0.3s ease, opacity 0.3s; opacity: 0; }
+
+  /* ── VARIANTE C: Número indexado ── */
+  .btn-c {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 0;
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(200,244,255,0.55);
+    cursor: pointer; position: relative; width: 100%;
+    background: none; border: none; font-family: 'Courier New', monospace;
+    transition: color 0.15s;
+  }
+  .num-c {
+    font-size: 9px; color: rgba(0,240,255,0.3);
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.05em;
+    transition: color 0.2s;
+    flex-shrink: 0; width: 18px;
+  }
+  .label-c { font-family: 'Space Grotesk', sans-serif; }
+  .btn-c:hover { color: #00f0ff; }
+  .btn-c:hover .num-c { color: #00f0ff; }
+  .btn-c:hover::after { animation: scan-a 0.22s ease-out forwards; }
+  .btn-c::after {
+    content: '';
+    position: absolute; bottom: 4px; left: 0;
+    height: 1px; width: 0;
+    background: linear-gradient(90deg, rgba(0,240,255,0.5), transparent);
+  }
+
+  /* ── VARIANTE D: Slash + texto dim que se activa ── */
+  .btn-d {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 0;
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+    cursor: pointer; position: relative; width: 100%;
+    background: none; border: none; font-family: inherit;
+    transition: all 0.15s;
+  }
+  .slash-d { color: rgba(0,240,255,0.2); font-size: 14px; font-weight: 300; transition: color 0.15s; }
+  .label-d { color: rgba(200,244,255,0.5); transition: color 0.15s; letter-spacing: 0.16em; }
+  .tag-d {
+    margin-left: auto;
+    font-size: 8px; letter-spacing: 0.15em;
+    color: rgba(0,240,255,0.0);
+    border: 1px solid rgba(0,240,255,0);
+    padding: 2px 6px;
+    transition: all 0.15s;
+  }
+  .btn-d:hover .slash-d { color: rgba(0,240,255,0.7); }
+  .btn-d:hover .label-d { color: #00f0ff; text-shadow: 0 0 10px rgba(0,240,255,0.4); }
+  .btn-d:hover .tag-d { color: rgba(0,240,255,0.6); border-color: rgba(0,240,255,0.3); }
+
+  .panel-preview {
+    background: rgba(0,240,255,0.015);
+    border: 1px solid rgba(0,240,255,0.1);
+    padding: 18px 20px;
+    margin-top: 0;
+  }
+  .panel-sep { height: 1px; background: rgba(0,240,255,0.08); margin: 4px 0; }
+
+  .desc { font-size: 11px; color: rgba(200,244,255,0.4); margin-top: 16px; line-height: 1.6; letter-spacing: 0.02em; }
+</style>
+
+<h2>Variantes de HudBtn</h2>
+<p class="subtitle">Mueve el cursor sobre cada botón para ver el hover. Haz clic en la tarjeta para seleccionarla.</p>
+
+<div class="demo-grid">
+
+  <!-- VARIANTE A -->
+  <div class="option demo-card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <div class="variant-label">◆ Diamante · scan · flecha</div>
+      <div class="panel-preview">
+        <button class="btn-a"><span class="ind-a on">◆</span><span>Enviar mensaje</span><span class="arrow-a">→</span></button>
+        <div class="panel-sep"></div>
+        <button class="btn-a"><span class="ind-a on">◆</span><span>Activar voz</span><span class="arrow-a">→</span></button>
+        <div class="panel-sep"></div>
+        <button class="btn-a"><span class="ind-a">◇</span><span>Modo aplauso</span><span class="arrow-a">→</span></button>
+        <div class="panel-sep"></div>
+        <button class="btn-a"><span class="ind-a">◇</span><span>Dormir sistema</span><span class="arrow-a">→</span></button>
+      </div>
+      <p class="desc">El ◆ indica estado activo. Scan line debajo del texto al hover. Flecha → aparece a la derecha. Elegante y legible.</p>
+    </div>
+  </div>
+
+  <!-- VARIANTE B -->
+  <div class="option demo-card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <div class="variant-label">[ Bracket ] · línea base</div>
+      <div class="panel-preview">
+        <button class="btn-b"><span class="bracket-b">[</span><span>Enviar mensaje</span><span class="bracket-b">]</span><div class="line-b"></div></button>
+        <div class="panel-sep"></div>
+        <button class="btn-b"><span class="bracket-b">[</span><span>Activar voz</span><span class="bracket-b">]</span><div class="line-b"></div></button>
+        <div class="panel-sep"></div>
+        <button class="btn-b"><span class="bracket-b">[</span><span>Modo aplauso</span><span class="bracket-b">]</span><div class="line-b"></div></button>
+        <div class="panel-sep"></div>
+        <button class="btn-b"><span class="bracket-b">[</span><span>Dormir sistema</span><span class="bracket-b">]</span><div class="line-b"></div></button>
+      </div>
+      <p class="desc">Estética de código/terminal. Los brackets se iluminan al hover. Línea base se extiende bajo el texto. Más técnico y frío.</p>
+    </div>
+  </div>
+
+  <!-- VARIANTE C -->
+  <div class="option demo-card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <div class="variant-label">01. Índice numérico · scan</div>
+      <div class="panel-preview">
+        <button class="btn-c"><span class="num-c">01.</span><span class="label-c">Enviar mensaje</span></button>
+        <div class="panel-sep"></div>
+        <button class="btn-c"><span class="num-c">02.</span><span class="label-c">Activar voz</span></button>
+        <div class="panel-sep"></div>
+        <button class="btn-c"><span class="num-c">03.</span><span class="label-c">Modo aplauso</span></button>
+        <div class="panel-sep"></div>
+        <button class="btn-c"><span class="num-c">04.</span><span class="label-c">Dormir sistema</span></button>
+      </div>
+      <p class="desc">Número de índice en monoespaciado, texto en Space Grotesk. El número se ilumina junto al texto al hover. Ordenado, militar.</p>
+    </div>
+  </div>
+
+  <!-- VARIANTE D -->
+  <div class="option demo-card" data-choice="d" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content">
+      <div class="variant-label">/ Slash · etiqueta flotante</div>
+      <div class="panel-preview">
+        <button class="btn-d"><span class="slash-d">/</span><span class="label-d">Enviar mensaje</span><span class="tag-d">EXEC</span></button>
+        <div class="panel-sep"></div>
+        <button class="btn-d"><span class="slash-d">/</span><span class="label-d">Activar voz</span><span class="tag-d">MIC</span></button>
+        <div class="panel-sep"></div>
+        <button class="btn-d"><span class="slash-d">/</span><span class="label-d">Modo aplauso</span><span class="tag-d">WAKE</span></button>
+        <div class="panel-sep"></div>
+        <button class="btn-d"><span class="slash-d">/</span><span class="label-d">Dormir sistema</span><span class="tag-d">SLP</span></button>
+      </div>
+      <p class="desc">Slash de comando como prefijo. Etiqueta corta (tipo tag de sistema) aparece a la derecha al hover. Más narrativo y rico.</p>
+    </div>
+  </div>
+
+</div>

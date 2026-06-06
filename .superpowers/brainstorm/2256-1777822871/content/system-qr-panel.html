@@ -1,0 +1,72 @@
+<h2>Panel "Conexión Móvil" en Modo Sistema</h2>
+<p class="subtitle">Nueva sección dentro del modo Sistema del escritorio</p>
+
+<div class="mockup">
+  <div class="mockup-header">Modo Sistema — sección Conexión Móvil</div>
+  <div class="mockup-body" style="background:#050510;padding:16px;font-family:monospace;font-size:11px;color:#ccd6f6;">
+
+    <!-- Section header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="width:6px;height:6px;border-radius:50%;background:#00e5ff;box-shadow:0 0 8px #00e5ff;"></div>
+        <span style="font-size:10px;letter-spacing:2px;color:#00e5ff;">CONEXIÓN MÓVIL</span>
+      </div>
+      <div style="font-size:8px;opacity:.5;">1 dispositivo conectado</div>
+    </div>
+
+    <div style="display:flex;gap:16px;">
+
+      <!-- QR Column -->
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+        <!-- QR placeholder -->
+        <div style="width:120px;height:120px;background:#fff;border-radius:4px;display:flex;align-items:center;justify-content:center;position:relative;">
+          <div style="font-size:48px;opacity:.9;">▦</div>
+          <!-- overlay on expired -->
+        </div>
+        <!-- countdown -->
+        <div style="font-size:9px;color:#ffd700;text-align:center;">
+          Expira en <span style="font-weight:bold;">08:42</span>
+        </div>
+        <!-- refresh button -->
+        <div style="border:1px solid #00e5ff66;border-radius:3px;padding:4px 12px;font-size:8px;color:#00e5ff;cursor:pointer;letter-spacing:1px;">
+          ↻ NUEVO QR
+        </div>
+      </div>
+
+      <!-- Info Column -->
+      <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
+
+        <!-- Tailscale URL (primary) -->
+        <div style="border:1px solid #00e5ff44;border-radius:4px;padding:8px;background:#00e5ff08;">
+          <div style="font-size:8px;color:#00e5ff;margin-bottom:4px;letter-spacing:1px;">TAILSCALE (EXTERNO)</div>
+          <div style="font-size:9px;word-break:break-all;opacity:.9;">http://100.89.x.x:8788</div>
+          <div style="font-size:8px;opacity:.4;margin-top:2px;">Funciona desde cualquier red</div>
+        </div>
+
+        <!-- LAN URL (fallback) -->
+        <div style="border:1px solid #ffffff22;border-radius:4px;padding:8px;background:#ffffff04;">
+          <div style="font-size:8px;opacity:.5;margin-bottom:4px;letter-spacing:1px;">LAN (MISMO WIFI)</div>
+          <div style="font-size:9px;word-break:break-all;opacity:.7;">http://192.168.1.45:8788</div>
+        </div>
+
+        <!-- Connected devices -->
+        <div style="border:1px solid #64ffda33;border-radius:4px;padding:8px;background:#64ffda06;">
+          <div style="font-size:8px;color:#64ffda;margin-bottom:6px;letter-spacing:1px;">SESIONES ACTIVAS</div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <div style="width:6px;height:6px;border-radius:50%;background:#64ffda;box-shadow:0 0 5px #64ffda;"></div>
+            <div style="font-size:8px;opacity:.8;">Samsung S24 · hace 3 min · Tailscale</div>
+          </div>
+        </div>
+
+        <!-- No tailscale warning -->
+        <div style="border:1px solid #ffd70033;border-radius:4px;padding:6px 8px;background:#ffd70008;font-size:8px;color:#ffd700;opacity:.8;">
+          ⚠ Si Tailscale no está activo, el QR usará solo LAN
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:16px;">¿Te parece bien este panel? Responde en el terminal.</p>

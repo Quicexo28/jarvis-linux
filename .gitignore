@@ -1,0 +1,80 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.pnpm-store/
+
+# Build
+dist/
+build/
+dist-electron/
+*.tsbuildinfo
+
+# Vite
+.vite/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Python sidecar (future phases)
+voice-sidecar/.venv/
+voice-sidecar/__pycache__/
+voice-sidecar/**/__pycache__/
+voice-sidecar/*.pyc
+backend/voice/python/.venv/
+backend/voice/python/__pycache__/
+backend/voice/python/**/__pycache__/
+
+# ML training datasets (local only — trained model lives in IndexedDB)
+Debug gesture/
+ML dataset save/
+
+# Runtime data (gitignored — never commit user data)
+backend/data/
+backend/.cache/
+
+# Dynamic skill handlers (generated at runtime by self-build)
+backend/src/handlers/dynamic/
+
+# Test artifacts
+coverage/
+*.lcov
+.nyc_output/
+
+# OS
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Git worktrees
+.worktrees/
+
+# Logs
+*.log
+
+# ruflo / agentdb artifacts
+.claude-flow/
+**/.claude-flow/
+ruvector.db
+**/ruvector.db
+.security/
+
+# Python sidecar venvs (extra)
+backend/voice/python/.venv-cosy/
+backend/voice/python/.venv-xtts/
+backend/voice/python/.venv-stt/
+backend/voice/python/CosyVoice/
+backend/voice/cache/
+
+# CLAUDE.md backups
+CLAUDE.md.bak.*
+CLAUDE.md.original.md
+
+# Voice enrollment (personal data — never commit)
+backend/voice/samples/speaker/

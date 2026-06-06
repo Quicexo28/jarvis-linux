@@ -1,0 +1,9 @@
+/* Legacy rules kept for R3F canvas sizing and popup animations */
+.scene-canvas canvas { width: 100% !important; height: 100% !important; }
+.plan3d-canvas-wrap canvas { width: 100% !important; height: 100% !important; }
+
+/* Focus popup animation */
+.focus-popup-wrapper { z-index: 20 !important; }
+.jarvis-hud-enter { animation: hud-pop-in 140ms ease-out; }
+@keyframes hud-pop-in { from { opacity: 0; } to { opacity: 1; } }
+.immersive-canvas-wrap { position: relative; }

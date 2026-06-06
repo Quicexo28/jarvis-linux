@@ -1,0 +1,22 @@
+# XTTS voice synthesis
+TTS>=0.22.0
+torch>=2.1.0
+torchaudio>=2.1.0
+numpy>=1.24.0
+scipy>=1.11.0
+soundfile>=0.12.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# STT (faster-whisper on CPU)
+faster-whisper>=1.0.0
+ctranslate2>=4.0.0
+
+# VAD (speech activity detection)
+# silero-vad loads via torch.hub — no separate pip package needed
+
+# Speaker identification
+resemblyzer>=0.1.3
+
+# WebSocket support for streaming STT
+websockets>=12.0
