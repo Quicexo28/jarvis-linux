@@ -169,3 +169,15 @@ El proyecto está en una fase sólida de **MVP funcional** para:
 - y control básico vía backend Jarvis.
 
 La base está lista para el siguiente proyecto/fase sin perder continuidad.
+
+## Linux installation
+
+```bash
+git clone https://github.com/YOUR_USER/jarvis-linux.git ~/jarvis-linux
+cd ~/jarvis-linux && bash scripts/linux/install.sh
+```
+
+**Hyprland users:** add this to `~/.config/hypr/hyprland.conf`:
+```
+source = ~/jarvis-linux/scripts/linux/hyprland-jarvis.conf
+```
