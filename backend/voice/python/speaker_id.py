@@ -26,6 +26,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import wave as _wave
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,9 @@ import numpy as np
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}
 NATIVE_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg"}
+
+SAMPLE_CAP = 50
+SAMPLE_MAX_SECONDS = 5.0
 
 CONFIG_FILENAME = "_config.json"
 DEFAULT_THRESHOLD = 0.70
@@ -75,6 +79,49 @@ def _convert_to_wav(src: Path) -> Path:
 
     tmp.unlink(missing_ok=True)
     raise RuntimeError(f"Cannot decode {src.name} — install ffmpeg for webm support")
+
+
+def _enforce_cap(speaker_dir: Path, max_samples: int = SAMPLE_CAP) -> None:
+    """Delete oldest audio files in speaker_dir when count exceeds max_samples.
+    Only counts files whose extension is in AUDIO_EXTENSIONS.
+    Non-audio files (e.g. _config.json) are ignored and never deleted.
+    """
+    audio_files = sorted(
+        [f for f in speaker_dir.iterdir() if f.suffix.lower() in AUDIO_EXTENSIONS],
+        key=lambda f: f.stat().st_mtime,
+    )
+    excess = len(audio_files) - max_samples
+    for old_file in audio_files[:excess]:
+        try:
+            old_file.unlink()
+        except OSError:
+            pass
+
+
+def _trim_audio_to_seconds(path: Path, max_seconds: float = SAMPLE_MAX_SECONDS) -> None:
+    """Trim a WAV file to max_seconds in place. No-op for non-WAV or short files.
+    Uses stdlib wave module — no external deps needed.
+    """
+    if path.suffix.lower() != ".wav":
+        return
+    try:
+        with _wave.open(str(path), "r") as wf:
+            sr = wf.getframerate()
+            total_frames = wf.getnframes()
+            max_frames = int(sr * max_seconds)
+            if total_frames <= max_frames:
+                return
+            n_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            wf.rewind()
+            data = wf.readframes(max_frames)
+        with _wave.open(str(path), "w") as wf:
+            wf.setnchannels(n_channels)
+            wf.setsampwidth(sampwidth)
+            wf.setframerate(sr)
+            wf.writeframes(data)
+    except Exception:
+        pass
 
 
 class SpeakerIdentifier:
@@ -201,6 +248,32 @@ class SpeakerIdentifier:
         self._load_config()
         self._load_all()
         return len(self.speakers)
+
+    def save_sample(self, name: str, audio_bytes: bytes, ext: str = ".wav") -> Path:
+        """Write audio_bytes as a new sample for speaker ``name``.
+
+        Applies trim (WAV only) and FIFO cap after the write so the speaker
+        directory stays within SAMPLE_CAP files and each sample is at most
+        SAMPLE_MAX_SECONDS long.
+
+        Returns the Path of the saved file.
+        """
+        safe = _safe_name(name)
+        if not safe:
+            raise ValueError(f"Invalid speaker name: {name!r}")
+        speaker_dir = self.root_dir / safe
+        speaker_dir.mkdir(parents=True, exist_ok=True)
+
+        import time as _time
+        timestamp = int(_time.time() * 1000)
+        ext_clean = ext if ext.startswith(".") else f".{ext}"
+        saved_path = speaker_dir / f"speaker-{timestamp}{ext_clean}"
+        saved_path.write_bytes(audio_bytes)
+
+        _trim_audio_to_seconds(saved_path)
+        _enforce_cap(saved_path.parent)
+
+        return saved_path
 
     def enroll_speaker(self, name: str) -> bool:
         """Recompute embeddings for a single speaker. Returns True if loaded."""
