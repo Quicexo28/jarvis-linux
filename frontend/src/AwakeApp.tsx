@@ -26,6 +26,7 @@ import { WorldScene } from './scenes/WorldScene'
 import { PlanSelectorOverlay } from './components/PlanSelectorOverlay'
 import { DisplayCard } from './components/DisplayCard'
 import { Model3DViewer } from './components/Model3DViewer'
+import { WakeWordWizard } from './components/WakeWordWizard'
 import { getApiBase } from './api/client'
 import { streamTtsAndPlay, setTtsDucking } from './audio/streamingTts'
 import { streamConverse } from './audio/converse'
@@ -768,6 +769,9 @@ export function AwakeApp() {
 
       {/* 3D model viewer — full-screen overlay driven by model3dStore */}
       <Model3DViewer />
+
+      {/* Wake word calibration wizard — shown on first boot if not yet calibrated */}
+      <WakeWordWizard />
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile, access } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { json, readBody } from '../lib/http.js'
@@ -21,6 +21,15 @@ export async function handleWakeDetected(req, res) {
     return json(res, 200, { ok: true, confidence, state })
   } catch (err) {
     return json(res, 500, { ok: false, error: String(err) })
+  }
+}
+
+export async function handleWakeStatus(_req, res) {
+  try {
+    await access(WAKE_PROFILE_PATH)
+    return json(res, 200, { calibrated: true })
+  } catch {
+    return json(res, 200, { calibrated: false })
   }
 }
 
