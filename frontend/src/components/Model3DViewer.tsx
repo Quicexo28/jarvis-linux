@@ -7,8 +7,9 @@
  * (marching cubes; optional Brillouin-zone clip for Fermi surfaces).
  */
 
-import { useRef, useMemo, useEffect } from 'react'
+import { useRef, useMemo, useEffect, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
+import { OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import { useGestureStore } from '../state/gestureStore'
 import { create, all } from 'mathjs'
@@ -279,13 +280,14 @@ function ImplicitObject({ spec }: { spec: ImplicitSpec }) {
 
 /* ---- Scene wrapper ---- */
 
-function Scene({ spec }: { spec: Model3DSpec }) {
+function Scene({ spec, gestureEnabled }: { spec: Model3DSpec; gestureEnabled: boolean }) {
   return (
     <>
       <color attach="background" args={['#060d12']} />
       <ambientLight intensity={0.4} color="#38d5ff" />
       <pointLight position={[5, 5, 5]} intensity={1.2} color="#ffffff" />
       <pointLight position={[-5, -3, -5]} intensity={0.6} color="#0059ff" />
+      {!gestureEnabled && <OrbitControls makeDefault enablePan={true} />}
       {spec.kind === 'parametric' && <ParametricObject spec={spec} />}
       {spec.kind === 'polytope' && <PolytopeObject spec={spec} />}
       {spec.kind === 'implicit' && <ImplicitObject spec={spec} />}
@@ -299,6 +301,9 @@ export function Model3DViewer() {
   const open = useModel3dStore(s => s.open)
   const spec = useModel3dStore(s => s.spec)
   const hide = useModel3dStore(s => s.hide)
+  const gestureEnabled = useGestureStore(s => s.enabled)
+  const setGestureEnabled = useGestureStore(s => s.setEnabled)
+  const [showGesturePrompt, setShowGesturePrompt] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -306,6 +311,13 @@ export function Model3DViewer() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [open, hide])
+
+  // On open: if gestures are off, prompt to activate them
+  useEffect(() => {
+    if (open && !gestureEnabled) {
+      setShowGesturePrompt(true)
+    }
+  }, [open])
 
   if (!open || !spec) return null
 
@@ -315,6 +327,7 @@ export function Model3DViewer() {
       background: 'rgba(4, 10, 16, 0.96)',
       display: 'flex', flexDirection: 'column',
     }}>
+      {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '10px 20px', color: '#38d5ff', fontSize: 13, letterSpacing: 1,
@@ -327,17 +340,45 @@ export function Model3DViewer() {
           aria-label="Cerrar"
         >×</button>
       </div>
-      <div style={{ flex: 1 }}>
+
+      {/* 3D canvas */}
+      <div style={{ flex: 1, position: 'relative' }}>
         <Canvas camera={{ position: [0, 0, 12], fov: 40 }} gl={{ localClippingEnabled: true }}>
-          <Scene spec={spec} />
+          <Scene spec={spec} gestureEnabled={gestureEnabled} />
         </Canvas>
+
+        {/* Gesture activation prompt */}
+        {showGesturePrompt && (
+          <div style={{
+            position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
+            background: 'rgba(4, 13, 26, 0.92)', border: '1px solid rgba(56,213,255,0.4)',
+            borderRadius: 8, padding: '10px 18px',
+            color: '#ccd6f6', fontSize: 12, letterSpacing: 0.5,
+            display: 'flex', alignItems: 'center', gap: 12,
+            backdropFilter: 'blur(8px)',
+          }}>
+            <span>¿Activar gestos para el visor 3D?</span>
+            <button
+              onClick={() => { setGestureEnabled(true); setShowGesturePrompt(false) }}
+              style={{ background: 'rgba(56,213,255,0.15)', border: '1px solid rgba(56,213,255,0.5)', borderRadius: 4, color: '#38d5ff', cursor: 'pointer', padding: '3px 10px', fontSize: 11 }}
+            >Sí</button>
+            <button
+              onClick={() => setShowGesturePrompt(false)}
+              style={{ background: 'transparent', border: '1px solid rgba(100,130,150,0.4)', borderRadius: 4, color: '#7fa6b8', cursor: 'pointer', padding: '3px 10px', fontSize: 11 }}
+            >No</button>
+          </div>
+        )}
       </div>
+
+      {/* Footer hint — changes by control mode */}
       <div style={{
         padding: '6px 20px', color: 'rgba(56,213,255,0.4)', fontSize: 11,
         borderTop: '1px solid rgba(56,213,255,0.1)',
         textAlign: 'center',
       }}>
-        Puño cerrado: rotar · Pinch: zoom · Esc: cerrar
+        {gestureEnabled
+          ? 'Puño cerrado: rotar · Pinch: zoom · Esc: cerrar'
+          : 'Arrastra: rotar · Scroll: zoom · Esc: cerrar'}
       </div>
     </div>
   )
