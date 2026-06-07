@@ -8,7 +8,6 @@ WorkingDirectory=%h/jarvis-linux/backend/voice/python
 ExecStart=%h/jarvis-linux/backend/voice/python/.venv/bin/python wake_service.py
 Restart=on-failure
 RestartSec=5
-# This service will be functional after Plan 2 (wake_service.py is created then).
 
 [Install]
 WantedBy=default.target

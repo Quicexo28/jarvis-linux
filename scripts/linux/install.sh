@@ -33,8 +33,8 @@ echo "[jarvis-install] Installing Python dependencies..."
 "$VENV/bin/pip" install --upgrade pip
 "$VENV/bin/pip" install -r "$JARVIS_DIR/backend/voice/python/requirements.txt"
 
-# openWakeWord and resemblyzer (needed for Plans 2+)
-"$VENV/bin/pip" install openWakeWord resemblyzer
+# openWakeWord (in requirements.txt via extras; install explicitly for onnxruntime pull-in)
+"$VENV/bin/pip" install "openWakeWord>=0.6.0"
 
 # ── Config directory ──────────────────────────────────────────────────────────
 CONFIG_DIR="$HOME/.config/jarvis"
@@ -56,8 +56,7 @@ done
 
 systemctl --user daemon-reload
 
-# Enable but don't start wake yet (wake_service.py created in Plan 2)
-for svc in jarvis-backend jarvis-stt jarvis-tts jarvis-ui; do
+for svc in jarvis-backend jarvis-stt jarvis-tts jarvis-wake jarvis-ui; do
   systemctl --user enable "$svc"
   echo "  → enabled $svc"
 done
