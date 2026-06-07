@@ -251,6 +251,7 @@ async function chronoList(): Promise<unknown> {
 /* ---- Navigation primitives ---- */
 import { useBootStore } from '../state/bootStore'
 import { useUiStore, type OverlayName } from '../state/uiStore'
+import { useGestureStore } from '../state/gestureStore'
 
 const VALID_MODES: ReadonlyArray<Mode> = [
   'home', 'house', 'plan2d', 'plan3d', 'space', 'cloud', 'system', 'mobile', 'utils', 'timer', 'chrono',
@@ -341,6 +342,27 @@ async function toggleClapWake(payload: { enabled?: boolean } = {}): Promise<unkn
   return { clapWakeEnabled: next }
 }
 
+/** Enter PIP (mini window) mode. */
+async function bootPip(): Promise<unknown> {
+  useBootStore.getState().enterPip()
+  try { window.resizeTo(400, 300) } catch {}
+  return { bootState: 'PIP' }
+}
+
+/** Return to full-screen AWAKE mode from PIP. */
+async function bootAwake(): Promise<unknown> {
+  useBootStore.getState().leavePip()
+  try { window.resizeTo(window.screen.width, window.screen.height) } catch {}
+  return { bootState: 'AWAKE' }
+}
+
+/** Enable or disable the gesture pipeline. */
+async function gestureSet(payload: { enabled?: boolean } = {}): Promise<unknown> {
+  const enabled = Boolean(payload.enabled)
+  useGestureStore.getState().setEnabled(enabled)
+  return { gestureEnabled: enabled }
+}
+
 const PRIMITIVES: Record<string, Primitive> = {
   enumerate_devices: enumerateDevices,
   capture_photo: capturePhoto,
@@ -374,6 +396,9 @@ const PRIMITIVES: Record<string, Primitive> = {
   sleep_system: sleepSystem,
   toggle_voice: toggleVoice,
   toggle_clap_wake: toggleClapWake,
+  boot_pip:    bootPip,
+  boot_awake:  bootAwake,
+  gesture_set: gestureSet,
 }
 
 /**
