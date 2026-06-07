@@ -9,7 +9,7 @@
  */
 
 import { json, readBody } from '../lib/http.js'
-import { getAttentionState, markInteraction, forcePassive } from '../lib/attentionState.js'
+import { getAttentionState, markInteraction, forcePassive, setVoiceMuted, isVoiceMuted } from '../lib/attentionState.js'
 import { classifyIntent } from '../lib/intentClassifier.js'
 import { pickModel } from '../lib/modelRouter.js'
 import { addUserMessage, addAssistantMessage, getConversationContext } from '../lib/conversationMemory.js'
@@ -24,6 +24,7 @@ import {
   filterIntentsByMode,
   incrementTurnCount,
 } from '../lib/speakerContext.js'
+import { requestClient as skillBusRequest, hasClient as skillBusHasClient } from '../lib/skillBus.js'
 
 const SPEECH_SYSTEM_PROMPT_BASE = `Eres Jarvis, el asistente personal de inteligencia artificial de Santiago. Hablas por voz, en español de Colombia.
 
@@ -136,6 +137,18 @@ const UNKNOWN_OPENERS = [
   'Alerta de intruso. Iniciando protocolo... — es broma. ¿Con quién tengo el gusto?',
 ]
 
+// Instant acknowledgement strings for high-latency intent paths.
+// Spoken immediately (<300ms) on Track A; Claude/function fires on Track B concurrently.
+const ACK_MAP = {
+  show_3d:         'Preparando visor 3D, señor.',
+  navigate:        'Navegando.',
+  render_formula:  'Calculando.',
+  reminder_create: 'Anotado, señor.',
+  timer_start:     'Temporizador iniciado.',
+  gesture_toggle:  'Gestos actualizados.',
+  voice_muted:     'Entendido, señor. No escucho más comandos hasta nuevo aviso.',
+}
+
 function _resolveSpeakerMode(speakerName, speakerConfidence) {
   // If no speaker info provided at all (legacy path / tests), treat as OWNER
   // so existing behavior is unchanged. Real production turns always include
@@ -168,6 +181,12 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
   const alwaysOn = Boolean(body.alwaysOn)
 
   if (!text) return { action: 'ignore', reason: 'empty' }
+
+  // VOICE_MUTED gate — block all speech while muted.
+  // Cleared only by wake word (wakeWord.js) or double clap (DormantLayer).
+  if (isVoiceMuted()) {
+    return { action: 'voice_muted_block', state: getAttentionState() }
+  }
 
   const state = getAttentionState()
   const classification = classifyIntent(text, { state, speakerConfidence, alwaysOn })
@@ -216,6 +235,29 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
     const reply = 'Lo siento, esa función no está disponible para este usuario.'
     onSentence(reply)
     return { action: 'intent_blocked', reply, intentTag, mode: currentMode, state }
+  }
+
+  // voice_muted intent: activate mute, speak ACK, return early.
+  if (intentTag === 'voice_muted') {
+    setVoiceMuted(true)
+    const ack = ACK_MAP.voice_muted
+    addAssistantMessage(ack)
+    appendHistoryEntry(speakerName, { userText: text, assistantReply: ack }).catch(() => {})
+    onSentence(ack)
+    return { action: 'voice_muted', reply: ack, state }
+  }
+
+  // toggle_gestures intent: push gesture_set primitive to renderer via skill bus.
+  if (intentTag === 'toggle_gestures') {
+    const enable = /activa|enciende/i.test(text.toLowerCase())
+    if (skillBusHasClient()) {
+      try { await skillBusRequest('gesture_set', { enabled: enable }) } catch {}
+    }
+    const ack = ACK_MAP.gesture_toggle
+    addAssistantMessage(ack)
+    appendHistoryEntry(speakerName, { userText: text, assistantReply: ack }).catch(() => {})
+    onSentence(ack)
+    return { action: 'gestures_toggled', enabled: enable, reply: ack, state }
   }
 
   // self_build: generate a new dynamic capability — cannot go through MCP (FS + restart).
@@ -268,6 +310,12 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
   // Inject current date/time so Claude can calculate reminder times without calling current_time.
   const now = new Date()
   const timeContext = `\nFecha y hora actual (Colombia): ${now.toLocaleString('es-CO', { timeZone: 'America/Bogota', dateStyle: 'full', timeStyle: 'short' })}.`
+
+  // Two-track response: speak ACK instantly on Track A so the user hears
+  // acknowledgement in <300ms. Claude streams on Track B in parallel.
+  if (ACK_MAP[intentTag]) {
+    onSentence(ACK_MAP[intentTag])
+  }
 
   // Multi-model routing: delicate work → opus, complex reasoning → sonnet,
   // everything else → haiku (fast). Each model has its own warm session.
