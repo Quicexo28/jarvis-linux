@@ -3,6 +3,7 @@ import { test, expect, vi, beforeEach } from 'vitest'
 vi.mock('../src/lib/attentionState.js', () => ({
   markInteraction: vi.fn(),
   getAttentionState: vi.fn(() => 'ENGAGED'),
+  setVoiceMuted: vi.fn(),
 }))
 vi.mock('../src/lib/speakerContext.js', () => ({
   resetSession: vi.fn(),
@@ -20,7 +21,7 @@ vi.mock('../src/lib/http.js', () => ({
 }))
 
 import { handleWakeDetected, handleWakeCalibrate } from '../src/handlers/wakeWord.js'
-import { markInteraction } from '../src/lib/attentionState.js'
+import { markInteraction, setVoiceMuted } from '../src/lib/attentionState.js'
 
 function makeReqRes(body = {}) {
   let statusCode = 200
@@ -64,4 +65,11 @@ test('handleWakeCalibrate rejects missing samples', async () => {
   await handleWakeCalibrate(req, res)
   expect(res.body.ok).toBe(false)
   expect(res.body.error).toBe('samples_required')
+})
+
+test('handleWakeDetected calls setVoiceMuted(false)', async () => {
+  const { req, res } = makeReqRes({ confidence: 0.9, ts: 2000 })
+  await handleWakeDetected(req, res)
+  expect(setVoiceMuted).toHaveBeenCalledOnce()
+  expect(setVoiceMuted).toHaveBeenCalledWith(false)
 })

@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { json, readBody } from '../lib/http.js'
-import { markInteraction, getAttentionState } from '../lib/attentionState.js'
+import { markInteraction, getAttentionState, setVoiceMuted } from '../lib/attentionState.js'
 import { resetSession } from '../lib/speakerContext.js'
 
 const CONFIG_DIR = join(homedir(), '.config', 'jarvis')
@@ -14,6 +14,7 @@ export async function handleWakeDetected(req, res) {
     const confidence = Number(body.confidence ?? 0)
     const ts = body.ts ?? Date.now()
     markInteraction()
+    setVoiceMuted(false)
     resetSession()
     const state = getAttentionState()
     console.log(`[wake] detected confidence=${confidence.toFixed(3)} ts=${ts} → state=${state}`)
