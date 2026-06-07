@@ -312,7 +312,10 @@ export function Model3DViewer() {
     return () => window.removeEventListener('keydown', onKey)
   }, [open, hide])
 
-  // On open: if gestures are off, prompt to activate them
+  // On open: if gestures are off, prompt to activate them.
+  // gestureEnabled intentionally excluded from deps — we only want to trigger
+  // on viewer open, not every time gesture state changes externally.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (open && !gestureEnabled) {
       setShowGesturePrompt(true)

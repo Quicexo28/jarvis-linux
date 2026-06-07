@@ -250,14 +250,17 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
   // toggle_gestures intent: push gesture_set primitive to renderer via skill bus.
   if (intentTag === 'toggle_gestures') {
     const enable = /activa|enciende/i.test(text.toLowerCase())
+    let gestureApplied = false
     if (skillBusHasClient()) {
-      try { await skillBusRequest('gesture_set', { enabled: enable }) } catch {}
+      try { await skillBusRequest('gesture_set', { enabled: enable }); gestureApplied = true } catch {}
     }
-    const ack = ACK_MAP.gesture_toggle
+    const ack = gestureApplied
+      ? ACK_MAP.gesture_toggle
+      : 'La interfaz no está activa, señor. Intente cuando esté despierta.'
     addAssistantMessage(ack)
     appendHistoryEntry(speakerName, { userText: text, assistantReply: ack }).catch(() => {})
     onSentence(ack)
-    return { action: 'gestures_toggled', enabled: enable, reply: ack, state }
+    return { action: 'gestures_toggled', enabled: enable, applied: gestureApplied, reply: ack, state }
   }
 
   // self_build: generate a new dynamic capability — cannot go through MCP (FS + restart).
