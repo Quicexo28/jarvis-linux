@@ -1,6 +1,6 @@
 [Unit]
 Description=Jarvis UI (Chromium app-mode)
-After=jarvis-backend.service
+After=jarvis-backend.service graphical-session.target
 Requires=jarvis-backend.service
 
 [Service]
