@@ -26,6 +26,8 @@ const SLEEP_COMMANDS = /\b(descansa|duerme|silencio|callate|no molestes)\b/i
 
 const SELF_BUILD_RE = /\b(no\s+puedes|aprende\s+a\s+hacer|conf[ií]g[uú]rate\s+para|act[íi]vate\s+para|necesito\s+que\s+puedas|no\s+sabes\s+c[oó]mo|implementa\s+(la\s+)?capacidad|t[oó]ma(me)?\s+una\s+foto|saca(me)?\s+una\s+foto|haz(me)?\s+una\s+foto|con[eé]ctate\s+a\s+(mi\s+|la\s+)?c[aá]mara|usa\s+(mi\s+|la\s+)?c[aá]mara)\b/i
 const ACTIVATE_SKILL_RE = /\b(activa\s+(la?\s+)?habilidad|activa\s+(el?\s+)?skill|habilita\s+(la?\s+)?funci[oó]n|enciende\s+(la?\s+)?habilidad)\b/i
+const TOGGLE_GESTURES_RE = /\b(activa|desactiva|enciende|apaga)\s+(los?\s+)?gestos\b/i
+const VOICE_MUTED_RE = /\b(no\s+escuches|ign[oó]ra(me)?|modo\s+silencio|silencio\s+de\s+voz)\b/i
 
 // Delicate / irreversible work → routed to opus (modelRouter). A destructive
 // file verb NEAR a file/code noun, OR editing Jarvis's own code. The noun gate
@@ -48,6 +50,8 @@ function detectIntentTag(text) {
   if (ACTIVATE_SKILL_RE.test(text)) { console.log('[intent] -> activate_skill:', text); return 'activate_skill' }
   if (FILE_DELICATE_RE.test(text))  { console.log('[intent] -> file_delicate:', text);  return 'file_delicate' }
   if (COMPLEX_TASK_RE.test(text))   { console.log('[intent] -> complex_task:', text);   return 'complex_task' }
+  if (TOGGLE_GESTURES_RE.test(text)) { console.log('[intent] -> toggle_gestures:', text); return 'toggle_gestures' }
+  if (VOICE_MUTED_RE.test(text))    { console.log('[intent] -> voice_muted:', text);    return 'voice_muted' }
   return 'chat'
 }
 
