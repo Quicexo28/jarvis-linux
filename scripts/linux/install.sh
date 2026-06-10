@@ -4,6 +4,12 @@ set -euo pipefail
 JARVIS_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 echo "[jarvis-install] Installing from: $JARVIS_DIR"
 
+# systemd units reference %h/jarvis-linux — warn if the clone lives elsewhere.
+if [ "$JARVIS_DIR" != "$HOME/jarvis-linux" ]; then
+  echo "[jarvis-install] WARNING: repo is at $JARVIS_DIR but the systemd services"
+  echo "                 expect \$HOME/jarvis-linux. Move/clone it there or edit the units."
+fi
+
 # ── System packages ──────────────────────────────────────────────────────────
 echo "[jarvis-install] Installing system packages via pacman..."
 sudo pacman -S --needed --noconfirm \
@@ -11,6 +17,9 @@ sudo pacman -S --needed --noconfirm \
   python python-pip \
   chromium \
   git \
+  curl \
+  ffmpeg \
+  libsndfile \
   portaudio
 
 # ── Node.js dependencies ─────────────────────────────────────────────────────
@@ -55,6 +64,20 @@ for svc in jarvis-backend jarvis-stt jarvis-tts jarvis-wake jarvis-ui; do
 done
 
 systemctl --user daemon-reload
+
+# ── Hyprland integration (window rules + Ctrl+Alt+J wake bind) ───────────────
+HYPR_CONF="$HOME/.config/hypr/hyprland.conf"
+if [ -f "$HYPR_CONF" ]; then
+  SOURCE_LINE="source = $JARVIS_DIR/scripts/linux/hyprland-jarvis.conf"
+  if ! grep -qF "hyprland-jarvis.conf" "$HYPR_CONF"; then
+    printf '\n# Jarvis assistant (window rules + wake hotkey)\n%s\n' "$SOURCE_LINE" >> "$HYPR_CONF"
+    echo "[jarvis-install] Added Jarvis source line to $HYPR_CONF"
+  else
+    echo "[jarvis-install] Hyprland config already sources hyprland-jarvis.conf — skipped"
+  fi
+else
+  echo "[jarvis-install] No Hyprland config found at $HYPR_CONF — skipping window rules/hotkey"
+fi
 
 for svc in jarvis-backend jarvis-stt jarvis-tts jarvis-wake jarvis-ui; do
   systemctl --user enable "$svc"
