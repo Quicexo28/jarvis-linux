@@ -25,8 +25,19 @@ function loadPttEnabled(): boolean {
   try { return localStorage.getItem(PTT_ENABLED_KEY) === '1' } catch { return false }
 }
 
+// Combo format: 'Ctrl+Alt+KeyV' (modifiers + KeyboardEvent.code). Matches the
+// global Hyprland bind so PTT feels identical with or without app focus.
+const DEFAULT_PTT_KEY = 'Ctrl+Alt+KeyV'
+
 function loadPttKey(): string {
-  try { return localStorage.getItem(PTT_KEY_KEY) || 'Space' } catch { return 'Space' }
+  try {
+    const v = localStorage.getItem(PTT_KEY_KEY) || ''
+    // Legacy single-key values (e.g. 'Space') are too easy to hit by accident
+    // for a function meant to work system-wide — migrate to the combo default.
+    return v.includes('+') ? v : DEFAULT_PTT_KEY
+  } catch {
+    return DEFAULT_PTT_KEY
+  }
 }
 
 interface JarvisState {
@@ -51,7 +62,7 @@ interface JarvisState {
 
   /** Push-to-talk: when enabled, the mic only streams while the key is held. */
   pttEnabled: boolean
-  /** KeyboardEvent.code of the in-app push-to-talk key. */
+  /** PTT combo: modifiers + KeyboardEvent.code, e.g. 'Ctrl+Alt+KeyV'. */
   pttKey: string
   /** True while the PTT key is held (in-app key or global Hyprland bind). */
   pttActive: boolean
