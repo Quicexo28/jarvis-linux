@@ -12,6 +12,7 @@ import { GestureMonitor } from './components/GestureMonitor'
 import { GestureDebugView } from './components/GestureDebugView'
 import { GestureTrainer } from './components/GestureTrainer'
 import { SpeakerIdPanel } from './components/SpeakerIdPanel'
+import { PttKeyConfig } from './components/PttKeyConfig'
 import { SpeakerConfigWindow } from './components/SpeakerConfigWindow'
 import { TtsTestWidget } from './components/TtsTestWidget'
 import { ObsidianStatusBadge } from './components/ObsidianStatusBadge'
@@ -27,6 +28,8 @@ import { PlanSelectorOverlay } from './components/PlanSelectorOverlay'
 import { DisplayCard } from './components/DisplayCard'
 import { Model3DViewer } from './components/Model3DViewer'
 import { WakeWordWizard } from './components/WakeWordWizard'
+import { EnrollmentWizard } from './components/EnrollmentWizard'
+import { usePushToTalk } from './hooks/usePushToTalk'
 import { getApiBase } from './api/client'
 import { streamTtsAndPlay, setTtsDucking } from './audio/streamingTts'
 import { streamConverse } from './audio/converse'
@@ -56,6 +59,9 @@ export function AwakeApp() {
   const setZoomedMode   = useJarvisStore(s => s.setZoomedMode)
   const voiceEnabled    = useJarvisStore(s => s.voiceEnabled)
   const setVoiceEnabled = useJarvisStore(s => s.setVoiceEnabled)
+  const pttEnabled      = useJarvisStore(s => s.pttEnabled)
+  const setPttEnabled   = useJarvisStore(s => s.setPttEnabled)
+  const pttActive       = useJarvisStore(s => s.pttActive)
   const wakeListening   = useJarvisStore(s => s.wakeListening)
   const clapWakeEnabled  = useJarvisStore(s => s.clapWakeEnabled)
   const setClapWakeEnabled = useJarvisStore(s => s.setClapWakeEnabled)
@@ -404,7 +410,10 @@ export function AwakeApp() {
       if (turnSeqRef.current === myTurn) { turnBusyRef.current = false; speakingRef.current = false }
     }
 
-    const payload = { text, speakerConfidence, speakerName: nameForTurn, alwaysOn: true, context: { mode } }
+    // PTT turns bypass the backend speaker/mute gates: in PTT mode every
+    // capture is an explicit key hold. Read via getState() to avoid staleness.
+    const { pttEnabled: pttMode, pttActive: pttHeld } = useJarvisStore.getState()
+    const payload = { text, speakerConfidence, speakerName: nameForTurn, alwaysOn: true, ptt: pttMode || pttHeld, context: { mode } }
     console.log(`[speech] -> converse text="${text}" conf=${speakerConfidence?.toFixed?.(2) ?? speakerConfidence} name=${nameForTurn}`)
 
     // One AbortController for the whole turn: aborting it (barge-in / newer turn)
@@ -464,8 +473,12 @@ export function AwakeApp() {
       .finally(release)
   }, [mode, setCoreInput, setCoreReply, voiceEnabled, speakerName, speak])
 
+  usePushToTalk()
+
   const { listening: sttListening } = useLocalStt({
-    enabled: voiceEnabled,
+    // PTT mode replaces continuous listening: mic streams only while the key
+    // is held. pttActive alone (global Hyprland bind) also forces capture.
+    enabled: pttActive || (!pttEnabled && voiceEnabled),
     onFinalTranscript: handleSttFinal,
     onInterimTranscript: (text) => {
       setCoreInput(text)
@@ -702,6 +715,9 @@ export function AwakeApp() {
           {/* Speaker ID */}
           <SpeakerIdPanel onOpenConfig={() => setSpeakerConfigOpen(true)} />
 
+          {/* Push-to-talk */}
+          <PttKeyConfig />
+
           {/* TTS Test */}
           <TtsTestWidget />
 
@@ -738,10 +754,25 @@ export function AwakeApp() {
         <HudBtn active={voiceEnabled} onClick={() => setVoiceEnabled(!voiceEnabled)}>
           Voz
         </HudBtn>
+        <HudBtn active={pttEnabled} onClick={() => setPttEnabled(!pttEnabled)}>
+          PTT
+        </HudBtn>
         <HudBtn active={gestureEnabled} onClick={() => setGestureEnabled(!gestureEnabled)}>
           Gestos
         </HudBtn>
       </GlassPanel>
+
+      {/* Push-to-talk live indicator */}
+      {pttActive && (
+        <div style={{
+          position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9050, padding: '6px 18px', borderRadius: 20,
+          background: 'rgba(255,107,107,0.12)', border: '1px solid rgba(255,107,107,0.6)',
+          color: '#ff6b6b', fontSize: 11, letterSpacing: 2, fontFamily: 'monospace',
+        }}>
+          ● ESCUCHANDO (PTT)
+        </div>
+      )}
 
       {/* Point gesture pointer */}
       {gestureOutput.point.active && (
@@ -772,6 +803,9 @@ export function AwakeApp() {
 
       {/* Wake word calibration wizard — shown on first boot if not yet calibrated */}
       <WakeWordWizard />
+
+      {/* Speaker enrollment wizard — first boot, until a voice is enrolled */}
+      <EnrollmentWizard />
     </div>
   )
 }

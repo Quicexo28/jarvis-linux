@@ -85,9 +85,10 @@ export function getCodeDir() {
   }
 }
 
-// Enumerate fixed Windows drive roots (C:\ .. Z:\), skipping floppy A:/B:.
-// Used when JARVIS_ALL_DRIVES=1 to grant the voice session access to every disk.
-function listWindowsDrives() {
+// Enumerate disk roots granted by JARVIS_ALL_DRIVES=1. Windows: fixed drive
+// letters C:\ .. Z:\ (skipping floppy A:/B:). Linux/macOS: the filesystem root.
+function listAllDrives() {
+  if (process.platform !== 'win32') return ['/']
   const out = []
   for (let c = 67; c <= 90; c++) {        // 'C'..'Z'
     const d = `${String.fromCharCode(c)}:\\`
@@ -115,7 +116,7 @@ function getFilesystemRoots() {
     }
   }
   if (process['env']['JARVIS_ALL_DRIVES'] === '1') {
-    for (const d of listWindowsDrives()) add(d)
+    for (const d of listAllDrives()) add(d)
   }
   return roots
 }

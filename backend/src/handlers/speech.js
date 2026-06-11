@@ -25,6 +25,7 @@ import {
   incrementTurnCount,
 } from '../lib/speakerContext.js'
 import { requestClient as skillBusRequest, hasClient as skillBusHasClient } from '../lib/skillBus.js'
+import { isPttActive } from '../lib/pttState.js'
 
 const SPEECH_SYSTEM_PROMPT_BASE = `Eres Jarvis, el asistente personal de inteligencia artificial de Santiago. Hablas por voz, en español de Colombia.
 
@@ -149,7 +150,14 @@ const ACK_MAP = {
   voice_muted:     'Entendido, señor. No escucho más comandos hasta nuevo aviso.',
 }
 
-function _resolveSpeakerMode(speakerName, speakerConfidence) {
+function _resolveSpeakerMode(speakerName, speakerConfidence, ptt = false) {
+  // Push-to-talk: a physical key press on the host machine is explicit owner
+  // intent (whoever holds the keyboard already has full PC access), so skip
+  // the voice-confidence gate entirely.
+  if (ptt) {
+    setSpeakerMode('OWNER', speakerName)
+    return 'OWNER'
+  }
   // If no speaker info provided at all (legacy path / tests), treat as OWNER
   // so existing behavior is unchanged. Real production turns always include
   // speakerName from the STT service.
@@ -179,17 +187,20 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
   const text = String(body.text ?? '').trim()
   const speakerConfidence = Number(body.speakerConfidence ?? 0)
   const alwaysOn = Boolean(body.alwaysOn)
+  // Turn captured while push-to-talk is held: in-app key sends body.ptt, the
+  // global Hyprland bind sets backend state via /api/jarvis/ptt/start.
+  const ptt = Boolean(body.ptt) || isPttActive()
 
   if (!text) return { action: 'ignore', reason: 'empty' }
 
   // VOICE_MUTED gate — block all speech while muted.
-  // Cleared only by wake word (wakeWord.js) or double clap (DormantLayer).
-  if (isVoiceMuted()) {
+  // Cleared by wake word (wakeWord.js), double clap (DormantLayer), or PTT.
+  if (isVoiceMuted() && !ptt) {
     return { action: 'voice_muted_block', state: getAttentionState() }
   }
 
   const state = getAttentionState()
-  const classification = classifyIntent(text, { state, speakerConfidence, alwaysOn })
+  const classification = classifyIntent(text, { state, speakerConfidence, alwaysOn, ptt })
 
   if (classification.isSleepCommand) {
     forcePassive()
@@ -209,7 +220,7 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
   const speakerName = body.speakerName ?? null
 
   // ── Speaker mode gate ────────────────────────────────────────────────────
-  const currentMode = _resolveSpeakerMode(speakerName, speakerConfidence)
+  const currentMode = _resolveSpeakerMode(speakerName, speakerConfidence, ptt)
 
   if (currentMode === 'LOW_CONF') {
     const reply = 'No pude identificar quién habla. ¿Puede repetir, por favor?'

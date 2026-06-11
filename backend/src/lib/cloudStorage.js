@@ -1,7 +1,13 @@
 import fs from 'fs'
 import path from 'path'
+import { homedir } from 'os'
 
-const SANTI_CLOUD_ROOT = 'D:\\SyncthingCloud\\Uploads\\TelegramCloud\\Santi'
+// Override via JARVIS_CLOUD_ROOT; defaults match the Windows host layout and
+// its ~/SyncthingCloud equivalent on Linux.
+const SANTI_CLOUD_ROOT = process.env.JARVIS_CLOUD_ROOT
+  || (process.platform === 'win32'
+    ? 'D:\\SyncthingCloud\\Uploads\\TelegramCloud\\Santi'
+    : path.join(homedir(), 'SyncthingCloud', 'Uploads', 'TelegramCloud', 'Santi'))
 const SANTI_CHAT_ID = 2017358997
 const PHOTO_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'])

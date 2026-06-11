@@ -1,5 +1,18 @@
 # Jarvis Desktop — Estado actual del proyecto
 
+## Instalación en Linux (CachyOS + Omarchy) — un solo script
+
+Sobre una instalación fresca de CachyOS (BTRFS + Snapper, shell Fish):
+
+```bash
+git clone https://github.com/quicexo28/jarvis-linux ~/jarvis-linux
+cd ~/jarvis-linux && ./setup.sh
+```
+
+El script es idempotente y por fases: instala Omarchy (escritorio Hyprland; al terminar **reinicia, entra a Hyprland y vuelve a ejecutar `./setup.sh`**), luego Claude CLI, luego Jarvis (dependencias, venv de Python con torch CUDA si hay NVIDIA, 5 servicios systemd de usuario, reglas de Hyprland + hotkey `Ctrl+Alt+J`) y los flags de VA-API para Chromium en NVIDIA. Al final imprime el checklist manual: login de Claude CLI, enrolar tu voz en SpeakerIdPanel y fijar `JARVIS_OWNER_SPEAKER`.
+
+---
+
 Este proyecto es una app web tipo **Jarvis** orientada a controlar y visualizar una casa virtual con tres capas:
 
 1. **Diseño 2D** de habitaciones/muros.

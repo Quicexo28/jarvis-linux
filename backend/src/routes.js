@@ -28,6 +28,7 @@ import {
 import { handleObsidianStatus } from './handlers/obsidian.js'
 import { handleSystemConfig } from './handlers/config.js'
 import { handleWakeDetected, handleWakeCalibrate, handleWakeStatus } from './handlers/wakeWord.js'
+import { handlePttStart, handlePttStop, handlePttStatus } from './handlers/ptt.js'
 import { handleUiState, handleGestureToggle } from './handlers/uiState.js'
 import {
   handleTimerStart, handleTimerPause, handleTimerResume, handleTimerAdd,
@@ -56,6 +57,9 @@ export const routes = [
   { method: 'GET',  path: '/api/jarvis/wake-status',    handler: handleWakeStatus },
   { method: 'POST', path: '/api/jarvis/wake-detected',  handler: handleWakeDetected },
   { method: 'POST', path: '/api/jarvis/wake-calibrate', handler: handleWakeCalibrate },
+  { method: 'POST', path: '/api/jarvis/ptt/start',      handler: handlePttStart },
+  { method: 'POST', path: '/api/jarvis/ptt/stop',       handler: handlePttStop },
+  { method: 'GET',  path: '/api/jarvis/ptt/status',     handler: handlePttStatus },
   { method: 'POST', path: '/api/jarvis/ui-state',        handler: handleUiState },
   { method: 'POST', path: '/api/skills/gestures/toggle', handler: handleGestureToggle },
   { method: 'POST', path: '/api/jarvis/tts',           handler: handleJarvisTts },

@@ -1,6 +1,7 @@
 const STORAGE_KEY      = 'jarvis.api.base'
 const MOBILE_TOKEN_KEY = 'jarvis.mobile.token'
-const DEFAULT_BASE     = 'http://127.0.0.1:8788'
+// Override at build time with VITE_BACKEND_URL; localStorage still wins.
+const DEFAULT_BASE     = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8788'
 
 export function getApiBase(): string {
   const stored = localStorage.getItem(STORAGE_KEY)

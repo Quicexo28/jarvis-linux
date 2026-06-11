@@ -2,6 +2,8 @@
 Description=Jarvis UI (Chromium app-mode)
 After=jarvis-backend.service graphical-session.target
 Requires=jarvis-backend.service
+# Tie lifetime to the Wayland session: stops on logout, restarts on login.
+PartOf=graphical-session.target
 
 [Service]
 Type=simple
@@ -16,9 +18,8 @@ ExecStart=/usr/bin/chromium \
   --enable-features=UseOzonePlatform
 Restart=on-failure
 RestartSec=3
-# Supports both X11 and Wayland. --ozone-platform-hint=auto picks at runtime.
-Environment=DISPLAY=:0
-Environment=WAYLAND_DISPLAY=wayland-0
+# DISPLAY/WAYLAND_DISPLAY come from the session environment — UWSM imports it
+# into the systemd user manager; --ozone-platform-hint=auto picks the backend.
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
