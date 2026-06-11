@@ -12,6 +12,7 @@ import { GestureMonitor } from './components/GestureMonitor'
 import { GestureDebugView } from './components/GestureDebugView'
 import { GestureTrainer } from './components/GestureTrainer'
 import { SpeakerIdPanel } from './components/SpeakerIdPanel'
+import { PttKeyConfig } from './components/PttKeyConfig'
 import { SpeakerConfigWindow } from './components/SpeakerConfigWindow'
 import { TtsTestWidget } from './components/TtsTestWidget'
 import { ObsidianStatusBadge } from './components/ObsidianStatusBadge'
@@ -713,6 +714,9 @@ export function AwakeApp() {
 
           {/* Speaker ID */}
           <SpeakerIdPanel onOpenConfig={() => setSpeakerConfigOpen(true)} />
+
+          {/* Push-to-talk */}
+          <PttKeyConfig />
 
           {/* TTS Test */}
           <TtsTestWidget />
