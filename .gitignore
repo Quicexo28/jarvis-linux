@@ -78,3 +78,7 @@ CLAUDE.md.original.md
 
 # Voice enrollment (personal data — never commit)
 backend/voice/samples/speaker/
+
+
+# Omarchy source tree cloned by scripts/omarchy/fetch-omarchy.sh
+/omarchy/

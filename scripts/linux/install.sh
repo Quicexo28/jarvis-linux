@@ -40,6 +40,17 @@ python -m venv "$VENV"
 
 echo "[jarvis-install] Installing Python dependencies..."
 "$VENV/bin/pip" install --upgrade pip
+
+# Torch first, picking the right wheel index: CUDA when an NVIDIA driver is
+# active (XTTS runs on GPU), CPU-only otherwise (much smaller download).
+if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
+  echo "[jarvis-install] NVIDIA GPU detected — installing torch with CUDA 12.1..."
+  "$VENV/bin/pip" install "torch>=2.1.0" "torchaudio>=2.1.0" --index-url https://download.pytorch.org/whl/cu121
+else
+  echo "[jarvis-install] No NVIDIA GPU — installing CPU-only torch..."
+  "$VENV/bin/pip" install "torch>=2.1.0" "torchaudio>=2.1.0" --index-url https://download.pytorch.org/whl/cpu
+fi
+
 "$VENV/bin/pip" install -r "$JARVIS_DIR/backend/voice/python/requirements.txt"
 
 # openWakeWord (in requirements.txt via extras; install explicitly for onnxruntime pull-in)

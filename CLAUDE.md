@@ -2,6 +2,16 @@
 
 Parent workspace `C:\proyecto\CLAUDE.md`: cross-project context + high-level summary. This file: architecture + gotchas for **inside** `jarvis-desktop/`.
 
+## Linux / Omarchy (primary target)
+
+One-script bootstrap on fresh CachyOS: `./setup.sh` (idempotent, phased: Omarchy desktop → Claude CLI → Jarvis → NVIDIA Chromium flags). Re-run after the Omarchy reboot. Pieces:
+
+- `scripts/omarchy/` — Omarchy-on-CachyOS installer (patched Basecamp Omarchy; clones into `/omarchy/`, gitignored).
+- `scripts/linux/install.sh` — Jarvis only: pacman deps, npm deps, frontend build, Python venv (CUDA torch when `nvidia-smi` works, CPU wheel otherwise), 5 systemd user services, Hyprland wiring.
+- Services (`scripts/linux/*.service`, expect repo at `~/jarvis-linux`): `jarvis-backend` (node, port 8788), `jarvis-stt`, `jarvis-tts`, `jarvis-wake` (openWakeWord), `jarvis-ui` (Chromium app-mode, Wayland via ozone, `WantedBy=graphical-session.target`).
+- No Electron on Linux — wake hotkey `Ctrl+Alt+J` is a Hyprland bind (in `hyprland-jarvis.conf`) POSTing to `/api/jarvis/wake`; fullscreen via `requestFullscreen()`.
+- Venv python: `.venv/bin/python` on Linux, `.venv/Scripts/python.exe` on Windows — `nativePrimitives.js` and the services are platform-aware.
+
 ## Run commands
 
 Independent services — separate terminals.
