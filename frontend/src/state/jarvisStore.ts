@@ -8,6 +8,8 @@ const SUB_RING: Mode[] = ['plan3d', 'space', 'plan2d']
 const SUB_RING_UTILS: Mode[] = ['timer', 'chrono']
 
 const SPEAKER_NAME_KEY = 'jarvis.speaker.name.v1'
+const PTT_ENABLED_KEY = 'jarvis.ptt.enabled.v1'
+const PTT_KEY_KEY = 'jarvis.ptt.key.v1'
 
 function loadSpeakerName(): string {
   try {
@@ -17,6 +19,14 @@ function loadSpeakerName(): string {
   } catch {
     return ''
   }
+}
+
+function loadPttEnabled(): boolean {
+  try { return localStorage.getItem(PTT_ENABLED_KEY) === '1' } catch { return false }
+}
+
+function loadPttKey(): string {
+  try { return localStorage.getItem(PTT_KEY_KEY) || 'Space' } catch { return 'Space' }
 }
 
 interface JarvisState {
@@ -38,6 +48,13 @@ interface JarvisState {
   pinchZoomProgress: number
 
   speakerName: string
+
+  /** Push-to-talk: when enabled, the mic only streams while the key is held. */
+  pttEnabled: boolean
+  /** KeyboardEvent.code of the in-app push-to-talk key. */
+  pttKey: string
+  /** True while the PTT key is held (in-app key or global Hyprland bind). */
+  pttActive: boolean
 
   ringLevel: RingLevel
   activeRingMode: Mode
@@ -63,6 +80,10 @@ interface JarvisState {
 
   setSpeakerName: (name: string) => void
 
+  setPttEnabled: (enabled: boolean) => void
+  setPttKey: (key: string) => void
+  setPttActive: (active: boolean) => void
+
   setRingLevel: (level: RingLevel) => void
   rotateRing: (direction: -1 | 1) => void
   setActiveRingMode: (mode: Mode) => void
@@ -86,6 +107,10 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
   pinchZoomProgress: 0,
 
   speakerName: loadSpeakerName(),
+
+  pttEnabled: loadPttEnabled(),
+  pttKey: loadPttKey(),
+  pttActive: false,
 
   ringLevel: 'main',
   activeRingMode: 'home',
@@ -111,6 +136,16 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
     try { localStorage.setItem(SPEAKER_NAME_KEY, speakerName) } catch {}
     set({ speakerName })
   },
+
+  setPttEnabled: (pttEnabled) => {
+    try { localStorage.setItem(PTT_ENABLED_KEY, pttEnabled ? '1' : '0') } catch {}
+    set({ pttEnabled, ...(pttEnabled ? {} : { pttActive: false }) })
+  },
+  setPttKey: (pttKey) => {
+    try { localStorage.setItem(PTT_KEY_KEY, pttKey) } catch {}
+    set({ pttKey })
+  },
+  setPttActive: (pttActive) => set({ pttActive }),
 
   setRingLevel: (level) =>
     set({

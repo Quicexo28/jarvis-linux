@@ -69,14 +69,15 @@ const SPEAKER_MIN_CONFIDENCE = 0.65
  * @returns {{ shouldRespond: boolean, score: number, state: string, isSleepCommand: boolean }}
  */
 export function classifyIntent(transcript, context) {
-  const { state, speakerConfidence, alwaysOn } = context
+  const { state, speakerConfidence, alwaysOn, ptt } = context
   const text = transcript.toLowerCase().trim()
   // Strip accents so keyword matching works on "cómo", "qué", etc.
   const norm = text.normalize('NFD').replace(/\p{Diacritic}/gu, '')
   const words = text.split(/\s+/)
 
-  // Gate: speaker confidence too low = not the owner
-  if (speakerConfidence < SPEAKER_MIN_CONFIDENCE) {
+  // Gate: speaker confidence too low = not the owner. Push-to-talk turns skip
+  // it — holding the key is explicit intent from whoever controls the host.
+  if (!ptt && speakerConfidence < SPEAKER_MIN_CONFIDENCE) {
     return { shouldRespond: false, score: 0, state, reason: 'not_owner', isSleepCommand: false }
   }
 

@@ -342,6 +342,13 @@ async function toggleClapWake(payload: { enabled?: boolean } = {}): Promise<unkn
   return { clapWakeEnabled: next }
 }
 
+/** Push-to-talk pressed/released via the global Hyprland bind (backend /ptt). */
+async function pttSet(payload: { active?: boolean } = {}): Promise<unknown> {
+  const active = Boolean(payload.active)
+  useJarvisStore.getState().setPttActive(active)
+  return { active }
+}
+
 /** Enter PIP (mini window) mode. */
 async function bootPip(): Promise<unknown> {
   useBootStore.getState().enterPip()
@@ -396,6 +403,7 @@ const PRIMITIVES: Record<string, Primitive> = {
   sleep_system: sleepSystem,
   toggle_voice: toggleVoice,
   toggle_clap_wake: toggleClapWake,
+  ptt_set:     pttSet,
   boot_pip:    bootPip,
   boot_awake:  bootAwake,
   gesture_set: gestureSet,
