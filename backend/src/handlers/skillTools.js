@@ -12,6 +12,9 @@ import { json, readBody } from '../lib/http.js'
 import { requestClient as skillBusRequest, hasClient as skillBusHasClient } from '../lib/skillBus.js'
 import { addReminder, listReminders } from '../lib/reminders.js'
 import { notifyJarvis, saveToCloud, listCloudFiles } from '../lib/cloudStorage.js'
+import { runCommand, gitCheckpoint, gitRollback, scheduleRestart } from '../lib/selfCode.js'
+import { getSpeakerMode } from '../lib/speakerContext.js'
+import { requireCodeAuth } from '../lib/codeAuth.js'
 import {
   writeTask,
   writeNote,
@@ -351,13 +354,30 @@ export async function handlePickFile(req, res) {
 
 /* ----- MODEL 3D ----- */
 
+const VALID_3D_KINDS = ['parametric', 'polytope', 'implicit']
+
 export async function handleModel3dShow(req, res) {
   return withBody(req, (body) => {
+    if (Array.isArray(body?.specs)) {
+      const invalid = body.specs.find((s) => !VALID_3D_KINDS.includes(s?.kind))
+      if (invalid) return json(res, 400, { ok: false, error: 'invalid_kind', detail: 'each spec.kind must be parametric, polytope, or implicit' })
+      return bridgeToBus('model3d_show', body, res)
+    }
     const kind = body?.kind
-    if (!['parametric', 'polytope', 'implicit'].includes(kind)) {
+    if (!VALID_3D_KINDS.includes(kind)) {
       return json(res, 400, { ok: false, error: 'invalid_kind', detail: 'kind must be parametric, polytope, or implicit' })
     }
     return bridgeToBus('model3d_show', body, res)
+  }, res)
+}
+
+export async function handleModel3dAdd(req, res) {
+  return withBody(req, (body) => {
+    const kind = body?.kind
+    if (!VALID_3D_KINDS.includes(kind)) {
+      return json(res, 400, { ok: false, error: 'invalid_kind', detail: 'kind must be parametric, polytope, or implicit' })
+    }
+    return bridgeToBus('model3d_add', body, res)
   }, res)
 }
 
@@ -395,4 +415,64 @@ export async function handleCloudList(req, res) {
   } catch (e) {
     return json(res, 500, { ok: false, error: 'cloud_failed', detail: e.message })
   }
+}
+
+/* ----- SELF-CODE (autodesarrollo: ejecutar / versionar / reiniciar) ----- */
+
+// Self-coding runs arbitrary shell commands, so it is OWNER-only: the current
+// speaker mode must be OWNER (set per turn by the speaker gate in speech.js;
+// mobile QR sessions are treated as OWNER). Blocks a KNOWN/UNKNOWN voice from
+// triggering shell exec by talking Claude into calling these tools.
+function ownerOnly(res) {
+  if (getSpeakerMode() === 'OWNER') return false
+  json(res, 403, { ok: false, error: 'owner_only', spoken: 'Solo el señor puede ordenarme cambios en mi propio código.' })
+  return true
+}
+
+// Run an arbitrary shell command in the repo and return stdout/stderr/exitCode.
+// Lets Jarvis verify its own edits (npm test, node --check, build, git, ...).
+export async function handleRunCommand(req, res) {
+  if (ownerOnly(res)) return
+  if (await requireCodeAuth(res, 'Jarvis quiere ejecutar un comando en su propio código.')) return
+  return withBody(req, async (body) => {
+    const result = await runCommand({
+      command: body.command,
+      cwd: body.cwd || undefined,
+      timeoutMs: body.timeoutMs || undefined,
+    })
+    // Always 200: command failure is data the model must read, not an HTTP error.
+    return json(res, 200, result)
+  }, res)
+}
+
+// Commit current state as a restore point before self-editing.
+export async function handleCodeCheckpoint(req, res) {
+  if (ownerOnly(res)) return
+  if (await requireCodeAuth(res, 'Jarvis quiere crear un punto de control en su código.')) return
+  return withBody(req, async (body) => {
+    const result = await gitCheckpoint({ message: body.message || undefined })
+    return json(res, result.ok ? 200 : 500, result)
+  }, res)
+}
+
+// Hard-reset back to a checkpoint (default: last one this session).
+export async function handleCodeRollback(req, res) {
+  if (ownerOnly(res)) return
+  if (await requireCodeAuth(res, 'Jarvis quiere revertir su código a un punto de control.')) return
+  return withBody(req, async (body) => {
+    const result = await gitRollback({ sha: body.sha || undefined })
+    return json(res, result.ok ? 200 : 500, result)
+  }, res)
+}
+
+// Apply backend changes by restarting the backend (exit 99 -> systemd respawns).
+// Respond first, then exit, so the model gets confirmation.
+export async function handleRestartBackend(req, res) {
+  if (ownerOnly(res)) return
+  if (await requireCodeAuth(res, 'Jarvis quiere reiniciarse para aplicar cambios.')) return
+  return withBody(req, () => {
+    json(res, 200, { ok: true, spoken: 'Reiniciándome para aplicar los cambios, señor.', restarting: true })
+    scheduleRestart()
+    return undefined
+  }, res)
 }

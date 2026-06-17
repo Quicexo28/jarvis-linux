@@ -13,7 +13,7 @@ import { getAttentionState, markInteraction, forcePassive, setVoiceMuted, isVoic
 import { classifyIntent } from '../lib/intentClassifier.js'
 import { pickModel } from '../lib/modelRouter.js'
 import { addUserMessage, addAssistantMessage, getConversationContext } from '../lib/conversationMemory.js'
-import { sessionAskStream, warmSession, getCodeDir } from '../lib/claudeCli.js'
+import { sessionAskStream, sessionAskChat, warmSession, warmChatSession, getCodeDir } from '../lib/claudeCli.js'
 import { appendHistoryEntry, isConfigured as vaultConfigured } from '../lib/obsidian.js'
 import { handleSelfBuild } from './selfBuild.js'
 import { activateSkill } from '../lib/skillRegistry.js'
@@ -36,32 +36,70 @@ NAVEGACION (MUY IMPORTANTE): La interfaz de Jarvis tiene vistas navegables. Cuan
 
 CONFIRMACION: Confirma acciones brevemente ("Listo, señor", "Hecho", "Enseguida"). Si una accion falla, dilo con franqueza sin inventar. Si algo ya esta en el estado que el señor pide, díselo con tacto.
 
-ESTILO VOZ: Una a tres oraciones. Sin emojis, markdown, rutas de archivo, ni URLs. Sin frases de relleno ("dame un segundo", "dejame ver", "buena pregunta", "claro que si"). Ve directo al contenido. NUNCA menciones "tool", "MCP", "API", "handler" — habla siempre en lenguaje natural.
+ESTILO VOZ: Una o dos oraciones. Sin emojis, markdown, rutas de archivo, ni URLs. Sin frases de relleno ("dame un segundo", "dejame ver", "buena pregunta", "claro que si", "por supuesto", "entendido", "perfecto"). Ve directo al contenido. NUNCA menciones "tool", "MCP", "API", "handler" — habla siempre en lenguaje natural.
 
-NUMEROS: Notacion natural española. Decimales con "coma" ("uno coma cuatro"). Sin coma de miles. Nunca repitas la pregunta del señor.`
+NUMEROS: Notacion natural española. Decimales con "coma" ("uno coma cuatro"). Sin coma de miles. Nunca repitas la pregunta del señor.
+
+PROCESAMIENTO INTERNO (INVISIBLE): Para solicitudes complejas o multidimensionales, descompón y planea internamente antes de responder. NUNCA menciones este proceso al señor: cero "analizando tu solicitud", "voy a procesar", "déjame estructurar", "reformulando", ni ningún meta-comentario sobre tu razonamiento interno. El señor escucha únicamente la respuesta o acción — directa, sin preámbulos.`
 
 // Appended only when an Obsidian vault is configured. Gives the voice session
 // direct file access to the vault via the filesystem MCP server (read_text_file,
 // write_file, edit_file, list_directory, directory_tree, search_files, ...).
 const VAULT_PROMPT_SECTION = `
 
-BOVEDA OBSIDIAN: Tienes acceso DIRECTO a los archivos de la boveda personal del señor — sus notas, tareas, diarios y todo su conocimiento. Puedes leer, escribir, editar, mover y buscar archivos en ella con tus herramientas de archivos. Si no conoces la ruta de la boveda, llama list_allowed_directories una vez; luego explora con directory_tree o list_directory y lee con read_text_file. Para guardar o modificar usa write_file o edit_file. Cuando el señor pregunte por algo de sus notas o tareas, busca con search_files o lee los archivos pertinentes ANTES de responder — no inventes. Para crear notas usa formato Markdown. Nunca leas rutas ni nombres de archivo en voz alta; resume el contenido en lenguaje natural.`
+BOVEDA OBSIDIAN: Tienes acceso DIRECTO a los archivos de la boveda personal del señor. Puedes leer, escribir, editar, mover y buscar archivos con tus herramientas de archivos. Si no conoces la ruta, llama list_allowed_directories una vez; luego explora con directory_tree o list_directory.
+
+ESTRUCTURA DE LA BOVEDA (cuatro ramas):
+- Personal/ — vida personal, hábitos, metas. Personal/Diario/ para notas diarias (YYYY-MM-DD.md).
+- Academico/ — conocimiento y aprendizaje. Subcarpetas: Conceptos/, Cursos/, Libros/, Investigacion/.
+- Proyectos/ — un archivo .md por proyecto activo. Proyectos/Archivados/ para proyectos terminados.
+- _Sistema/ — infraestructura del vault. _Sistema/Contexto-Jarvis/ para tu contexto y perfil del señor. _Sistema/Conversaciones/ para historial. _Sistema/Tareas/ para tareas. _Sistema/Templates/ para plantillas.
+
+AUTO-CRECIMIENTO DE PROYECTOS: Si el señor menciona un proyecto nuevo que no tiene nota en Proyectos/, CRÉALA de inmediato con write_file. Nombre del archivo: Proyectos/<NombreProyecto>.md. Plantilla:
+---
+type: proyecto
+status: activo
+created: <fecha ISO>
+---
+
+# <Nombre>
+
+## Stack
+— (por definir)
+
+## Estado actual
+
+
+## Próximos pasos
+- [ ]
+
+## Notas
+
+Cuando el señor pregunte por sus notas o tareas, busca con search_files o lee los archivos pertinentes ANTES de responder — no inventes. Para guardar usa write_file o edit_file. Nunca leas rutas ni nombres de archivo en voz alta; resume en lenguaje natural.`
 
 // Appended only when JARVIS_CODE_DIR is configured. Gives the voice session
 // direct access to Jarvis's own source code via the same filesystem MCP server,
 // for self-development (read/understand/edit its own code).
 const CODE_PROMPT_SECTION = `
 
-CODIGO PROPIO (AUTODESARROLLO): Tienes acceso DIRECTO a tu propio codigo fuente — el de Jarvis Desktop. Puedes leerlo, explorarlo y editarlo con tus herramientas de archivos, igual que la boveda. Llama list_allowed_directories para ver las rutas permitidas; el directorio del codigo es el que NO es la boveda. Usa directory_tree y search_files para ubicarte, read_text_file para leer, y edit_file o write_file para modificar. Backend en backend/src (Node ESM), frontend en frontend/src (React+TS), servidor MCP de herramientas en backend/mcp-server/jarvis-mcp.js. Al editar tu codigo: cambios precisos, no rompas sintaxis, y avisa al señor que los cambios requieren reconstruir y reinstalar la app para surtir efecto. Si no estas seguro de algo, lee el archivo antes de editar. Nunca leas rutas ni codigo en voz alta; resume en lenguaje natural.`
+CODIGO PROPIO (AUTODESARROLLO): Tienes acceso DIRECTO a tu propio codigo fuente — el de Jarvis Desktop. Puedes leerlo, explorarlo y editarlo con tus herramientas de archivos, igual que la boveda. Llama list_allowed_directories para ver las rutas permitidas; el directorio del codigo es el que NO es la boveda. Usa directory_tree y search_files para ubicarte, read_text_file para leer, y edit_file o write_file para modificar. Backend en backend/src (Node ESM), frontend en frontend/src (React+TS), servidor MCP de herramientas en backend/mcp-server/jarvis-mcp.js. Si no estas seguro de algo, lee el archivo antes de editar. Nunca leas rutas ni codigo en voz alta; resume en lenguaje natural.
+
+ERES UN AGENTE PROGRAMADOR sobre tu propio codigo. Ademas de editar archivos tienes herramientas de ejecucion. FLUJO OBLIGATORIO cuando modifiques tu codigo:
+1. ANTES de editar, llama code_checkpoint (crea un punto de restauracion git). Hazlo siempre.
+2. Edita con edit_file/write_file. Cambios precisos, no rompas la sintaxis.
+3. VERIFICA con run_command: chequea sintaxis (node --check <archivo> para backend) y, si aplica, corre las pruebas (cd backend && npm test, o en frontend npx vitest run <archivo>). Lee el exitCode y stderr.
+4. Si la verificacion FALLA y no puedes arreglarlo en uno o dos intentos, llama code_rollback para revertir y dile al señor con franqueza que no pudo aplicarse.
+5. Si TODO pasa: los cambios de backend (backend/src, backend/mcp-server) se aplican reiniciando — pero NO reinicies por tu cuenta. Dile al señor que esta listo y que lo aplicas cuando quiera; solo llama restart_backend cuando el te lo pida explicitamente. Los cambios de frontend/Electron requieren reconstruir la app (npm run build:app) — avisale, no basta reiniciar.
+run_command ejecuta cualquier comando de shell en el repo: usalo tambien para git, instalar dependencias, o construir. Nunca recites comandos ni codigo en voz alta; resume que hiciste.`
 
 // Appended when broad storage access is on (JARVIS_ALL_DRIVES=1 or
 // JARVIS_EXTRA_DIRS set). Grants whole-disk file access — with explicit safety
 // + performance rules since the voice model can now move/overwrite any file.
 const STORAGE_PROMPT_SECTION = `
 
-ALMACENAMIENTO COMPLETO: Tienes acceso a TODO el almacenamiento del señor (sus discos y carpetas). Puedes buscar, leer, mover, renombrar y organizar archivos. Llama list_allowed_directories para ver los discos disponibles.
-REGLAS DE BUSQUEDA (rendimiento): NUNCA hagas directory_tree sobre la raiz de un disco (C:\\) — es enorme y lento. Para encontrar algo usa search_files con un patron (ej "**/*.pdf") acotado a la carpeta mas probable (Descargas, Documentos, Escritorio), o list_directory carpeta por carpeta. Acota siempre lo mas que puedas.
-REGLAS DE SEGURIDAD (CRITICO): Antes de CUALQUIER accion destructiva — mover (move_file), sobrescribir (write_file sobre archivo existente) o reemplazar contenido — CONFIRMA con el señor en voz qué archivo y a dónde, y espera su sí. Leer, listar y buscar no necesitan confirmación. Si el destino de un move ya existe, no fuerces: avisa. Ante la duda, pregunta antes de tocar. Nunca borres ni muevas archivos de sistema (Windows, Program Files). Nunca leas rutas largas en voz alta; resume.`
+ALMACENAMIENTO COMPLETO: Tienes acceso a TODO el almacenamiento del señor (sus carpetas y unidades). Puedes buscar, leer, mover, renombrar y organizar archivos. Llama list_allowed_directories para ver las carpetas disponibles.
+REGLAS DE BUSQUEDA (rendimiento): NUNCA hagas directory_tree sobre la raiz del sistema (/) ni sobre la carpeta personal completa — es enorme y lento. Para encontrar algo usa search_files con un patron (ej "**/*.pdf") acotado a la carpeta mas probable (Descargas, Documentos, Escritorio), o list_directory carpeta por carpeta. Acota siempre lo mas que puedas.
+REGLAS DE SEGURIDAD (CRITICO): Antes de CUALQUIER accion destructiva — mover (move_file), sobrescribir (write_file sobre archivo existente) o reemplazar contenido — CONFIRMA con el señor en voz qué archivo y a dónde, y espera su sí. Leer, listar y buscar no necesitan confirmación. Si el destino de un move ya existe, no fuerces: avisa. Ante la duda, pregunta antes de tocar. Nunca borres ni muevas archivos de sistema (/etc, /usr, /boot, /bin). Nunca leas rutas largas en voz alta; resume.`
 
 const broadStorageEnabled =
   process['env']['JARVIS_ALL_DRIVES'] === '1' || !!process['env']['JARVIS_EXTRA_DIRS']
@@ -70,7 +108,7 @@ const broadStorageEnabled =
 // (no spelling out paths/URLs/formulas) and lets the owner point at files.
 const DISPLAY_PROMPT_SECTION = `
 
-PANTALLA Y SELECTOR: Para contenido incómodo de decir en voz — rutas de archivo, URLs, direcciones, fórmulas matemáticas, tablas o listas largas — usa la herramienta de mostrar en pantalla (show_display) y en la VOZ da solo un resumen natural ("te muestro la ruta en pantalla", "ahí tienes la fórmula", "te dejo el enlace"). NUNCA deletrees ni leas en voz alta una ruta completa, una URL o una fórmula. Para fórmulas el contenido va en LaTeX (kind=formula). Cuando el señor deba ELEGIR un archivo o carpeta y no esté claro cuál, abre el selector nativo (pick_file) para que lo señale, o muéstrale opciones numeradas (show_display kind=candidates) y deja que elija por voz ("el segundo"). Oculta el cartel (hide_display) cuando ya no aplique.`
+PANTALLA Y SELECTOR: Para contenido incómodo de decir en voz — rutas de archivo, URLs, direcciones, fórmulas matemáticas, tablas, listas largas o soluciones matemáticas paso a paso — usa la herramienta de mostrar en pantalla (show_display) y en la VOZ da solo un resumen natural ("te muestro la ruta en pantalla", "ahí tienes la fórmula", "te muestro el paso a paso"). NUNCA deletrees ni leas en voz alta una ruta completa, una URL o una fórmula. Para fórmulas el contenido va en LaTeX (kind=formula). Para explicar una solución matemática con pasos, usa kind=steps con steps=[{label,latex,explanation}] — cada paso tiene su expresión LaTeX y una nota opcional. Cuando el señor deba ELEGIR un archivo o carpeta y no esté claro cuál, abre el selector nativo (pick_file) para que lo señale, o muéstrale opciones numeradas (show_display kind=candidates) y deja que elija por voz ("el segundo"). Oculta el cartel (hide_display) cuando ya no aplique.`
 
 // Always available: 3D model viewer for geometric figures and N-D polytopes.
 const MODEL3D_PROMPT_SECTION = `
@@ -84,6 +122,19 @@ const SPEECH_SYSTEM_PROMPT =
   (vaultConfigured() ? VAULT_PROMPT_SECTION : '') +
   (getCodeDir() ? CODE_PROMPT_SECTION : '') +
   (broadStorageEnabled ? STORAGE_PROMPT_SECTION : '')
+
+// System prompt for the chat agent (no MCP tools). Its only job: one natural
+// spoken acknowledgement while the executor works in parallel. Never mentions
+// internal processes, agents, or background tasks.
+const CHAT_ACK_PROMPT = `Eres Jarvis, asistente de voz de Santiago. Tu única función: dar UNA frase de reconocimiento natural para la solicitud recibida.
+
+REGLAS:
+- Una sola oración. Máximo 8 palabras.
+- Español Colombia. Tratas al señor de "señor".
+- Sin relleno, sin tecnicismos, sin frases vacías.
+- NUNCA menciones "proceso", "agente", "segundo plano", "sistema", "analizando".
+- Solo el texto a decir. Nada más.
+- Ejemplos: "Buscando en tus notas, señor.", "En seguida, señor.", "Revisando el archivo.", "Calculando.", "Accediendo, señor.", "Buscando, señor."`
 
 // Last model used across turns. When the next turn routes to a different model,
 // the shared conversation window is bridged into that model's session so memory
@@ -104,6 +155,8 @@ export function warmupSpeechSession() {
     .split(',').map((m) => m.trim()).filter(Boolean)
   console.log(`[speech] warming Claude sessions at boot: ${models.join(', ')}`)
   for (const m of models) warmSession(SPEECH_SYSTEM_PROMPT, m)
+  // Pre-warm the chat agent (no-MCP haiku) used for instant ACKs on complex turns.
+  warmChatSession(CHAT_ACK_PROMPT)
 }
 
 // Splits a stream of text deltas into complete sentences, invoking onSentence
@@ -127,6 +180,19 @@ function makeSentencer(onSentence) {
   }
 }
 
+// Owner identity is decided by the BAKED voiceprint in the Python speaker-ID
+// service (backend/voice/python/owner_voiceprint.enc), which returns this
+// sentinel name when the live voice matches the owner's embeddings above its
+// own threshold. This is the PRIMARY owner signal — a cryptographic-grade voice
+// match grants OWNER regardless of any name.
+const OWNER_SENTINEL = '__owner__'
+// Friendly display name for the owner (used for history/personalization keys);
+// has no bearing on the voiceprint gating above.
+const OWNER_DISPLAY_NAME = 'Santiago'
+// Name-based owner FALLBACK (Linux): before the owner voiceprint is baked
+// (make_owner_voiceprint.py), a confident match against the enrolled profile
+// named JARVIS_OWNER_SPEAKER also grants OWNER. Once the voiceprint exists the
+// sentinel above takes over and this fallback is effectively unused.
 const OWNER_SPEAKER = process.env.JARVIS_OWNER_SPEAKER ?? null
 const OWNER_CONFIDENCE_THRESHOLD = 0.85
 const KNOWN_CONFIDENCE_THRESHOLD = 0.65
@@ -157,13 +223,21 @@ function _resolveSpeakerMode(speakerName, speakerConfidence) {
     setSpeakerMode('OWNER', null)
     return 'OWNER'
   }
-  if (!speakerName || speakerConfidence < KNOWN_CONFIDENCE_THRESHOLD) {
-    setSpeakerMode('LOW_CONF', null)
-    return 'LOW_CONF'
+  // Owner: the baked voiceprint matched (Python already enforced its accept
+  // threshold before emitting the sentinel). Identity is the voice, not a name.
+  if (speakerName === OWNER_SENTINEL) {
+    setSpeakerMode('OWNER', OWNER_DISPLAY_NAME)
+    return 'OWNER'
   }
+  // Fallback before the voiceprint is baked: confident match against the
+  // enrolled owner profile name (JARVIS_OWNER_SPEAKER).
   if (OWNER_SPEAKER && speakerName === OWNER_SPEAKER && speakerConfidence >= OWNER_CONFIDENCE_THRESHOLD) {
     setSpeakerMode('OWNER', speakerName)
     return 'OWNER'
+  }
+  if (!speakerName || speakerConfidence < KNOWN_CONFIDENCE_THRESHOLD) {
+    setSpeakerMode('LOW_CONF', null)
+    return 'LOW_CONF'
   }
   setSpeakerMode('KNOWN', speakerName)
   return 'KNOWN'
@@ -175,7 +249,7 @@ function _resolveSpeakerMode(speakerName, speakerConfidence) {
  * sentence on the streamed chat path, once total on single-reply branches.
  * Returns the structured turn result.
  */
-async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
+export async function runSpeechTurn(body, { onSentence = () => {}, mobile = false } = {}) {
   const text = String(body.text ?? '').trim()
   const speakerConfidence = Number(body.speakerConfidence ?? 0)
   const alwaysOn = Boolean(body.alwaysOn)
@@ -184,7 +258,8 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
 
   // VOICE_MUTED gate — block all speech while muted.
   // Cleared only by wake word (wakeWord.js) or double clap (DormantLayer).
-  if (isVoiceMuted()) {
+  // Mobile text chat bypasses this gate so typing always works even when voice is muted.
+  if (isVoiceMuted() && !mobile) {
     return { action: 'voice_muted_block', state: getAttentionState() }
   }
 
@@ -206,10 +281,19 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
   addUserMessage(text)
   markInteraction()
 
-  const speakerName = body.speakerName ?? null
-
   // ── Speaker mode gate ────────────────────────────────────────────────────
-  const currentMode = _resolveSpeakerMode(speakerName, speakerConfidence)
+  // Mobile is QR-authenticated — bypass speaker ID and always treat as owner.
+  let speakerName, currentMode
+  if (mobile) {
+    speakerName = OWNER_DISPLAY_NAME
+    setSpeakerMode('OWNER', speakerName)
+    currentMode = 'OWNER'
+  } else {
+    speakerName = body.speakerName ?? null
+    currentMode = _resolveSpeakerMode(speakerName, speakerConfidence)
+    // Replace the gating sentinel with a friendly name for downstream use.
+    if (currentMode === 'OWNER') speakerName = OWNER_DISPLAY_NAME
+  }
 
   if (currentMode === 'LOW_CONF') {
     const reply = 'No pude identificar quién habla. ¿Puede repetir, por favor?'
@@ -336,9 +420,21 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
     ? `\n\nContexto de la conversacion reciente (de otros turnos, para continuidad):\n${priorContext}`
     : ''
 
+  // Dual-agent: complex turns (sonnet/opus) without an existing ACK_MAP entry
+  // get a fast chat-agent acknowledgement while the executor works in parallel.
+  // The chat agent (haiku, no MCP) replies in ~0.5 s; executor sentences are
+  // buffered until then so TTS order is always: ACK → executor result.
+  const isDualAgent = model !== 'haiku' && !ACK_MAP[intentTag]
+  let chatDone = !isDualAgent
+  const executorBuffer = []
+
   let streamedAnything = false
-  const sentencer = makeSentencer((s) => { streamedAnything = true; onSentence(s) })
-  const reply = await sessionAskStream(text, {
+  const sentencer = makeSentencer((s) => {
+    streamedAnything = true
+    if (chatDone) { onSentence(s) } else { executorBuffer.push(s) }
+  })
+
+  const executorPromise = sessionAskStream(text, {
     systemPromptText: SPEECH_SYSTEM_PROMPT,
     // Opus/sonnet reason longer than haiku; give the heavier models more headroom.
     timeoutMs: model === 'haiku' ? 45000 : 90000,
@@ -346,7 +442,26 @@ async function runSpeechTurn(body, { onSentence = () => {} } = {}) {
     model,
     fallbackReply: 'No tengo respuesta en este momento.',
   }, (delta) => sentencer.push(delta))
+
+  if (isDualAgent) {
+    const ack = await sessionAskChat(text, {
+      systemPromptText: CHAT_ACK_PROMPT,
+      timeoutMs: 8000,
+      fallbackReply: 'Procesando, señor.',
+    })
+    if (ack) onSentence(ack)
+    chatDone = true
+    for (const s of executorBuffer) onSentence(s)
+    executorBuffer.length = 0
+  }
+
+  const reply = await executorPromise
   sentencer.end()
+  // Flush any remaining buffered sentences (edge case: chat resolved after executor).
+  if (!chatDone) {
+    chatDone = true
+    for (const s of executorBuffer) onSentence(s)
+  }
   // Safety net: if Claude returned a reply but no text deltas were streamed
   // (can happen when the response arrives via the result event without prior
   // text_delta events — e.g. short pure-text turns without MCP tool calls),

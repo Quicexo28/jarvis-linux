@@ -3,6 +3,7 @@ import { useBootStore } from './state/bootStore'
 import { DormantLayer } from './components/DormantLayer'
 import { RadialTransition } from './components/RadialTransition'
 import { AwakeApp } from './AwakeApp'
+import { PipLayer } from './components/PipLayer'
 import { MobileClient } from './modes/MobileClient'
 import {
   getApiBase,
@@ -107,6 +108,7 @@ export default function App() {
           <AwakeApp />
         </div>
       )}
+      {bootState === 'PIP' && <PipLayer />}
     </>
   )
 }

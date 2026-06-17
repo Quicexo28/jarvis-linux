@@ -1,110 +1,78 @@
 # CLAUDE.md
 
-Parent workspace `C:\proyecto\CLAUDE.md`: cross-project context + high-level summary. This file: architecture + gotchas for **inside** `jarvis-desktop/`.
+Guidance for Claude Code working **inside `jarvis-linux/`** — architecture + gotchas. This is the Linux port of `jarvis-desktop` (Windows). It runs as a **LAN server** on Arch Linux: systemd supervises the backend + Python sidecars, and the UI is **Chromium in kiosk mode** (there is **no Electron** here). When porting changes from `jarvis-desktop`, adapt: Windows DPAPI → `platformCrypto`/`dpapi_util` (machine-key AES-GCM), `C:\` paths → Linux paths, Electron supervision → systemd, PowerShell/pywin32 → Linux tools.
 
 ## Run commands
 
-Independent services — separate terminals.
+Independent services — separate terminals (or the systemd units in `scripts/linux/`).
 
-- **Backend** (Node ESM): `cd backend && npm run dev` — boots on `http://0.0.0.0:8788`. Tests: `npm test`.
-- **Frontend**: `cd frontend && npm run dev` (Vite, port 5173) / `npm run build` (`tsc && vite build`) / `npm run test`.
-- **Electron** (wraps both): `npm run electron` from repo root — starts Electron, in-process imports Node backend, auto-launches Python services.
-- **STT service** (Python, CPU): `cd backend/voice/python && .venv/Scripts/python.exe stt_service.py` — faster-whisper + Silero VAD on port `8790`. Set `STT_URL` env var to override.
-- **XTTS service** (Python, GPU): `cd backend/voice/python && .venv/Scripts/python.exe xtts_service.py` — voice cloning TTS. Electron starts both if `.venv` exists.
-- **Python deps**: `cd backend/voice/python && pip install -r requirements.txt` (in a venv).
+- **Backend** (Node ESM): `cd backend && npm run dev` — boots on `http://0.0.0.0:8788`. Tests: `npm test` (set `JARVIS_FAKE_CLAUDE=1` so tests never spawn the real Claude CLI).
+- **Frontend**: `cd frontend && npm run dev` (Vite :5173) / `npm run build` (`tsc && vite build` → `frontend/dist/`, served by the backend) / `npm test`.
+- **STT** (Python): `cd backend/voice/python && .venv/bin/python stt_service.py` — faster-whisper + Silero VAD on :8790. `STT_URL` overrides the backend→Python URL. `STT_HOTWORDS` biases the beam toward domain vocab.
+- **TTS** (Python): `.venv/bin/python edge_tts_service.py` — Edge TTS (Microsoft neural voices, cloud, no GPU) is the default engine. XTTS (`xtts_service.py`) is optional GPU voice cloning.
+- **Wake word** (Python, optional): `.venv/bin/python wake_service.py` (:8791).
+- **PC control** (Python): `.venv/bin/python pc_control_service.py` (:8792).
+- **Python deps**: `pip install -r backend/voice/python/requirements.txt` in a venv (install torch/torchaudio from the **cu118** index first — RTX 3050/Ampere). See README.
+- **Helper scripts**: `cd backend && npm run set-code-password | make-portable | unlock`.
+
+## Deploy / autostart (systemd, not Electron)
+
+`scripts/linux/install.sh` installs system packages, Node + Python deps, builds the frontend, and installs/enables **systemd user services** in `scripts/linux/`:
+
+- `jarvis-backend` (Node, `:8788`, `HOST=0.0.0.0` for LAN), `jarvis-stt`, `jarvis-tts`, `jarvis-wake`, `jarvis-ui` (Chromium kiosk).
+- `jarvis-jarvisbot` / `jarvis-cloudbot` — Telegram bots; **exit 0 cleanly** when their token env var is unset (so `Restart=on-failure` won't loop).
+- `jarvis-pccontrol` — Linux PC-control sidecar.
+
+`Restart=on-failure` means **exit code 99 → systemd restarts the backend** (this is how `selfCode.scheduleRestart` applies self-edits — same contract Electron provided on desktop). UI window rules for Hyprland: `scripts/linux/hyprland-jarvis.conf`.
 
 ## Architecture
 
-### Boot state machine (Electron ↔ frontend)
+### Boot state machine (frontend, no Electron)
 
-`electron/main.js` owns a two-state machine: `DORMANT` (window hidden) → `AWAKE` (full-screen via `setSimpleFullScreen`). Double clap (or hotkey/tray) goes straight DORMANT → AWAKE; there is no intermediate listening state. IPC transitions:
-
-- Main → renderer: `mainWindow.webContents.send('boot:state', state)`
-- Renderer → main: `ipcMain.handle('boot:setState', ...)` → `applyBootState()`
-
-`pushBootState()` signals renderer only; `forceBootState()` also calls `applyBootState()` directly (needed when renderer is non-DORMANT and `DormantLayer` hasn't mounted). Global hotkey `Ctrl+Alt+J` (override via `JARVIS_WAKE_HOTKEY`) calls `forceBootState('AWAKE')`.
-
-`DormantLayer` (always mounted) runs `useClapDetection` while `DORMANT`; a double clap fires `setBootState('AWAKE')`. Detector is **pure DSP** (`hooks/useClapDetection.ts`) — no ML, no training. Each frame an onset must pass four gates (loud vs adaptive noise floor, sharp attack, high crest factor, high spectral flatness); two onsets 220–900 ms apart = double clap. Mic opens with `noiseSuppression:false` + `autoGainControl:false` (both would kill clap transients) and `analyser.smoothingTimeConstant = 0`. Pass `debug: true` to log per-frame metrics for threshold calibration.
-
-Electron auto-starts `xttsProc` + `sttProc` looking for `.venv/Scripts/python.exe` in `backend/voice/python/`. Not found → renderer falls back to `speechSynthesis`.
+`bootStore` holds `DORMANT | AWAKE | PIP`. `DormantLayer` (always mounted) runs `useClapDetection` while `DORMANT`; a double clap → `AWAKE`. The detector is **pure DSP** (`hooks/useClapDetection.ts`) — four per-frame gates (loud vs adaptive noise floor, sharp attack, high crest factor, high spectral flatness); two onsets 220–900 ms apart = double clap. Mic opens with `noiseSuppression:false` + `autoGainControl:false` and `analyser.smoothingTimeConstant = 0`. There is no intermediate listening state.
 
 ### Backend (`backend/src/`)
 
-Handler + lib pattern:
+Handler + lib pattern. `server.js` (HTTP + a single shared WS `upgrade` dispatcher → STT / TTS / skill-bus / mobile-gesture / agent-bridge) → `routes.js` (flat `{method,path}` table) → `handlers/`. `loadLocalSecrets()` runs first. At boot it also warms the Claude session, starts the in-process reminder scheduler (`startScheduler()`), and starts the Cloudflare tunnel (no-op if `cloudflared` absent).
 
-- **`server.js`** — thin `http.createServer` + WebSocket upgrade dispatcher. Routes to `dispatch()` in `routes.js`.
-- **`routes.js`** — flat route table `{ method, path }` → handler. CORS permissive (`*`).
-- **`handlers/`** — one file per domain: `health`, `modules`, `telemetry`, `jarvis` (turn/wake/tts/device-action), `stt` (HTTP upload + WS upgrade proxy to Python), `speech` (process-speech pipeline), `speakerId` (CRUD voice samples + STT proxy), `mobile` (QR token auth).
-- **`lib/`** — pure utilities: `http.js` (json/readBody), `attentionState.js`, `intentClassifier.js`, `conversationMemory.js`, `tailscale.js`.
+- **`handlers/`**: `health`, `modules`, `telemetry` (reads `/proc/net/dev`), `config`, `jarvis` (turn/wake/tts; mobile turn routes through `runSpeechTurn(..., {mobile:true})`), `stt`, `speech` (the voice brain), `speakerId`, `mobile` (QR + `qr-notify` via Telegram), `mobileGesture` (WS `/api/mobile/gesture/ws` → skill bus), `wakeWord`, `uiState`, `obsidian`, `skillTools` (`/api/skills/*` bridge, incl. `model3d/add` + self-code), `pcControl` (proxy to `:8792`), `security` (portable-vault unlock), `static`.
+- **`lib/`**: `http`, `attentionState`, `intentClassifier`, `modelRouter`, `intentRouter`, `conversationMemory`, `claudeCli` (persistent Claude session + `sessionAskChat`/`warmChatSession` no-MCP chat pool), `skillBus`, `skillManifest`, `skillRegistry`, `nativePrimitives`, `obsidian`, `cloudStorage` (multi-user Telegram cloud), `reminders` (4-type schema, in-process scheduler, Bogotá tz), `telegramBot`, `cloudflareTunnel`, `speakerContext`, `secrets`, `platformCrypto`, `portableVault`, `codeAuth`, `selfCode`, `tailscale`, `timerParser`.
+- **`services/`**: `cloudBot.js`, `jarvisBot.js` — standalone bot processes (systemd units).
 
-### Speech pipeline (offline)
+### Voice pipeline (`handlers/speech.js` + `claudeCli.js`)
 
-1. **Capture** — `frontend/src/audio/localStt.ts` opens `getUserMedia` at 16kHz mono, captures PCM via `AudioWorklet`, streams binary frames over WebSocket to `ws://backend/api/jarvis/stt/stream`.
-2. **STT proxy** — `handlers/stt.js` WebSocket upgrade proxies frames to Python `stt_service.py` at `STT_URL` (default `http://localhost:8790`). Transcripts (`{ text, isFinal, speakerConfidence }`) flow back.
-3. **Intent gate** — `POST /api/jarvis/process-speech` in `handlers/speech.js` runs transcript through `attentionState` + `intentClassifier`. States: `ENGAGED` (0–15 s), `ATTENTIVE` (15–60 s), `PASSIVE` (>60 s). Speaker confidence ≥ 0.65 required or turn ignored.
-4. **Claude CLI** — if `classifyIntent` returns `shouldRespond`, spawns `claude --print --model haiku` with context from `conversationMemory.js` (sliding 8-turn window).
-5. **TTS** — `POST /api/jarvis/tts` in `handlers/jarvis.js` proxies to XTTS Python service.
+STT transcript → voice-mute gate → `attentionState` + `intentClassifier` → speaker-mode gate → intent dispatch → persistent Claude CLI session driving MCP tools → streamed TTS. A dual-agent **chat ACK** (`sessionAskChat`, no MCP) speaks an instant acknowledgement while the MCP executor session works. `runSpeechTurn(body, {onSentence, mobile})` is shared by buffered + streaming endpoints; `mobile:true` bypasses the voice-mute gate and treats the turn as OWNER.
 
-`useLocalStt` wraps `startLocalStt()`, auto-starts/stops when `enabled` changes.
+### Owner identity (speaker gate)
 
-### Python STT service (`backend/voice/python/stt_service.py`)
+OWNER is granted **primarily by the baked voiceprint**: the Python speaker-ID service returns the sentinel name `__owner__` when the live voice matches `owner_voiceprint.enc` above its baked threshold; `_resolveSpeakerMode` grants OWNER for `__owner__`. **Fallback** (Linux, before the voiceprint is baked): a confident match (≥0.85) against the profile named `JARVIS_OWNER_SPEAKER` also grants OWNER. Re-bake with `make_owner_voiceprint.py`. KNOWN = conf ≥ 0.65; below that = LOW_CONF (asks to repeat).
 
-FastAPI on port 8790. Loads faster-whisper (`medium`, CPU, int8) + Silero VAD at startup.
+### Security / secrets at rest (`platformCrypto`, not DPAPI)
 
-- `GET /health`
-- `POST /transcribe` — multipart WAV upload, returns `{ text, language, segments[], speaker_confidence }`.
-- `WS /stream` — real-time Float32 PCM. Silero VAD detects speech boundaries (~960 ms silence to finalize). Transcription in `asyncio.to_thread`.
-- Speaker ID: `GET/POST/PUT /speaker-id/*` — proxied through Node backend. Samples at `backend/voice/samples/speaker/`. Uses `resemblyzer` (`speaker_id.py`).
+There is no Windows DPAPI on Linux. `lib/platformCrypto.js` provides the same API (`dpapiEncrypt/Decrypt/EncryptRaw/DecryptRaw`) backed by **AES-256-GCM** with a per-machine key at `~/.config/jarvis/machine.key` (0600, auto-generated). Python `voice/python/dpapi_util.py` uses the **same key file and byte-identical container format** (`0x01 || iv(12) || ct || tag(16)`) so the owner voiceprint `.enc` round-trips between Node (writes on unlock) and Python (reads in STT). `secrets.js` encrypts `secrets.local.json` → `secrets.local.enc` on first boot (env wins over file). `portableVault.js` is the cross-machine password-derived vault (pure Node crypto); `handlers/security.js` unlocks it (`/api/security/unlock`) and writes the per-machine caches. `codeAuth.js` gates self-coding behind the `JARVIS_CODE_PASSWORD_HASH` (scrypt) via a skill-bus `request_passphrase` modal; `selfCode.js` runs the executor (run_command/checkpoint/rollback/restart) — OWNER-only.
 
-### Mobile QR pairing (`handlers/mobile.js`)
+### PC control on Linux (`pc_control_service.py`, :8792)
 
-`GET /api/mobile/token` generates short-lived token, returns LAN URL + Tailscale URL. Frontend renders QR encoding `http://<ip>:8788?token=<token>`. Mobile hits `POST /api/mobile/auth` to activate. State in `backend/src/state/mobileSession.js`.
+Rewritten for Linux (the Windows version used pywinauto/pyautogui/winreg). Same 11 endpoints; every handler is try/except-wrapped (never crashes). Detects session/compositor at call time: **input** via `ydotool` (Wayland, needs `ydotoold` + `/dev/uinput`) → `xdotool` (X11) fallback; **windows/active/focus** via `hyprctl` (Hyprland) / `swaymsg` (Sway) / `wmctrl`+`xdotool` (X11); **launch** resolves alias → `which` → `gtk-launch` → `xdg-open`; **processes/kill** via `psutil`. `read_ui` has no universal Linux equivalent → returns the window list as graceful degradation. `handlers/pcControl.js` is a pure HTTP proxy (`PC_CONTROL_URL`).
+
+### Frontend (`frontend/src/`)
+
+React + Vite + React Three Fiber. `AwakeApp.tsx` renders when `AWAKE`; owns gesture/voice/clap/STT hooks. Overlays: `DisplayCard` (incl. math `steps` kind), `Model3DViewer` (multi-figure via `model3dStore.specs[]`), `PassphraseOverlay` (self-code password), `UnlockGate` (vault unlock). Mobile: `MobileClient` (nav grid + push-to-talk + quick actions) embeds `MobileGestureCamera` (MediaPipe → skill bus). **No electron bridge** — talk to the backend via HTTP + the skill-bus WS. Stores: `jarvisStore`, `gestureStore`, `bootStore`, `systemStore`, `networkStore`, `displayStore`, `model3dStore`, `passphraseStore`.
 
 ### Gesture pipeline (`frontend/src/gestures/`)
 
-MediaPipe hand landmarker → `GesturePipeline` (`pipeline.ts`):
-
-1. **Feature extraction** (`features.ts`) — finger curl values + tip distances from 21 landmarks.
-2. **State tracking** (`state.ts`) — per-hand `HandState` (extension states, contacts).
-3. **Recognition** — hybrid: `MLGestureRecognizer` (TF.js, IndexedDB-persisted) takes priority; `GestureRecognizer` (rule-based) fallback. Rule-based pinch always overlaid on right hand for zoom.
-4. **Modifier layer** (`modifiers.ts`) — pauses pinch zoom when hand pose ambiguous.
-5. **Output processor** (`output.ts`) — gesture + modifier → `GestureOutput` (`grab`, `point`, `pinch`, `click`, `back`).
-
-3-layer TF.js MLP (9 inputs → 32 → 32 → N classes). Training data in `localStorage`/IndexedDB. `GestureTrainer` handles data collection. ML opt-in: `pipeline.initML()` must succeed first. (Clap detection is **not** ML — see boot state machine above.)
-
-Gesture classes: `grab | pinch | point | peace_sep | peace_close | idle`.
-
-`useGesturePipeline` drives pipeline from `useHandSkeleton` (MediaPipe), writes to `gestureStore` (zustand). `AwakeApp.tsx` reads that store.
-
-### Frontend layout
-
-`AwakeApp.tsx` renders when boot state is `AWAKE`. Owns gesture, voice, clap, STT hooks.
-
-Stores in `frontend/src/state/`:
-- `jarvisStore` — mode, voice/clap flags, wake phrase, focused entity, ring nav, pinch zoom progress.
-- `gestureStore` — pipeline enabled flag + last `GestureOutput`.
-- `bootStore` — boot state (`DORMANT | AWAKE`), synced with Electron via IPC.
-- `systemStore` — telemetry. `networkStore` — discovered devices.
-
-Mode ring: `main` (`home | house | system | cloud`) + `sub` (`plan3d | space | plan2d`). `zoomedMode` = expanded canvas mode.
-
-### Persistence
-
-`localStorage` keys (bump `.vN` if schema changes — no migration):
-- `jarvis.plan2d.saved.v1` — `SavedPlan[]` by composite key `room::name`.
-- `jarvis.plan3d.entities.v1` — `Record<planKey, SceneEntity[]>`.
-- `jarvis.plan3d.viewpoint.v1` — `Record<planKey, Viewpoint>`.
-- `jarvis.gesture.dataset.v1` — gesture training samples.
-
-IndexedDB: `indexeddb://jarvis-gesture-model` — trained TF.js gesture classifier.
+MediaPipe hand landmarker → `GesturePipeline`: features → per-hand state → recognition (ML `MLGestureRecognizer` priority, rule-based fallback; rule-based pinch always overlaid right hand) → modifier layer → `GestureOutput` (`grab|point|pinch|click|back`). ML opt-in (`pipeline.initML()`). Clap detection is **not** ML.
 
 ## Conventions and gotchas
 
-- **Spanish UI copy.** All labels + toasts in Spanish — keep consistent.
-- **2D→3D bridge by composite key** (`room::name`), not id. Renaming plan in 2D orphans 3D entities.
-- **`SYSTEM_TELEMETRY_ENABLED = false`** in `AwakeApp.tsx` gates telemetry poll. Shell-outs (`nvidia-smi`, PowerShell) Windows-only.
-- **No DB in backend.** `attentionState` + `conversationMemory` are in-process globals — reset on restart. 8-turn window.
-- **STT needs Python service.** If `stt_service.py` not running, `useLocalStt` silently fails (WebSocket error). No auto-fallback to `webkitSpeechRecognition`.
-- **Speaker ID needs ≥1 sample.** `_init_speaker_id()` raises if `backend/voice/samples/speaker/` has no non-underscore files. Until enrolled, `speaker_confidence` = 0, all turns ignored.
-- **Electron media permissions** auto-granted in `main.js` for `media/audioCapture/videoCapture/microphone/camera`. OS still gates install-level prompt.
-- **ML gesture model per-browser-profile.** IndexedDB scoped to Electron session. Clearing `localStorage` from tray doesn't wipe IndexedDB.
+- **Spanish UI copy** (Colombia) — labels, toasts, and spoken replies. Keep consistent.
+- **No Electron.** UI is Chromium kiosk via `jarvis-ui.service`. Don't add `window.electron`/`electronBridge` calls in the frontend — they don't exist. Use HTTP/skill-bus or the PC-control API.
+- **Secrets are encrypted at rest.** Editing later: delete `backend/data/secrets.local.enc`, recreate `secrets.local.json`, restart (re-migrates). `backend/data/` is gitignored wholesale.
+- **Node↔Python crypto must stay byte-compatible** — `platformCrypto.js` and `dpapi_util.py` share `~/.config/jarvis/machine.key` and the same GCM container. Don't change one format without the other.
+- **Reminders fire in-process** via `startScheduler()` (not a separate notifier process). `attentionState` + `conversationMemory` are in-process globals (8-turn window) — reset on restart. No DB.
+- **STT/TTS need the Python venv.** If `stt_service.py` isn't running, `useLocalStt` silently fails (no `webkitSpeechRecognition` fallback). TTS unreachable → renderer shows an "error de conexión" banner (no browser-`speechSynthesis` fallback).
+- **Speaker ID needs ≥1 sample or the owner voiceprint** or every turn is ignored (confidence 0). First boot runs `WakeWordWizard` to enroll.
+- **GPU = cu118** (RTX 3050/Ampere), never cu128. STT uses ctranslate2's own CUDA; torch is for VAD + resemblyzer.
+- **2D→3D bridge by composite key** (`room::name`), not id. **`SYSTEM_TELEMETRY_ENABLED`** in `AwakeApp.tsx` gates the telemetry poll (telemetry reads `/proc/net/dev`).
+- **ML gesture model** lives in IndexedDB (per browser profile); clearing `localStorage` doesn't wipe it.
+- **Self-built skills** persist in `backend/src/handlers/dynamic/` and reload every boot — delete the file (and its `skillManifest` entry) to remove a bad one.

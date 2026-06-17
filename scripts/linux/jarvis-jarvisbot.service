@@ -1,0 +1,17 @@
+[Unit]
+Description=Jarvis Telegram Bot (interactive control: /qr, recordatorios, silenciar)
+After=jarvis-backend.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-linux/backend
+ExecStart=/usr/bin/node src/services/jarvisBot.js
+# Exits 0 cleanly when TELEGRAM_BOT_TOKEN_JARVIS isn't configured, so this
+# never loops. Set the token in backend/data/secrets.local.json to enable it.
+Restart=on-failure
+RestartSec=10
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

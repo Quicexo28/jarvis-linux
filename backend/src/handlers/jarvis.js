@@ -5,8 +5,8 @@ import { json, readBody } from '../lib/http.js'
 import { appendDeviceAction } from '../lib/obsidian.js'
 import { getAgentStatus } from '../agent/bridge.js'
 import { runClaude } from '../lib/claudeCli.js'
-import { addUserMessage, addAssistantMessage, getConversationContext } from '../lib/conversationMemory.js'
 import { markInteraction } from '../lib/attentionState.js'
+import { runSpeechTurn } from './speech.js'
 
 const FILLER_DIR = join(import.meta.dirname, '..', '..', 'voice', 'cache', 'fillers')
 const FILLER_NAME_RE = /^filler-[a-z0-9-]{1,32}$/
@@ -33,13 +33,6 @@ export async function handleFillerWav(req, res) {
 
 const WAKE_PROMPT = 'Eres Jarvis, asistente personal de Santiago, al estilo del Jarvis de Iron Man. Tratas al usuario de "señor". Responde SOLO con 2 a 5 palabras confirmando que estas atento ("A sus ordenes, señor", "Aqui estoy, señor"). Sin preguntas, sin saludos largos, sin emojis.'
 
-const TURN_PROMPT = `Eres Jarvis, asistente inteligente en espanol (Colombia).
-Responde de forma concisa y natural (1-3 oraciones max).
-Si hay un dispositivo en foco, confirma acciones sobre el.
-Si es una pregunta general, responde directamente.
-Nunca uses emojis. Nunca repitas la pregunta del usuario.
-Reglas de voz: sin markdown, sin rutas de archivos (di "la carpeta de configuracion"), sin URLs (di "el sitio oficial"), sin numeracion Primero/Segundo (usa "y ademas", "luego"), numeros en palabras cuando sea natural.
-Responde directo con la informacion o confirmacion. No uses frases de relleno ni anuncios ("dame un segundo", "dejame ver", "buena pregunta") — ve directo al contenido.`
 
 function runClaudeWake() {
   return runClaude('El usuario te llamo.', {
@@ -219,25 +212,23 @@ export async function handleJarvisTurn(req, res) {
     const focused = body?.context?.focusedEntity ?? null
     const inferredAction = focused?.skillAction ?? (message.toLowerCase().includes('apaga') ? 'off' : null)
 
-    // Build user prompt with device context if available
+    // Include device context in the prompt so Claude can act on it via MCP tools
     let userPrompt = message
     if (focused) {
       userPrompt += `\n[Dispositivo en foco: ${focused.label}${focused.skillName ? `, skill: ${focused.skillName}` : ''}${inferredAction ? `, accion sugerida: ${inferredAction}` : ''}]`
     }
 
-    addUserMessage(message)
-    const conversationContext = getConversationContext()
-
-    const reply = await runClaude(userPrompt, {
-      systemPromptText: TURN_PROMPT,
-      timeoutMs: 30000,
-      conversationContext,
-      model: 'haiku',
-      fallbackReply: 'No tengo respuesta en este momento.',
-      namespace: 'jarvis-turn',
-    })
-
-    addAssistantMessage(reply)
+    // Full speech pipeline: same Claude session as voice (MCP tools enabled, shared
+    // conversation memory). onSentence defaults to () => {} so TTS is suppressed.
+    // speakerConfidence: 1.0 → mobile is QR-authenticated, treat as owner so
+    //   classifyIntent doesn't block the turn (gate is 0.65 minimum).
+    // alwaysOn: true → respond regardless of attention state.
+    // mobile: true → bypass voice_muted gate so text chat always works.
+    const result = await runSpeechTurn(
+      { text: userPrompt, speakerConfidence: 1.0, speakerName: null, alwaysOn: true },
+      { mobile: true },
+    )
+    const reply = result.reply ?? 'No tengo respuesta en este momento.'
 
     const actions = focused && inferredAction
       ? [{ type: 'device_action', targetId: focused.id, skillName: focused.skillName ?? null, action: inferredAction, status: 'proposed' }]

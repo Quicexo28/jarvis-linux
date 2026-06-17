@@ -1,0 +1,19 @@
+[Unit]
+Description=Jarvis PC Control Service (Linux: ydotool/xdotool + window manager)
+After=jarvis-backend.service graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-linux/backend/voice/python
+ExecStart=%h/jarvis-linux/backend/voice/python/.venv/bin/python pc_control_service.py
+Restart=on-failure
+RestartSec=5
+Environment=PC_CONTROL_PORT=8792
+# Input injection needs a display session. On Wayland it uses ydotool (requires
+# the ydotoold daemon + uinput access); on X11 it uses xdotool/wmctrl.
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+
+[Install]
+WantedBy=default.target

@@ -339,8 +339,9 @@ function hashStr(s) {
 }
 
 class ClaudeSession {
-  constructor(systemPromptText, model) {
+  constructor(systemPromptText, model, { withMcp = true } = {}) {
     this.model = model
+    this.withMcp = withMcp
     this.queue = []
     this.current = null
     this.buf = ''
@@ -352,7 +353,7 @@ class ClaudeSession {
     // updateAllowedDirectoriesFromRoots). So the primary accessible dir must BE
     // the CWD; the rest are added as roots via --add-dir in _spawn. Without any
     // configured dir we keep the neutral temp dir.
-    this.cwd = getFilesystemRoots()[0] || join(tmpdir(), 'jarvis-session')
+    this.cwd = (withMcp ? getFilesystemRoots()[0] : null) || join(tmpdir(), 'jarvis-session')
     // Always keep the system-prompt scratch file in a temp dir so we never write
     // Jarvis internals into the user's vault. --system-prompt-file takes an
     // absolute path, so it's independent of CWD.
@@ -370,16 +371,16 @@ class ClaudeSession {
       '--dangerously-skip-permissions', '--model', this.model,
       '--system-prompt-file', this.promptPath,
     ]
-    // Extra filesystem roots beyond the CWD (e.g. Jarvis's own code dir when the
-    // vault is the CWD). The Claude CLI advertises CWD + every --add-dir as MCP
-    // roots, which the filesystem server uses as its allowed directories.
-    for (const dir of getFilesystemRoots().slice(1)) {
-      args.push('--add-dir', dir)
+    // Extra filesystem roots only for MCP-enabled sessions. The Claude CLI
+    // advertises CWD + every --add-dir as MCP roots used by the filesystem server.
+    if (this.withMcp) {
+      for (const dir of getFilesystemRoots().slice(1)) {
+        args.push('--add-dir', dir)
+      }
     }
-    // The persistent voice session uses the MCP-enabled lean dir so Claude can
-    // call tools (timer, chrono, reminders, ...) natively via the Jarvis MCP
-    // server. One-shot parsers below keep the plain lean dir for speed.
-    const mcpDir = ensureLeanConfigDirWithMcp()
+    // MCP-enabled sessions get the full lean+MCP config dir so Claude can call
+    // tools. Chat-only sessions (withMcp=false) use the plain lean dir for speed.
+    const mcpDir = this.withMcp ? ensureLeanConfigDirWithMcp() : null
     const leanDir = mcpDir || ensureLeanConfigDir()
     // Sync credentials on every spawn so a renewed OAuth token (common in
     // long-running EXE processes) is picked up without a full restart.
@@ -564,5 +565,44 @@ export function warmSession(systemPromptText, model = 'haiku') {
   sessions.set(key, sess)
   // Prime: fire one tiny turn so the cold-start completes now, not on turn 1.
   // Discarded; failures are non-fatal.
+  sess.ask('hola', 30000, '').catch(() => {})
+}
+
+// --- Chat-only sessions (no MCP tools) ----------------------------------------
+// Separate session pool for the dual-agent chat agent: haiku + no MCP so it can
+// give a fast spoken acknowledgement while the executor session works in parallel.
+// Keyed by system-prompt hash so a single warm process is reused across turns.
+const chatSessions = new Map()
+
+/**
+ * Ask Claude through a no-MCP haiku session (chat agent). Always uses haiku.
+ * Intended for single-sentence spoken acknowledgements while the executor works.
+ */
+export function sessionAskChat(userMessage, opts = {}, onText = null) {
+  const {
+    systemPromptText,
+    timeoutMs = 10000,
+    fallbackReply = 'Procesando, señor.',
+  } = opts
+  if (FAKE_CLAUDE()) {
+    if (onText) try { onText(FAKE_REPLY) } catch {}
+    return Promise.resolve(FAKE_REPLY)
+  }
+  const key = `chat::${hashStr(systemPromptText)}`
+  let sess = chatSessions.get(key)
+  if (!sess) {
+    sess = new ClaudeSession(systemPromptText, 'haiku', { withMcp: false })
+    chatSessions.set(key, sess)
+  }
+  return sess.ask(userMessage, timeoutMs, fallbackReply, onText)
+}
+
+/** Pre-warm the no-MCP chat session at boot (same pattern as warmSession). */
+export function warmChatSession(systemPromptText) {
+  if (FAKE_CLAUDE()) return
+  const key = `chat::${hashStr(systemPromptText)}`
+  if (chatSessions.has(key)) return
+  const sess = new ClaudeSession(systemPromptText, 'haiku', { withMcp: false })
+  chatSessions.set(key, sess)
   sess.ask('hola', 30000, '').catch(() => {})
 }

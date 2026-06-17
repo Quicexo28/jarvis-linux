@@ -8,7 +8,7 @@
 import { useEffect, useRef, type ReactNode, type CSSProperties } from 'react'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
-import { useDisplayStore, type DisplayCardData } from '../state/displayStore'
+import { useDisplayStore, type DisplayCardData, type MathStep } from '../state/displayStore'
 
 const PALETTE = {
   bg: 'rgba(8, 14, 20, 0.92)',
@@ -21,6 +21,48 @@ const PALETTE = {
 
 function copy(text: string) {
   navigator.clipboard?.writeText(text).catch(() => {})
+}
+
+function StepFormula({ latex }: { latex: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!ref.current) return
+    try {
+      katex.render(latex, ref.current, { throwOnError: false, displayMode: true })
+    } catch {
+      ref.current.textContent = latex
+    }
+  }, [latex])
+  return <div ref={ref} style={{ fontSize: 18, color: PALETTE.text, padding: '4px 0' }} />
+}
+
+function Steps({ steps }: { steps: MathStep[] }) {
+  return (
+    <div style={{ maxHeight: '70vh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+      {steps.map((step, i) => (
+        <div key={i}>
+          {i > 0 && <div style={{ height: 1, background: 'rgba(56,213,255,0.12)', margin: '4px 0' }} />}
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '6px 0' }}>
+            <span style={{
+              fontFamily: 'ui-monospace, "Cascadia Code", Consolas, monospace',
+              fontSize: 11, color: PALETTE.accent, letterSpacing: 0.5,
+              flexShrink: 0, paddingTop: 6, minWidth: 52,
+            }}>
+              {step.label}
+            </span>
+            <div style={{ flex: 1 }}>
+              <StepFormula latex={step.latex} />
+              {step.explanation && (
+                <div style={{ color: PALETTE.dim, fontSize: 11, marginTop: 2, lineHeight: 1.4 }}>
+                  {step.explanation}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function Formula({ latex }: { latex: string }) {
@@ -132,6 +174,9 @@ function Body({ card }: { card: DisplayCardData }) {
   }
 
   switch (card.kind) {
+    case 'steps':
+      return <Steps steps={card.steps ?? []} />
+
     case 'formula':
       return <Formula latex={card.body ?? ''} />
 

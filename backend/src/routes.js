@@ -24,6 +24,7 @@ import {
   handleMobileAuth,
   handleMobileStatus,
   handleMobileRefresh,
+  handleMobileSendQr,
 } from './handlers/mobile.js'
 import { handleObsidianStatus } from './handlers/obsidian.js'
 import { handleSystemConfig } from './handlers/config.js'
@@ -41,9 +42,16 @@ import {
   handleObsidianTaskCreate, handleObsidianNoteCreate, handleObsidianTaskList,
   handleObsidianNoteSearch, handleObsidianPersonalize,
   handleDisplayShow, handleDisplayHide, handlePickFile,
-  handleModel3dShow, handleModel3dHide,
+  handleModel3dShow, handleModel3dAdd, handleModel3dHide,
   handleCloudSave, handleCloudList,
+  handleRunCommand, handleCodeCheckpoint, handleCodeRollback, handleRestartBackend,
 } from './handlers/skillTools.js'
+import {
+  handlePcWindows, handlePcActiveWindow, handlePcReadUi, handlePcLaunch,
+  handlePcFocus, handlePcProcesses, handlePcKill, handlePcType,
+  handlePcKeys, handlePcClick, handlePcMouseMove,
+} from './handlers/pcControl.js'
+import { handleSecurityStatus, handleSecurityUnlock } from './handlers/security.js'
 
 export const routes = [
   { method: 'GET',  path: '/health',                   handler: handleHealth },
@@ -77,7 +85,12 @@ export const routes = [
   { method: 'POST', path: '/api/mobile/auth',          handler: handleMobileAuth },
   { method: 'GET',  path: '/api/mobile/status',        handler: handleMobileStatus },
   { method: 'POST', path: '/api/mobile/token/refresh', handler: handleMobileRefresh },
+  { method: 'POST', path: '/api/mobile/qr-notify',     handler: handleMobileSendQr },
   { method: 'GET',  path: '/api/obsidian/status',      handler: handleObsidianStatus },
+
+  // Security / portable-vault unlock (encrypted secrets + owner voiceprint).
+  { method: 'GET',  path: '/api/security/status',       handler: handleSecurityStatus },
+  { method: 'POST', path: '/api/security/unlock',       handler: handleSecurityUnlock },
 
   // Skill tools — HTTP bridge for the MCP server. Each route maps to a
   // skillBus verb (renderer state) or a backend service (reminders/notify).
@@ -125,11 +138,32 @@ export const routes = [
 
   // 3D model viewer skill tools
   { method: 'POST', path: '/api/skills/model3d/show',  handler: handleModel3dShow },
+  { method: 'POST', path: '/api/skills/model3d/add',   handler: handleModel3dAdd },
   { method: 'POST', path: '/api/skills/model3d/hide',  handler: handleModel3dHide },
 
   // Cloud skill tools
   { method: 'POST', path: '/api/skills/cloud/save',           handler: handleCloudSave },
   { method: 'GET',  path: '/api/skills/cloud/list',           handler: handleCloudList },
+
+  // Self-code skill tools (autodesarrollo: run/checkpoint/rollback/restart).
+  // OWNER-only + code-password gated inside the handlers.
+  { method: 'POST', path: '/api/skills/code/run',        handler: handleRunCommand },
+  { method: 'POST', path: '/api/skills/code/checkpoint', handler: handleCodeCheckpoint },
+  { method: 'POST', path: '/api/skills/code/rollback',   handler: handleCodeRollback },
+  { method: 'POST', path: '/api/skills/code/restart',    handler: handleRestartBackend },
+
+  // PC control proxy (Linux: ydotool/xdotool + window manager via port 8792).
+  { method: 'GET',  path: '/api/pc/windows',        handler: handlePcWindows },
+  { method: 'GET',  path: '/api/pc/active_window',  handler: handlePcActiveWindow },
+  { method: 'POST', path: '/api/pc/read_ui',        handler: handlePcReadUi },
+  { method: 'POST', path: '/api/pc/launch',         handler: handlePcLaunch },
+  { method: 'POST', path: '/api/pc/focus',          handler: handlePcFocus },
+  { method: 'GET',  path: '/api/pc/processes',      handler: handlePcProcesses },
+  { method: 'POST', path: '/api/pc/kill',           handler: handlePcKill },
+  { method: 'POST', path: '/api/pc/type',           handler: handlePcType },
+  { method: 'POST', path: '/api/pc/keys',           handler: handlePcKeys },
+  { method: 'POST', path: '/api/pc/click',          handler: handlePcClick },
+  { method: 'POST', path: '/api/pc/mouse_move',     handler: handlePcMouseMove },
 ]
 
 const __dirname = dirname(fileURLToPath(import.meta.url))

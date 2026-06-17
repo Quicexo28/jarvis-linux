@@ -35,6 +35,17 @@ SAMPLES_DIR = HERE.parent / "samples"
 STT_LANG = os.environ.get("STT_LANG", "es")
 SAMPLE_RATE = 16000
 
+# Whisper's internal language model "corrects" rare/technical words into more
+# common phrases ("teseracto" -> "tercer acto", "polítopo" -> "político", ...).
+# We bias the beam search back toward our domain vocabulary by feeding these as
+# hotwords. Add terms (comma- or space-separated) via STT_HOTWORDS; set it empty
+# to disable the bias entirely.
+_DEFAULT_HOTWORDS = (
+    "teseracto, polítopo, politopo, hipercubo, Fermi, superficie de Fermi, "
+    "paramétrica, implícita, Jarvis, Obsidian, Tailscale, Syncthing"
+)
+STT_HOTWORDS = os.environ.get("STT_HOTWORDS", _DEFAULT_HOTWORDS).strip() or None
+
 
 def _pick_device() -> tuple[str, str]:
     """Prefer CUDA GPU (TTS no longer uses it); fall back to CPU/int8."""
@@ -85,6 +96,7 @@ vad_model, vad_utils = torch.hub.load(
     model="silero_vad",
     force_reload=False,
     onnx=True,
+    trust_repo=True,
 )
 (get_speech_timestamps, _, read_audio, _, _) = vad_utils
 print("[stt] VAD ready", flush=True)
@@ -262,6 +274,7 @@ async def transcribe(
             tmp_path,
             language=language,
             beam_size=5,
+            hotwords=STT_HOTWORDS,
             vad_filter=True,
             vad_parameters=dict(
                 min_silence_duration_ms=500,
@@ -475,6 +488,7 @@ def _transcribe_segment(audio: np.ndarray) -> tuple[str, float, Optional[str]]:
             language=STT_LANG,
             beam_size=3,
             best_of=1,
+            hotwords=STT_HOTWORDS,
             without_timestamps=True,
             # Anti-hallucination: Whisper invents "Gracias" / "Gracias por ver
             # el video" on silence/noise. Disable cross-segment priming, force
