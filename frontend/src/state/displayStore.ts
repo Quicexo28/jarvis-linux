@@ -7,7 +7,7 @@ import { create } from 'zustand'
  * bus (`display_show` / `display_hide` primitives) instead of reading it aloud.
  */
 
-export type DisplayKind = 'path' | 'url' | 'formula' | 'text' | 'markdown' | 'candidates'
+export type DisplayKind = 'path' | 'url' | 'formula' | 'text' | 'markdown' | 'candidates' | 'steps'
 
 export interface DisplayCandidate {
   label: string          // shown name, e.g. "informe.pdf"
@@ -15,11 +15,18 @@ export interface DisplayCandidate {
   meta?: string          // optional detail, e.g. "2.3 MB · Descargas"
 }
 
+export interface MathStep {
+  label: string          // e.g. "Paso 1" or "Simplificar"
+  latex: string          // KaTeX expression for this step
+  explanation?: string   // optional plain-text note shown below the formula
+}
+
 export interface DisplayCardData {
   kind: DisplayKind
   title?: string         // optional header, e.g. "Ruta movida"
   body?: string          // main content: path / url / LaTeX / text / markdown
   items?: DisplayCandidate[] // for kind === 'candidates'
+  steps?: MathStep[]     // for kind === 'steps'
   caption?: string       // small footnote under the content
 }
 

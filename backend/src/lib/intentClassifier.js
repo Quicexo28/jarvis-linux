@@ -24,7 +24,33 @@ const WAKE_RE = /\b(jarvis|desp[ie]ert|oye jarvis|hola jarvis)\b/i
 const QUESTION_RE = /\?$/
 const SLEEP_COMMANDS = /\b(descansa|duerme|silencio|callate|no molestes)\b/i
 
-const SELF_BUILD_RE = /\b(no\s+puedes|aprende\s+a\s+hacer|conf[ií]g[uú]rate\s+para|act[íi]vate\s+para|necesito\s+que\s+puedas|no\s+sabes\s+c[oó]mo|implementa\s+(la\s+)?capacidad|t[oó]ma(me)?\s+una\s+foto|saca(me)?\s+una\s+foto|haz(me)?\s+una\s+foto|con[eé]ctate\s+a\s+(mi\s+|la\s+)?c[aá]mara|usa\s+(mi\s+|la\s+)?c[aá]mara)\b/i
+// self_build fires when the user asks Jarvis to grow a new capability or repair
+// itself. Two families: (1) generic self-expansion / self-repair phrasing, and
+// (2) the original camera shortcuts. Capability verbs are anchored to capability
+// nouns (capacidad|habilidad|función|skill|herramienta) so normal chat like
+// "crea una nota" does NOT match.
+const SELF_BUILD_RE = new RegExp([
+  // intent-to-extend openers
+  'no\\s+puedes',
+  'no\\s+sabes\\s+c[oó]mo',
+  'necesito\\s+que\\s+puedas',
+  'aprende\\s+a\\b',
+  '(conf[ií]g[uú]rate|act[íi]vate|modif[ií]cate|prep[aá]rate|exti[eé]ndete|ampl[ií]ate)\\s+para',
+  // "crea/créate/constrúyete (una nueva) capacidad|habilidad|función|skill|herramienta"
+  '(crea|cr[eé]ate|h[aá]zte|constr[uú]yete|gen[eé]rate|desarr[oó]lla(te)?|impl[eé]menta(te)?|construye|programa|a[ñn][aá]de(te)?)\\s+(te\\s+)?(una?\\s+)?(nueva\\s+)?(capacidad|habilidad|funci[oó]n|funcionalidad|skill|herramienta)',
+  // "... como una (nueva) capacidad creada"
+  'como\\s+(una\\s+)?(nueva\\s+)?(capacidad|habilidad|funci[oó]n|skill)\\s+(creada|nueva|propia)',
+  // self-modify / self-repair
+  'auto[\\s-]?(modif[ií]ca|arr[eé]gla|repar[ae]|expand|exti[eé]nd|constr[uú]y)',
+  '(modif[ií]cate|arr[eé]glate|repar[aá]te|ampl[ií]ate|exti[eé]ndete|exp[aá]ndete)\\b',
+  // original camera shortcuts
+  'implementa\\s+(la\\s+)?capacidad',
+  't[oó]ma(me)?\\s+una\\s+foto',
+  'saca(me)?\\s+una\\s+foto',
+  'haz(me)?\\s+una\\s+foto',
+  'con[eé]ctate\\s+a\\s+(mi\\s+|la\\s+)?c[aá]mara',
+  'usa\\s+(mi\\s+|la\\s+)?c[aá]mara',
+].join('|'), 'i')
 const ACTIVATE_SKILL_RE = /\b(activa\s+(la?\s+)?habilidad|activa\s+(el?\s+)?skill|habilita\s+(la?\s+)?funci[oó]n|enciende\s+(la?\s+)?habilidad)\b/i
 const TOGGLE_GESTURES_RE = /\b(activa|desactiva|enciende|apaga)\s+(los?\s+)?gestos\b/i
 const VOICE_MUTED_RE = /\b(no\s+escuches|ign[oó]ra(me)?|modo\s+silencio|silencio\s+de\s+voz)\b/i

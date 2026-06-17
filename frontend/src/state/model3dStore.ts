@@ -10,6 +10,7 @@ export interface ParametricSpec {
   segments?: number
   title?: string
   color?: string
+  position?: [number, number, number]
 }
 
 export interface PolytopeSpec {
@@ -17,6 +18,7 @@ export interface PolytopeSpec {
   type: 'hypercube' | 'cross'
   dimension: number
   title?: string
+  position?: [number, number, number]
 }
 
 export interface ImplicitSpec {
@@ -33,20 +35,27 @@ export interface ImplicitSpec {
   brillouinZone?: 'fcc' | 'bcc' | 'sc'
   title?: string
   color?: string
+  position?: [number, number, number]
 }
 
 export type Model3DSpec = ParametricSpec | PolytopeSpec | ImplicitSpec
 
 interface Model3DState {
   open: boolean
-  spec: Model3DSpec | null
+  specs: Model3DSpec[]
   show: (spec: Model3DSpec) => void
   hide: () => void
+  setSpecs: (specs: Model3DSpec[]) => void
+  addSpec: (spec: Model3DSpec) => void
+  clearSpecs: () => void
 }
 
 export const useModel3dStore = create<Model3DState>((set) => ({
   open: false,
-  spec: null,
-  show: (spec) => set({ open: true, spec }),
+  specs: [],
+  show: (spec) => set({ open: true, specs: [spec] }),
   hide: () => set({ open: false }),
+  setSpecs: (specs) => set({ open: specs.length > 0, specs }),
+  addSpec: (spec) => set((s) => ({ open: true, specs: [...s.specs, spec] })),
+  clearSpecs: () => set({ open: false, specs: [] }),
 }))

@@ -25,6 +25,8 @@ import { useAudioLevel } from './hooks/useAudioLevel'
 import { WorldScene } from './scenes/WorldScene'
 import { PlanSelectorOverlay } from './components/PlanSelectorOverlay'
 import { DisplayCard } from './components/DisplayCard'
+import { PassphraseOverlay } from './components/PassphraseOverlay'
+import { UnlockGate } from './components/UnlockGate'
 import { Model3DViewer } from './components/Model3DViewer'
 import { WakeWordWizard } from './components/WakeWordWizard'
 import { getApiBase } from './api/client'
@@ -245,22 +247,27 @@ export function AwakeApp() {
   }, [zoomedMode, telemetryEnabled])
 
   useEffect(() => {
-    if (zoomedMode !== 'system') return
+    const systemVisible = zoomedMode === 'system' || (!zoomedMode && activeRingMode === 'system')
+    if (!systemVisible) return
     let cancelled = false
+    let timer: ReturnType<typeof setInterval>
+
     async function fetchToken() {
       try {
         const res  = await fetch(`${getApiBase()}/api/mobile/token`)
         const data = await res.json() as MobileTokenInfo
-        if (!cancelled) setMobileTokenInfo(data)
+        if (cancelled) return
+        setMobileTokenInfo(data)
       } catch {}
     }
     fetchToken()
-    const timer = setInterval(fetchToken, 60_000)
+    timer = setInterval(fetchToken, 30_000)
     return () => { cancelled = true; clearInterval(timer) }
-  }, [zoomedMode])
+  }, [zoomedMode, activeRingMode])
 
   useEffect(() => {
-    if (zoomedMode !== 'system') return
+    const systemVisible = zoomedMode === 'system' || (!zoomedMode && activeRingMode === 'system')
+    if (!systemVisible) return
     let cancelled = false
     async function fetchStatus() {
       try {
@@ -272,7 +279,7 @@ export function AwakeApp() {
     fetchStatus()
     const timer = setInterval(fetchStatus, 10_000)
     return () => { cancelled = true; clearInterval(timer) }
-  }, [zoomedMode])
+  }, [zoomedMode, activeRingMode])
 
   useEffect(() => {
     if (!mobileToken || !qrCanvasRef.current) return
@@ -769,6 +776,12 @@ export function AwakeApp() {
 
       {/* 3D model viewer — full-screen overlay driven by model3dStore */}
       <Model3DViewer />
+
+      {/* Self-coding password modal — driven over the skill bus (request_passphrase) */}
+      <PassphraseOverlay />
+
+      {/* Portable-vault unlock prompt — shown when an encrypted vault needs the owner password */}
+      <UnlockGate />
 
       {/* Wake word calibration wizard — shown on first boot if not yet calibrated */}
       <WakeWordWizard />

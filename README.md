@@ -1,183 +1,227 @@
-# Jarvis Desktop — Estado actual del proyecto
+# Jarvis (Linux)
 
-Este proyecto es una app web tipo **Jarvis** orientada a controlar y visualizar una casa virtual con tres capas:
+Asistente personal tipo **Jarvis** que corre como **servicio de red en la LAN**:
+un portátil/PC con Arch Linux es el servidor (voz, STT/TTS, Claude + herramientas),
+y cualquier dispositivo en la WiFi lo usa desde el navegador en
+`http://<ip-del-servidor>:8788`. Voz manos libres (doble palmada o palabra de
+activación), gestos con la cámara, visor 3D, control de PC, recordatorios y
+bots de Telegram. UI en español (Colombia).
 
-1. **Diseño 2D** de habitaciones/muros.
-2. **Construcción 3D** desde ese plano.
-3. **Espacio inmersivo** para interacción por mirada con dispositivos.
-
-Además, incluye un backend local para acciones y orquestación básica de Jarvis.
-
----
-
-## Objetivo del sistema
-
-Construir un entorno doméstico virtual donde:
-
-- puedas modelar habitaciones rápido,
-- ubicar muebles/dispositivos,
-- definir un punto de vista,
-- e interactuar con dispositivos desde una vista inmersiva,
-- con integración progresiva al "cerebro" de Jarvis (turnos conversacionales + acciones).
+> El backend escucha en `0.0.0.0:8788`. La UI local corre en Chromium en modo
+> kiosko (no usa Electron); cualquier navegador de la LAN también sirve.
 
 ---
 
-## Arquitectura actual
-
-## Frontend
-Ruta: `frontend/`
-
-Tecnologías principales:
-
-- React + TypeScript
-- Vite
-- React Three Fiber + Drei
-
-Módulos de UI principales:
-
-- **Core (`home`)**: interacción con Jarvis por texto/voz.
-- **Casa (`house`)**: hub de habitaciones y accesos.
-- **Plano 2D (`plan2d`)**: editor de líneas sobre grid.
-- **Espacio 3D (`plan3d`)**: edición de muros, objetos y bindings.
-- **Inmersivo (`space`)**: primera persona (rotación fija) + foco por mirada.
-- **Cloud / System**: vistas visuales adicionales.
-
-## Backend
-Ruta: `backend/`
-
-Archivo principal:
-
-- `src/server.js`
-
-Endpoints implementados:
-
-- `GET /health`
-- `GET /modules`
-- `POST /api/jarvis/turn`
-- `POST /api/jarvis/device-action`
-- `GET /api/system/telemetry` *(implementado, actualmente opcional desde frontend)*
-
----
-
-## Flujo funcional del producto
-
-## 1) Plano 2D
-
-Editor basado en grid:
-
-- Escala: **25 cm por celda**.
-- Dibujar muros por arrastre lineal.
-- Tipos de muro:
-  - normal
-  - pared baja
-- Herramientas:
-  - dibujar
-  - borrar pared
-  - deshacer
-  - limpiar
-- Guardado por:
-  - **habitación** + **nombre**
-- Persistencia en `localStorage`.
-
-## 2) Espacio 3D (diseñador)
-
-Carga un plano guardado y lo convierte a muros 3D.
-
-Capacidades:
-
-- Añadir muebles y dispositivos.
-- Ajustar posición, rotación, tamaño y altura.
-- Definir **punto de vista fijo** (x, y, z, yaw).
-- Vincular skills/acciones por dispositivo.
-- Seleccionar múltiples acciones mediante chips.
-
-Representación visual:
-
-- Estilo wireframe/contorno para entorno y objetos.
-- Dispositivos con color más llamativo y formas geométricas diferenciadas.
-
-## 3) Espacio inmersivo
-
-Modo primera persona orientado a interacción, no juego.
-
-Características:
-
-- Cámara fija al punto de vista (solo rotación).
-- Detección por mirada para enfocar dispositivo más cercano al centro visual.
-- Priorización de foco cuando hay dispositivos cercanos entre sí.
-- Popup HUD contextual con acciones del dispositivo.
-- Popup persistente al mantenerlo en el centro de vista.
-- Selector de acción con realce visual (activo).
-- Crosshair central overlay por encima de todo.
-- Zoom por rueda (FOV dinámico dentro de límites).
-
----
-
-## Integración Jarvis (Core)
-
-En modo Core:
-
-- Input de texto para turnos de Jarvis.
-- Reconocimiento de voz manual.
-- Respuesta por TTS del navegador (voz global ON/OFF).
-- Frase wake configurable (default: `jarvis`).
-- Al detectar wake phrase, toma el comando posterior y lo envía a `/api/jarvis/turn`.
-
----
-
-## Menús y navegación (estado actual)
-
-- Barra principal: `Core`, `Casa`, `Cloud`, `System`.
-- `Plano 2D`, `Espacio 3D` e `Inmersivo` se gestionan desde `Casa`:
-  - puntos de interés (habitaciones guardadas)
-  - submenú de edición desplegable
-- Panel derecho de "Estado" fue removido.
-
----
-
-## Telemetría de sistema
-
-La capa de telemetría real está implementada en backend y en frontend, pero quedó **desactivada por consumo**.
-
-Flag actual en frontend:
-
-- `SYSTEM_TELEMETRY_ENABLED = false`
-
-Si se quiere reactivar:
-
-- cambiar a `true` en `frontend/src/App.tsx`.
-
----
-
-## Persistencia (resumen)
-
-`localStorage`:
-
-- `jarvis.plan2d.saved.v1` → planos por habitación/nombre
-- `jarvis.plan3d.entities.v1` → entidades por plano
-- `jarvis.plan3d.viewpoint.v1` → viewpoint por plano
-
----
-
-## Estado general
-
-El proyecto está en una fase sólida de **MVP funcional** para:
-
-- modelado de espacios,
-- edición 3D,
-- interacción inmersiva por mirada,
-- y control básico vía backend Jarvis.
-
-La base está lista para el siguiente proyecto/fase sin perder continuidad.
-
-## Linux installation
+## Instalación rápida (Arch Linux)
 
 ```bash
-git clone https://github.com/YOUR_USER/jarvis-linux.git ~/jarvis-linux
-cd ~/jarvis-linux && bash scripts/linux/install.sh
+git clone https://github.com/Quicexo28/jarvis-linux.git ~/jarvis-linux
+cd ~/jarvis-linux
+bash scripts/linux/install.sh
 ```
 
-**Hyprland users:** add this to `~/.config/hypr/hyprland.conf`:
+Eso deja **todo listo**: paquetes del sistema, dependencias de Node y Python,
+build del frontend, y los servicios `systemd` habilitados para arrancar solos al
+iniciar sesión. Para arrancar ya mismo sin reiniciar:
+
+```bash
+systemctl --user start jarvis-backend jarvis-stt jarvis-tts jarvis-ui
+```
+
+Logs en vivo: `journalctl --user -u jarvis-backend -f`
+
+**¿Solo CPU (sin GPU NVIDIA)?** Instala con el índice de PyTorch para CPU:
+
+```bash
+JARVIS_TORCH_INDEX=https://download.pytorch.org/whl/cpu bash scripts/linux/install.sh
+```
+
+---
+
+## Dependencias (qué instala y por qué)
+
+`install.sh` instala todo esto automáticamente. Si prefieres hacerlo a mano, o
+quieres saber qué se baja, aquí está el desglose.
+
+### 1. Paquetes del sistema (`pacman`)
+
+```bash
+sudo pacman -S --needed nodejs npm python python-pip chromium git portaudio \
+  ydotool xdotool wmctrl xdg-utils
+```
+
+| Paquete | Para qué |
+|---|---|
+| `nodejs` `npm` | Backend (API/WS) y build del frontend |
+| `python` `python-pip` | Stack de voz (STT/TTS/speaker-ID/wake) |
+| `chromium` | UI en modo kiosko (`jarvis-ui.service`) |
+| `portaudio` | Captura de micrófono para el wake word |
+| `ydotool` | Inyección de teclado/ratón en **Wayland** (control de PC) |
+| `xdotool` `wmctrl` | Teclado/ratón y ventanas en **X11** (control de PC) |
+| `xdg-utils` | Lanzar apps (`xdg-open` / `.desktop`) |
+
+Opcional: **`cloudflared`** (repos o AUR: `yay -S cloudflared`) para exponer la UI
+con una URL pública HTTPS y que el QR del móvil funcione fuera de la LAN. Si no
+está, el QR usa la IP de la LAN o de Tailscale.
+
+### 2. Dependencias de Node
+
+```bash
+cd backend  && npm install      # ws, qrcode
+cd frontend && npm install && npm run build
+```
+
+### 3. Stack de Python (en un venv)
+
+```bash
+cd backend/voice/python
+python -m venv .venv
+.venv/bin/pip install --upgrade pip
+# PyTorch PRIMERO, desde las ruedas CUDA 11.8 (RTX 3050 / Ampere):
+.venv/bin/pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+.venv/bin/pip install -r requirements.txt
+# Wake word opcional ("Jarvis"); sin esto, palmada/atajo siguen funcionando:
+.venv/bin/pip install "openWakeWord>=0.6.0" pyaudio aiohttp
+```
+
+Incluye faster-whisper + Silero VAD (STT), Edge TTS (voz por defecto, sin GPU),
+resemblyzer (identificación de hablante), `cryptography` (cifra la huella de voz
+del dueño y los secretos), y `psutil` (control de PC). El detalle y la nota de
+GPU están en `backend/voice/python/requirements.txt`.
+
+### GPU (NVIDIA, opcional pero recomendado para STT rápido)
+
+```bash
+sudo pacman -S nvidia nvidia-utils cuda cudnn
+# verifica:
+backend/voice/python/.venv/bin/python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+Usa el índice **cu118** (Ampere/RTX 3050). **No** uses cu128 (eso es RTX 50-series).
+
+---
+
+## Configuración
+
+### Secretos / tokens
+
+Crea `backend/data/secrets.local.json` (la carpeta `backend/data/` está en
+`.gitignore` — nunca se sube). En el **primer arranque** Jarvis lo cifra en
+`secrets.local.enc` con una clave por máquina en `~/.config/jarvis/machine.key`
+(modo 0600) y borra el plano. Variables útiles:
+
+```json
+{
+  "TELEGRAM_BOT_TOKEN": "...",
+  "TELEGRAM_BOT_TOKEN_JARVIS": "...",
+  "TELEGRAM_CHAT_ID_JARVIS": "...",
+  "JARVIS_OBSIDIAN_VAULT": "/home/tu-usuario/Obsidian/Vault",
+  "JARVIS_CODE_DIR": "/home/tu-usuario/jarvis-linux"
+}
+```
+
+> Para **editar** los secretos más tarde: borra `backend/data/secrets.local.enc`,
+> vuelve a crear `secrets.local.json` con los valores nuevos y reinicia el
+> backend (se re-cifra en el arranque).
+
+> Migrando desde Windows: en el PC viejo corre `node backend/scripts/unlock.js`
+> para ver los valores en claro, y cópialos aquí. (También existe la bóveda
+> portable: `npm run make-portable` en Windows genera `jarvis-portable.enc`;
+> cópialo a `backend/data/` y desbloquéalo con `npm run unlock` o desde la UI.)
+
+### Identidad del dueño (voz)
+
+El dueño se reconoce por su **huella de voz** (lo más seguro). Tras enrolar tus
+muestras (el asistente de primer arranque lo hace, o `SpeakerConfigPanel`):
+
+```bash
+cd backend/voice/python && .venv/bin/python make_owner_voiceprint.py
+```
+
+Mientras no exista la huella, hay un **fallback por nombre**: pon
+`JARVIS_OWNER_SPEAKER=tu-nombre-de-perfil` (ya viene en `jarvis-backend.service`).
+
+### Contraseña de autodesarrollo
+
+Para que Jarvis pueda modificar su propio código por voz (gated por contraseña):
+
+```bash
+cd backend && npm run set-code-password
+```
+
+---
+
+## Servicios `systemd`
+
+| Servicio | Qué hace | Notas |
+|---|---|---|
+| `jarvis-backend` | API + WS + frontend (`:8788`) | siempre |
+| `jarvis-stt` | STT (faster-whisper) | siempre |
+| `jarvis-tts` | TTS (Edge por defecto) | siempre |
+| `jarvis-wake` | Wake word "Jarvis" | opcional |
+| `jarvis-ui` | UI Chromium kiosko | requiere sesión gráfica |
+| `jarvis-jarvisbot` | Bot Telegram (QR, recordatorios, silenciar) | arranca solo si hay token; si no, sale limpio |
+| `jarvis-cloudbot` | Bot Telegram de archivos en la nube | igual |
+| `jarvis-pccontrol` | Control de PC (ventanas, teclado, ratón) | degrada con gracia si faltan herramientas |
+
+`install.sh` los habilita todos. Para gestionar uno:
+`systemctl --user {start,stop,status,disable} <servicio>`.
+
+**Control de PC en Wayland (Hyprland):** la inyección de teclado/ratón usa
+`ydotool`, que necesita el daemon `ydotoold` y acceso a `/dev/uinput`:
+
+```bash
+sudo systemctl enable --now ydotool   # o ydotoold, según el paquete
+# y dale acceso a uinput (grupo input o regla udev)
+```
+
+En X11 se usa `xdotool`/`wmctrl` y no hace falta daemon. La lectura del árbol de
+UI (`read_ui`) no tiene equivalente universal en Linux y devuelve la lista de
+ventanas como degradación.
+
+**Servidor 24/7 (tapa cerrada):** en `/etc/systemd/logind.conf` pon
+`HandleLidSwitch=ignore` y reinicia `systemd-logind`. Reserva la IP por DHCP en
+el router para una URL estable en la LAN.
+
+### Hyprland
+
+Para que la ventana de Jarvis no tenga bordes y quede fijada, añade a
+`~/.config/hypr/hyprland.conf`:
+
 ```
 source = ~/jarvis-linux/scripts/linux/hyprland-jarvis.conf
 ```
+
+---
+
+## Desarrollo
+
+Servicios independientes — terminales separadas:
+
+```bash
+cd backend  && npm run dev     # API en http://0.0.0.0:8788   ·  npm test
+cd frontend && npm run dev     # Vite en :5173                ·  npm test
+cd backend/voice/python && .venv/bin/python stt_service.py    # STT :8790
+cd backend/voice/python && .venv/bin/python edge_tts_service.py
+```
+
+`JARVIS_FAKE_CLAUDE=1` evita invocar el CLI real de Claude en los tests.
+
+---
+
+## Arquitectura (resumen)
+
+- **Frontend** (`frontend/`): React + TypeScript + Vite, React Three Fiber.
+  Capas: Core (voz/texto), Casa (habitaciones), Plano 2D, Espacio 3D, Inmersivo,
+  visor 3D paramétrico/polítopo/implícito. Gestos con MediaPipe. Detección de
+  palmada por DSP puro.
+- **Backend** (`backend/src/`): `server.js` (HTTP + WS) → `routes.js` →
+  `handlers/`. La voz pasa por STT → gates de atención/intención/hablante →
+  sesión persistente de Claude con herramientas MCP → TTS. Bóveda cifrada,
+  recordatorios (Telegram), nube (Syncthing+Telegram), control de PC.
+- **Python** (`backend/voice/python/`): STT (faster-whisper+VAD), TTS (Edge/XTTS),
+  speaker-ID (resemblyzer) con huella del dueño cifrada, wake word, control de PC.
+
+Persistencia del frontend en `localStorage` (planos 2D/3D, dataset de gestos) e
+IndexedDB (modelo de gestos entrenado). El backend no usa base de datos:
+`attentionState` y `conversationMemory` viven en memoria (ventana de 8 turnos).

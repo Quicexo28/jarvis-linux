@@ -1,5 +1,5 @@
 /**
- * Model3DViewer — full-screen overlay that renders a 3D model.
+ * Model3DViewer — full-screen overlay that renders one or more 3D figures.
  * Driven by model3dStore (same pattern as DisplayCard).
  * Gestures: pinch = zoom (dolly), grab = multi-axis rotate (roll=Z, horizontal=Y,
  * vertical=X), 1:1 angular, persists on release.
@@ -278,9 +278,16 @@ function ImplicitObject({ spec }: { spec: ImplicitSpec }) {
   )
 }
 
+function SpecObject({ spec }: { spec: Model3DSpec }) {
+  const pos = (spec.position ?? [0, 0, 0]) as [number, number, number]
+  if (spec.kind === 'parametric') return <group position={pos}><ParametricObject spec={spec} /></group>
+  if (spec.kind === 'polytope') return <group position={pos}><PolytopeObject spec={spec} /></group>
+  return <group position={pos}><ImplicitObject spec={spec} /></group>
+}
+
 /* ---- Scene wrapper ---- */
 
-function Scene({ spec, gestureEnabled }: { spec: Model3DSpec; gestureEnabled: boolean }) {
+function Scene({ specs, gestureEnabled }: { specs: Model3DSpec[]; gestureEnabled: boolean }) {
   return (
     <>
       <color attach="background" args={['#060d12']} />
@@ -288,18 +295,29 @@ function Scene({ spec, gestureEnabled }: { spec: Model3DSpec; gestureEnabled: bo
       <pointLight position={[5, 5, 5]} intensity={1.2} color="#ffffff" />
       <pointLight position={[-5, -3, -5]} intensity={0.6} color="#0059ff" />
       {!gestureEnabled && <OrbitControls makeDefault enablePan={true} />}
-      {spec.kind === 'parametric' && <ParametricObject spec={spec} />}
-      {spec.kind === 'polytope' && <PolytopeObject spec={spec} />}
-      {spec.kind === 'implicit' && <ImplicitObject spec={spec} />}
+      {specs.map((spec, i) => <SpecObject key={i} spec={spec} />)}
     </>
   )
+}
+
+function specLabel(spec: Model3DSpec): string {
+  if (spec.title) return spec.title
+  if (spec.kind === 'polytope') return `${spec.dimension}D ${spec.type}`
+  if (spec.kind === 'implicit') return 'Isosuperficie'
+  return 'Superficie'
+}
+
+function specColor(spec: Model3DSpec): string {
+  if (spec.kind === 'parametric') return spec.color ?? '#38d5ff'
+  if (spec.kind === 'implicit') return spec.color ?? '#ffb347'
+  return '#38d5ff'
 }
 
 /* ---- Overlay wrapper ---- */
 
 export function Model3DViewer() {
   const open = useModel3dStore(s => s.open)
-  const spec = useModel3dStore(s => s.spec)
+  const specs = useModel3dStore(s => s.specs)
   const hide = useModel3dStore(s => s.hide)
   const gestureEnabled = useGestureStore(s => s.enabled)
   const setGestureEnabled = useGestureStore(s => s.setEnabled)
@@ -322,7 +340,11 @@ export function Model3DViewer() {
     }
   }, [open])
 
-  if (!open || !spec) return null
+  if (!open || specs.length === 0) return null
+
+  const headerTitle = specs.length === 1
+    ? specLabel(specs[0])
+    : `${specs.length} figuras`
 
   return (
     <div style={{
@@ -336,7 +358,7 @@ export function Model3DViewer() {
         padding: '10px 20px', color: '#38d5ff', fontSize: 13, letterSpacing: 1,
         textTransform: 'uppercase', borderBottom: '1px solid rgba(56,213,255,0.2)',
       }}>
-        <span>{spec.title ?? (spec.kind === 'polytope' ? `${spec.dimension}D ${spec.type}` : spec.kind === 'implicit' ? 'Isosuperficie' : 'Superficie')}</span>
+        <span>{headerTitle}</span>
         <button
           onClick={hide}
           style={{ background: 'transparent', border: 'none', color: '#7fa6b8', cursor: 'pointer', fontSize: 20 }}
@@ -347,7 +369,7 @@ export function Model3DViewer() {
       {/* 3D canvas */}
       <div style={{ flex: 1, position: 'relative' }}>
         <Canvas camera={{ position: [0, 0, 12], fov: 40 }} gl={{ localClippingEnabled: true }}>
-          <Scene spec={spec} gestureEnabled={gestureEnabled} />
+          <Scene specs={specs} gestureEnabled={gestureEnabled} />
         </Canvas>
 
         {/* Gesture activation prompt */}
@@ -369,6 +391,30 @@ export function Model3DViewer() {
               onClick={() => setShowGesturePrompt(false)}
               style={{ background: 'transparent', border: '1px solid rgba(100,130,150,0.4)', borderRadius: 4, color: '#7fa6b8', cursor: 'pointer', padding: '3px 10px', fontSize: 11 }}
             >No</button>
+          </div>
+        )}
+
+        {/* Multi-figure legend */}
+        {specs.length > 1 && (
+          <div style={{
+            position: 'absolute', bottom: 12, left: 16,
+            display: 'flex', flexDirection: 'column', gap: 4,
+            background: 'rgba(4, 10, 16, 0.75)',
+            border: '1px solid rgba(56,213,255,0.2)',
+            borderRadius: 6, padding: '8px 12px',
+            backdropFilter: 'blur(6px)',
+          }}>
+            {specs.map((spec, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <span style={{
+                  width: 10, height: 10, borderRadius: 2,
+                  background: specColor(spec), flexShrink: 0,
+                }} />
+                <span style={{ color: '#ccd6f6', fontSize: 11, letterSpacing: 0.3 }}>
+                  {specLabel(spec)}
+                </span>
+              </div>
+            ))}
           </div>
         )}
       </div>

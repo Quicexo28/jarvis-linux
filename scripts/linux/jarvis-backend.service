@@ -10,9 +10,12 @@ Restart=on-failure
 RestartSec=3
 Environment=NODE_ENV=production
 Environment=PORT=8788
-Environment=HOST=127.0.0.1
-# Set to your enrolled speaker name so voice commands run as OWNER (full access).
-# Must match the speaker name used when enrolling samples in SpeakerIdPanel.
+# 0.0.0.0 so any device on the LAN can reach the UI at http://<server-ip>:8788.
+# Set to 127.0.0.1 if you want it reachable only from this machine.
+Environment=HOST=0.0.0.0
+# OWNER is decided primarily by the baked voiceprint (make_owner_voiceprint.py).
+# Until that exists, this is the fallback: the enrolled speaker profile name that
+# grants OWNER (full access). Must match the name used when enrolling samples.
 Environment=JARVIS_OWNER_SPEAKER=santiago
 
 [Install]

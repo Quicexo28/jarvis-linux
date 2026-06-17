@@ -8,12 +8,16 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "setup:claude": "npm install --no-save @anthropic-ai/claude-agent-sdk zod",
-    "dev:claude": "node scripts/start-claude.mjs"
+    "dev:claude": "node scripts/start-claude.mjs",
+    "set-code-password": "node scripts/set-code-password.js",
+    "make-portable": "node scripts/make-portable.js",
+    "unlock": "node scripts/unlock.js"
   },
   "devDependencies": {
     "vitest": "^2.1.9"
   },
   "dependencies": {
+    "qrcode": "^1.5.4",
     "ws": "^8.20.1"
   }
 }

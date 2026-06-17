@@ -11,6 +11,8 @@ import { handleSttStreamUpgrade } from './handlers/stt.js'
 import { handleJarvisTtsStreamUpgrade } from './handlers/jarvis.js'
 import { warmupSpeechSession } from './handlers/speech.js'
 import { handleSkillBusUpgrade } from './lib/skillBus.js'
+import { handleMobileGestureUpgrade } from './handlers/mobileGesture.js'
+import { startCloudflareTunnel } from './lib/cloudflareTunnel.js'
 import { migrateStraySpeakers } from './lib/obsidian.js'
 import { startScheduler } from './lib/reminders.js'
 import { attachAgentBridge } from './agent/bridge.js'
@@ -46,6 +48,8 @@ server.on('upgrade', (req, socket, head) => {
     handleJarvisTtsStreamUpgrade(req, socket, head)
   } else if (url.pathname === '/api/skills/bus') {
     handleSkillBusUpgrade(req, socket, head)
+  } else if (url.pathname === '/api/mobile/gesture/ws') {
+    handleMobileGestureUpgrade(req, socket, head)
   } else if (agentBridge.handleUpgrade(req, socket, head)) {
     // claimed by the agent bridge (/api/jarvis/agent/ws)
   } else {
@@ -63,6 +67,10 @@ try { migrateStraySpeakers() } catch (e) { console.warn('[obsidian] migrate skip
 
 // Telegram reminder scheduler — fires due reminders even while DORMANT.
 startScheduler()
+
+// Cloudflare quick tunnel — exposes localhost:PORT with a public HTTPS URL so
+// the mobile QR works from outside the LAN. No-op if cloudflared isn't installed.
+startCloudflareTunnel(port)
 
 await loadDynamicRoutes()
 server.listen(port, host, () => console.log(`Jarvis backend on http://${host}:${port}`))
