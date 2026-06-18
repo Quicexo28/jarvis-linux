@@ -1,0 +1,14 @@
+[Unit]
+Description=Jarvis Reminder Notifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-linux
+ExecStart=/usr/bin/node backend/src/services/notifier.js
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -14,6 +14,9 @@ import { handleSkillBusUpgrade } from './lib/skillBus.js'
 import { migrateStraySpeakers } from './lib/obsidian.js'
 import { startScheduler } from './lib/reminders.js'
 import { attachAgentBridge } from './agent/bridge.js'
+import { handleMobileGestureUpgrade } from './handlers/mobileGesture.js'
+import { startCloudflareTunnel } from './lib/cloudflareTunnel.js'
+import { startPdfWatcher } from './lib/pdfWatcher.js'
 
 const port = Number(env.PORT ?? 8788)
 const host = env.HOST ?? '0.0.0.0'
@@ -46,6 +49,8 @@ server.on('upgrade', (req, socket, head) => {
     handleJarvisTtsStreamUpgrade(req, socket, head)
   } else if (url.pathname === '/api/skills/bus') {
     handleSkillBusUpgrade(req, socket, head)
+  } else if (url.pathname === '/api/mobile/gesture/ws') {
+    handleMobileGestureUpgrade(req, socket, head)
   } else if (agentBridge.handleUpgrade(req, socket, head)) {
     // claimed by the agent bridge (/api/jarvis/agent/ws)
   } else {
@@ -60,6 +65,12 @@ warmupSpeechSession()
 // One-time vault cleanup: collapse stray speaker folders into the owner so
 // reads always hit the right place.
 try { migrateStraySpeakers() } catch (e) { console.warn('[obsidian] migrate skipped:', e?.message) }
+
+// Watch vault for new PDFs → convert to .md → delete PDF.
+startPdfWatcher().catch((e) => console.warn('[pdfWatcher] start failed:', e?.message))
+
+// Cloudflare quick tunnel — public HTTPS URL for mobile QR outside LAN.
+startCloudflareTunnel(port)
 
 // Telegram reminder scheduler — fires due reminders even while DORMANT.
 startScheduler()

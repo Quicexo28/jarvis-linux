@@ -1,0 +1,15 @@
+[Unit]
+Description=Jarvis Cloud Telegram Bot (CloudBot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-linux
+ExecStart=/usr/bin/node backend/src/services/cloudBot.js
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=0
+
+[Install]
+WantedBy=default.target
