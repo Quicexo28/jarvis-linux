@@ -1,7 +1,7 @@
 param(
     [string]$JarvisDesktopPath = 'C:\proyectos\jarvis-desktop',
-    [string]$VaultPath         = 'C:\proyectos\Jarvis-Vault',
-    [string]$OutputZip         = ($env:USERPROFILE + '\Desktop\jarvis-migration.zip')
+    [string]$VaultPath         = 'C:\proyectos\jarvis-desktop\Jarvis-Vault',
+    [string]$OutputZip         = ([Environment]::GetFolderPath('Desktop') + '\jarvis-migration.zip')
 )
 
 $ErrorActionPreference = 'Stop'
