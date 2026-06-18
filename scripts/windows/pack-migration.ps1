@@ -61,7 +61,7 @@ try {
     $SizeMB = [math]::Round((Get-Item $OutputZip).Length / 1MB, 1)
 
     Write-Host ''
-    Write-Host "[pack-migration] Bundle listo: $OutputZip ($SizeMB MB)" -ForegroundColor Green
+    Write-Host "[pack-migration] Bundle listo: $OutputZip - $SizeMB MB" -ForegroundColor Green
     Write-Host ''
     Write-Host 'Pasos siguientes:' -ForegroundColor Yellow
     Write-Host '  1. Transfiere el zip al PC Linux (SCP, USB, Syncthing, etc.)'
