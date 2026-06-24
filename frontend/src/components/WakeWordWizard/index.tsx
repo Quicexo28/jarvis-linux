@@ -97,109 +97,81 @@ export function WakeWordWizard() {
   if (!visible) return null
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 9000,
-      background: 'rgba(2, 6, 14, 0.97)',
-      display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center',
-      gap: 32, color: '#ccd6f6', fontFamily: 'monospace',
-    }}>
-      {/* Title */}
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ color: '#38d5ff', fontSize: 14, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 8 }}>
-          Calibración de Wake Word
+    <div className="holo-overlay">
+      <div className="glass wake-wizard">
+        <span className="holo-corner tl" />
+        <span className="holo-corner tr" />
+        <span className="holo-corner bl" />
+        <span className="holo-corner br" />
+
+        {/* Title */}
+        <div>
+          <div className="wake-wizard__title">Calibración de Wake Word</div>
+          <div className="wake-wizard__sub">Primera configuración · Solo una vez</div>
         </div>
-        <div style={{ fontSize: 11, color: 'rgba(56,213,255,0.5)', letterSpacing: 1 }}>
-          Primera configuración · Solo una vez
-        </div>
-      </div>
 
-      {/* Step content */}
-      {step === 'checking' && (
-        <div style={{ fontSize: 12, color: 'rgba(56,213,255,0.4)' }}>Comprobando...</div>
-      )}
+        {/* Step content */}
+        {step === 'checking' && (
+          <div className="wake-wizard__hint">Comprobando...</div>
+        )}
 
-      {(step === 'idle' || step === 'recording') && (
-        <>
-          {/* Progress dots */}
-          <div style={{ display: 'flex', gap: 10 }}>
-            {Array.from({ length: TOTAL_SAMPLES }).map((_, i) => (
-              <div key={i} style={{
-                width: 12, height: 12, borderRadius: '50%',
-                background: i < count ? '#38d5ff' : 'rgba(56,213,255,0.15)',
-                border: '1px solid rgba(56,213,255,0.4)',
-                transition: 'background 0.3s',
-              }} />
-            ))}
-          </div>
-
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 22, marginBottom: 12, color: '#ffffff' }}>
-              {step === 'recording' ? '🎙 Escuchando...' : `Di "Jarvis" · muestra ${count + 1} de ${TOTAL_SAMPLES}`}
+        {(step === 'idle' || step === 'recording') && (
+          <>
+            <div className={`wake-pulse ${step === 'recording' ? 'wake-pulse--active' : ''}`}>
+              <span className="wake-pulse__ring" />
+              <span className="wake-pulse__ring" />
+              <span className="wake-pulse__core" />
             </div>
-            <div style={{ fontSize: 11, color: 'rgba(56,213,255,0.45)', marginBottom: 24 }}>
-              {step === 'recording'
-                ? `Grabando ${RECORD_MS / 1000}s — habla con naturalidad`
-                : 'Pulsa el botón y di "Jarvis" en voz alta'}
+
+            {/* Progress dots */}
+            <div className="wake-dots">
+              {Array.from({ length: TOTAL_SAMPLES }).map((_, i) => (
+                <span key={i} className={`wake-dot ${i < count ? 'wake-dot--filled' : ''}`} />
+              ))}
+            </div>
+
+            <div>
+              <div className="wake-wizard__prompt">
+                {step === 'recording' ? 'Escuchando...' : `Di "Jarvis" · muestra ${count + 1} de ${TOTAL_SAMPLES}`}
+              </div>
+              <div className="wake-wizard__hint">
+                {step === 'recording'
+                  ? `Grabando ${RECORD_MS / 1000}s — habla con naturalidad`
+                  : 'Pulsa el botón y di "Jarvis" en voz alta'}
+              </div>
+            </div>
+
+            <button className="holo-btn" onClick={startRecording} disabled={step === 'recording'}>
+              {step === 'recording' ? 'Grabando...' : 'Grabar'}
+            </button>
+          </>
+        )}
+
+        {step === 'done' && (
+          <div>
+            <div className="wake-wizard__check">✓</div>
+            <div className="wake-wizard__prompt" style={{ color: 'var(--primary)' }}>
+              Calibración guardada
             </div>
           </div>
+        )}
 
-          <button
-            onClick={startRecording}
-            disabled={step === 'recording'}
-            style={{
-              padding: '14px 40px',
-              background: step === 'recording'
-                ? 'rgba(56,213,255,0.08)'
-                : 'rgba(56,213,255,0.15)',
-              border: `1px solid ${step === 'recording' ? 'rgba(56,213,255,0.3)' : '#38d5ff'}`,
-              borderRadius: 8, color: '#38d5ff', fontSize: 13, letterSpacing: 2,
-              textTransform: 'uppercase', cursor: step === 'recording' ? 'default' : 'pointer',
-              transition: 'all 0.2s',
-            }}
-          >
-            {step === 'recording' ? '...' : 'Grabar'}
+        {step === 'error' && (
+          <div>
+            <div className="wake-wizard__error">{error}</div>
+            <button className="holo-btn holo-btn--danger" onClick={() => { setStep('idle'); setError('') }}>
+              Reintentar
+            </button>
+          </div>
+        )}
+
+        {/* Skip link */}
+        {step !== 'done' && (
+          <button className="holo-btn holo-btn--ghost" onClick={() => setVisible(false)}>
+            Omitir por ahora
           </button>
-        </>
-      )}
-
-      {step === 'done' && (
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
-          <div style={{ color: '#38d5ff', fontSize: 13, letterSpacing: 2 }}>
-            Calibración guardada
-          </div>
-        </div>
-      )}
-
-      {step === 'error' && (
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ color: '#ff6b6b', fontSize: 12, marginBottom: 16 }}>{error}</div>
-          <button
-            onClick={() => { setStep('idle'); setError('') }}
-            style={{
-              padding: '10px 28px', background: 'transparent',
-              border: '1px solid rgba(255,107,107,0.5)', borderRadius: 6,
-              color: '#ff6b6b', cursor: 'pointer', fontSize: 11, letterSpacing: 1,
-            }}
-          >Reintentar</button>
-        </div>
-      )}
-
-      {/* Skip link */}
-      {step !== 'done' && (
-        <button
-          onClick={() => setVisible(false)}
-          style={{
-            position: 'absolute', bottom: 24,
-            background: 'transparent', border: 'none',
-            color: 'rgba(56,213,255,0.3)', cursor: 'pointer',
-            fontSize: 11, letterSpacing: 1,
-          }}
-        >
-          Omitir por ahora
-        </button>
-      )}
+        )}
+      </div>
     </div>
   )
 }
