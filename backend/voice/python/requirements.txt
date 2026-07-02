@@ -7,6 +7,8 @@ scipy>=1.11.0
 soundfile>=0.12.0
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+python-multipart>=0.0.9
+cryptography>=42.0.0
 
 # STT (faster-whisper on CPU)
 faster-whisper>=1.0.0
@@ -16,7 +18,17 @@ ctranslate2>=4.0.0
 # silero-vad loads via torch.hub — no separate pip package needed
 
 # Speaker identification
+# ECAPA-TDNN (speechbrain) is the default encoder — far better speaker
+# separation than resemblyzer (EER ~0.8% vs ~5-8%). resemblyzer stays for its
+# preprocess_wav (VAD trim) and as SPEAKER_ENCODER=resemblyzer fallback.
 resemblyzer>=0.1.3
+speechbrain>=1.0.0
+
+# Noise suppression before STT (speaker-id always gets RAW audio).
+# deepfilternet: neural denoiser for STT_DENOISE_MODE=deepfilter; optional at
+# runtime — stt_service falls back to a scipy high-pass if absent.
+noisereduce>=3.0.0
+deepfilternet>=0.5.6
 
 # WebSocket support for streaming STT
 websockets>=12.0

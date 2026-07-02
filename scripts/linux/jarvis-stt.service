@@ -8,6 +8,35 @@ WorkingDirectory=%h/jarvis-linux/backend/voice/python
 ExecStart=%h/jarvis-linux/backend/voice/python/.venv/bin/python stt_service.py
 Restart=on-failure
 RestartSec=5
+Environment=LD_LIBRARY_PATH=%h/jarvis-linux/backend/voice/python/.venv/lib/python3.11/site-packages/nvidia/cublas/lib:%h/jarvis-linux/backend/voice/python/.venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib
+# GPU path: TTS migrated to cloud edge-tts, freeing VRAM, so STT runs the FULL
+# large-v3 on the RTX 3050 — better Spanish accuracy than the distilled turbo.
+# compute=int8_float16 (int8 weights, fp16 math) keeps it to ~1.8 GB VRAM so it
+# fits the 4 GB card; full float16 OOMs (~3.1 GB + CUDA/cublas overhead > 4 GB).
+# speaker-id runs on CPU (SPEAKER_ID_DEVICE=cpu) to leave VRAM for whisper; on
+# OOM stt_service.py auto-steps down to turbo, then CPU.
+# Restart=on-failure + RestartSec recover the known suspend/resume CUDA
+# "invalid device ordinal" by relaunching. If VRAM contention returns, pin
+# WHISPER_MODEL=large-v3-turbo, or WHISPER_DEVICE=cpu / WHISPER_MODEL=small.
+Environment=WHISPER_DEVICE=cuda
+Environment=WHISPER_MODEL=large-v3
+Environment=WHISPER_COMPUTE=int8_float16
+Environment=SPEAKER_ID_DEVICE=cpu
+# Denoise mode: highpass | deepfilter | spectral | off. deepfilter = neural
+# denoise (DeepFilterNet, CPU real-time) feeding ONLY the whisper path —
+# speaker-id always gets raw audio, so denoise can't degrade identification.
+# Auto-falls back to highpass if deepfilternet isn't installed.
+Environment=STT_DENOISE_MODE=deepfilter
+# Speaker encoder: ecapa (default, best separation) | resemblyzer (legacy).
+# Changing this requires regenerating owner_voiceprint.enc
+# (scripts/create-voiceprint.sh) — WAV samples re-embed automatically.
+Environment=SPEAKER_ENCODER=ecapa
+Environment=JARVIS_OWNER_SPEAKER=santiago
+# Endpointing: chunks of silence (32ms each) before a segment finalizes.
+# 54 -> ~1.73s, wider than the default 38 (~1.22s) so a natural mid-thought
+# pause doesn't finalize early and make Jarvis answer before the user is done.
+# Barge-in still lets the user cut a reply short. Lower if latency feels off.
+Environment=STT_SILENCE_CHUNKS=54
 
 [Install]
 WantedBy=default.target

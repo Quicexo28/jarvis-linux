@@ -23,6 +23,7 @@ are ignored, and nothing is auto-migrated.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -38,14 +39,143 @@ NATIVE_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg"}
 SAMPLE_CAP = 50
 SAMPLE_MAX_SECONDS = 5.0
 
+# Online owner-voice adaptation (learn_sample).
+LEARN_MAX_EMB = 40          # max live embeddings per learned speaker (seed + recent)
+LEARN_MIN_INTERVAL_S = 6.0  # min gap between learned samples (anti-flood)
+
 CONFIG_FILENAME = "_config.json"
-DEFAULT_THRESHOLD = 0.70
-# Minimum gap between the best and second-best speaker scores to accept a match.
-MATCH_MARGIN = 0.06
+COHORT_DIRNAME = "_cohort"
+# Score a speaker by the MEAN of its top-K most similar reference embeddings,
+# not the single MAX. Max inflates with embedding count: with ~40 learned
+# refs, a noise/other-voice clip almost always grazes one of them and scores
+# high. Averaging the top few demands consistent similarity, so noise drops.
+MATCH_TOPK = 3
 # Minimum decoded length (samples @16kHz) for an utterance to be identified.
 IDENT_MIN_SAMPLES = 16000  # ~1.0 s
 # Minimum decoded length for an enrollment sample to count.
 ENROLL_MIN_SAMPLES = 8000  # ~0.5 s
+
+SAMPLE_RATE = 16000
+# Sliding-window identification: utterances at least MULTI_MIN_S long are also
+# scored per-window with majority vote, so a speaker change mid-utterance (or
+# two people talking over each other) is detected instead of producing one
+# blended, meaningless embedding.
+MULTI_MIN_S = 3.0
+WINDOW_S = 1.5
+HOP_S = 0.75
+
+# Cohort gate (AS-norm-lite): if a `_cohort/` dir with generic voices exists
+# under the samples root, the best speaker score must beat the cohort's score
+# by this margin. Noise / unknown voices that graze the owner's references also
+# graze the cohort, so they get rejected without touching per-speaker thresholds.
+COHORT_MARGIN = float(os.environ.get("SPEAKER_COHORT_MARGIN", "0.05"))
+
+
+# --- Encoder backends ---------------------------------------------------------
+#
+# resemblyzer (GE2E d-vector, 2019) and ECAPA-TDNN (SpeechBrain) produce
+# embeddings on different scales, so threshold/margin defaults are per-encoder.
+# ECAPA separates voices far better (EER ~0.8% vs ~5-8%); it is the default and
+# resemblyzer stays as fallback. Select with SPEAKER_ENCODER=ecapa|resemblyzer.
+
+class _ResemblyzerEncoder:
+    name = "resemblyzer"
+    dim = 256
+    default_threshold = 0.70
+    default_margin = 0.06
+    # Reference-consistency floor: an enrolled embedding whose mean similarity
+    # to the speaker's other references falls below this is junk (echo, noise,
+    # another voice that slipped past online learning) and gets excluded.
+    ref_floor = 0.55
+
+    def __init__(self, device: str):
+        from resemblyzer import VoiceEncoder
+        self._enc = VoiceEncoder(device=device)
+
+    def embed(self, wav: np.ndarray) -> np.ndarray:
+        return np.asarray(self._enc.embed_utterance(wav), dtype=np.float32)
+
+
+class _EcapaEncoder:
+    name = "ecapa"
+    dim = 192
+    default_threshold = 0.55
+    default_margin = 0.10
+    ref_floor = 0.30
+
+    def __init__(self, device: str):
+        import torch
+        from speechbrain.inference.speaker import EncoderClassifier
+        self._torch = torch
+        self._enc = EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            savedir=str(Path.home() / ".cache" / "jarvis" / "spkrec-ecapa-voxceleb"),
+            run_opts={"device": device},
+        )
+
+    def embed(self, wav: np.ndarray) -> np.ndarray:
+        with self._torch.no_grad():
+            t = self._torch.from_numpy(np.ascontiguousarray(wav, dtype=np.float32)).unsqueeze(0)
+            emb = self._enc.encode_batch(t).squeeze()
+        return emb.cpu().numpy().astype(np.float32)
+
+
+def filter_consistent(
+    embeddings: list[np.ndarray], floor: float, labels: Optional[list[str]] = None,
+    tag: str = "",
+) -> list[np.ndarray]:
+    """Drop reference embeddings inconsistent with the rest of the set.
+
+    A speaker's real references agree with each other; a junk reference (echo,
+    noise, another voice that slipped past online learning) sits far from the
+    cluster AND — critically — junk matches junk, so a couple of bad references
+    let noise clips score high. Mean-similarity-to-others below `floor` = out.
+    Needs >=4 references to judge; never drops below 3 survivors.
+    """
+    n = len(embeddings)
+    if n < 4:
+        return embeddings
+    M = np.array(embeddings) @ np.array(embeddings).T
+    keep, dropped = [], []
+    order = []
+    for i in range(n):
+        others_mean = float((M[i].sum() - M[i, i]) / (n - 1))
+        order.append((others_mean, i))
+    # Keep the most consistent first so we can guarantee >=3 survivors.
+    order.sort(reverse=True)
+    for rank, (mean_sim, i) in enumerate(order):
+        if mean_sim >= floor or rank < 3:
+            keep.append(i)
+        else:
+            dropped.append(i)
+    if dropped:
+        names = ", ".join(
+            (labels[i] if labels else f"#{i}") for i in sorted(dropped)
+        )
+        print(
+            f"[speaker_id] {tag}excluded {len(dropped)} inconsistent reference(s) "
+            f"(mean-sim < {floor:.2f}): {names}",
+            flush=True,
+        )
+    keep.sort()
+    return [embeddings[i] for i in keep]
+
+
+def make_encoder(device: str):
+    """Build the configured speaker encoder; fall back gracefully."""
+    requested = os.environ.get("SPEAKER_ENCODER", "ecapa").strip().lower()
+    order = ["ecapa", "resemblyzer"] if requested != "resemblyzer" else ["resemblyzer", "ecapa"]
+    last_err: Optional[Exception] = None
+    for kind in order:
+        cls = _EcapaEncoder if kind == "ecapa" else _ResemblyzerEncoder
+        try:
+            enc = cls(device)
+            print(f"[speaker_id] encoder={enc.name} dim={enc.dim} device={device}", flush=True)
+            return enc
+        except Exception as e:
+            last_err = e
+            print(f"[speaker_id] encoder '{kind}' unavailable ({e}); trying next", flush=True)
+    raise RuntimeError(f"No speaker encoder available: {last_err}")
 
 
 def _safe_name(name: str) -> str:
@@ -128,25 +258,34 @@ class SpeakerIdentifier:
     """Identifies which registered speaker (if any) is talking."""
 
     def __init__(self, root_dir: Path):
-        from resemblyzer import VoiceEncoder, preprocess_wav
+        from resemblyzer import preprocess_wav
 
         self.root_dir = Path(root_dir)
-        self.encoder = VoiceEncoder()
+        # Speaker-id runs on CPU by default: the embeddings are short clips and
+        # cheap, and keeping it off the GPU frees ~0.5 GB VRAM for the larger
+        # Whisper model (large-v3) on the 4 GB RTX 3050. Override with
+        # SPEAKER_ID_DEVICE=cuda if VRAM is plentiful.
+        device = os.environ.get("SPEAKER_ID_DEVICE", "cpu")
+        self.encoder = make_encoder(device)
+        self.default_threshold = float(
+            os.environ.get("SPEAKER_DEFAULT_THRESHOLD", str(self.encoder.default_threshold))
+        )
+        self.match_margin = float(
+            os.environ.get("SPEAKER_MATCH_MARGIN", str(self.encoder.default_margin))
+        )
+        # resemblyzer's preprocess_wav does loading + VAD trim + loudness norm;
+        # reused for both encoders so embeddings only see voiced audio.
         self._preprocess_wav = preprocess_wav
         # name -> { "embeddings": [np.ndarray, ...], "threshold": float }
         self.speakers: dict[str, dict] = {}
         # persisted per-speaker thresholds: { name: threshold }
         self._thresholds: dict[str, float] = {}
+        # background voices for the cohort gate (loaded from _cohort/, optional)
+        self.cohort: list[np.ndarray] = []
 
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self._load_config()
         self._load_all()
-
-        if not self.speakers:
-            raise FileNotFoundError(
-                f"No speaker samples found under {self.root_dir} — "
-                "record at least one from System panel"
-            )
 
     # ----------------------------------------------------------------- config --
 
@@ -188,7 +327,7 @@ class SpeakerIdentifier:
         return safe in self.speakers
 
     def _threshold_for(self, name: str) -> float:
-        return self._thresholds.get(name, DEFAULT_THRESHOLD)
+        return self._thresholds.get(name, self.default_threshold)
 
     # ------------------------------------------------------------------- load --
 
@@ -205,6 +344,10 @@ class SpeakerIdentifier:
                     "embeddings": embeddings,
                     "threshold": self._threshold_for(subdir.name),
                 }
+        cohort_dir = self.root_dir / COHORT_DIRNAME
+        self.cohort = self._embeddings_for_dir(cohort_dir) if cohort_dir.is_dir() else []
+        if self.cohort:
+            print(f"[speaker_id] cohort gate active ({len(self.cohort)} voices)", flush=True)
 
     def _embeddings_for_dir(self, speaker_dir: Path) -> list[np.ndarray]:
         samples = [
@@ -217,6 +360,7 @@ class SpeakerIdentifier:
             return []
 
         embeddings: list[np.ndarray] = []
+        labels: list[str] = []
         for sample_path in samples:
             try:
                 if sample_path.suffix.lower() in NATIVE_EXTENSIONS:
@@ -230,9 +374,18 @@ class SpeakerIdentifier:
                 continue
             if len(wav) < ENROLL_MIN_SAMPLES:
                 continue
-            emb = self.encoder.embed_utterance(wav)
+            emb = self.encoder.embed(wav)
             emb = emb / (np.linalg.norm(emb) + 1e-9)
             embeddings.append(emb)
+            labels.append(sample_path.name)
+
+        # The cohort is intentionally heterogeneous (many voices), so the
+        # consistency filter only applies to per-speaker reference sets.
+        if embeddings and speaker_dir.name != COHORT_DIRNAME:
+            embeddings = filter_consistent(
+                embeddings, self.encoder.ref_floor, labels,
+                tag=f"'{speaker_dir.name}': ",
+            )
 
         if embeddings:
             print(
@@ -243,6 +396,48 @@ class SpeakerIdentifier:
         return embeddings
 
     # ------------------------------------------------------------- management --
+
+    def inject_speaker(self, name: str, embeddings: list, threshold: Optional[float] = None, merge: bool = True) -> None:
+        """Inject pre-computed embeddings for a speaker (bypasses WAV loading).
+
+        When merge=True (default) and the speaker already has WAV-loaded embeddings,
+        the injected embeddings are prepended so the encrypted voiceprint always
+        contributes to identification.
+
+        Embeddings whose dimension doesn't match the active encoder are skipped:
+        a voiceprint generated with a different encoder is useless (and would
+        crash the dot products), so identification falls back to the WAV samples
+        until the voiceprint is regenerated.
+        """
+        safe = _safe_name(name)
+        if not safe or not embeddings:
+            return
+        if threshold is None:
+            threshold = self.default_threshold
+        new_embs = []
+        skipped = 0
+        for e in embeddings:
+            arr = np.array(e, dtype=np.float32)
+            if arr.shape[-1] != self.encoder.dim:
+                skipped += 1
+                continue
+            new_embs.append(arr / (np.linalg.norm(arr) + 1e-9))
+        if skipped:
+            print(
+                f"[speaker_id] '{safe}': skipped {skipped} injected embedding(s) with "
+                f"dim mismatch (encoder={self.encoder.name} expects {self.encoder.dim}) — "
+                "regenerate the voiceprint with scripts/create-voiceprint.sh",
+                flush=True,
+            )
+        if not new_embs:
+            return
+        if merge and safe in self.speakers:
+            existing = self.speakers[safe]["embeddings"]
+            new_embs = new_embs + existing
+        self.speakers[safe] = {
+            "embeddings": new_embs,
+            "threshold": self._thresholds.get(safe, threshold),
+        }
 
     def reload(self) -> int:
         self._load_config()
@@ -274,6 +469,69 @@ class SpeakerIdentifier:
         _enforce_cap(saved_path.parent)
 
         return saved_path
+
+    def learn_sample(self, name: str, audio: np.ndarray, sr: int) -> bool:
+        """Online adaptation: persist an accepted utterance as a new reference
+        for ``name`` and update the live embedding set so recognition keeps
+        improving as the owner talks. The seed embedding (index 0, the encrypted
+        voiceprint) is always kept; older learned embeddings are evicted FIFO
+        beyond LEARN_MAX_EMB. Rate-limited so a single monologue can't flood the
+        cap. Returns True if a sample was added.
+        """
+        import time as _time
+        safe = _safe_name(name)
+        if not safe or safe not in self.speakers:
+            return False
+        now = _time.time()
+        last = getattr(self, "_last_learn", {})
+        if now - last.get(safe, 0.0) < LEARN_MIN_INTERVAL_S:
+            return False
+
+        # Embed with the SAME preprocessing path as identification.
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            import soundfile as sf
+            sf.write(tmp.name, audio, sr, format="WAV")
+            tmp_path = tmp.name
+        try:
+            wav = self._preprocess_wav(Path(tmp_path))
+            emb = self._embedding_for_wav(wav)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+        if emb is None:
+            return False
+
+        # Consistency gate: a learned sample must agree with the existing
+        # references. Blocks the junk-feedback loop where one bad learned
+        # sample (echo, TV) drags the reference set toward noise.
+        refs = self.speakers[safe]["embeddings"]
+        if refs:
+            mean_sim = float(np.mean([np.dot(emb, r) for r in refs]))
+            if mean_sim < self.encoder.ref_floor:
+                print(
+                    f"[speaker_id] learn rejected: inconsistent with references "
+                    f"(mean-sim {mean_sim:.2f} < {self.encoder.ref_floor:.2f})",
+                    flush=True,
+                )
+                return False
+
+        # Persist to disk (survives restart, FIFO-capped by save_sample).
+        try:
+            import io, soundfile as sf
+            buf = io.BytesIO()
+            sf.write(buf, audio, sr, format="WAV")
+            self.save_sample(safe, buf.getvalue(), ".wav")
+        except Exception as e:
+            print(f"[speaker_id] learn persist failed: {e}", flush=True)
+
+        # Update live embeddings: keep seed at index 0 + most recent learned.
+        embs = self.speakers[safe]["embeddings"]
+        embs.append(emb)
+        if len(embs) > LEARN_MAX_EMB:
+            # drop the oldest LEARNED embedding (index 1), preserve the seed.
+            del embs[1]
+        last[safe] = now
+        self._last_learn = last
+        return True
 
     def enroll_speaker(self, name: str) -> bool:
         """Recompute embeddings for a single speaker. Returns True if loaded."""
@@ -331,13 +589,12 @@ class SpeakerIdentifier:
     def _embedding_for_wav(self, wav: np.ndarray) -> Optional[np.ndarray]:
         if len(wav) < IDENT_MIN_SAMPLES:
             return None
-        emb = self.encoder.embed_utterance(wav)
+        emb = self.encoder.embed(wav)
         return emb / (np.linalg.norm(emb) + 1e-9)
 
     def identify_file(self, audio_path: str) -> tuple[Optional[str], float]:
         wav = self._preprocess_wav(Path(audio_path))
-        emb = self._embedding_for_wav(wav)
-        return self._match(emb)
+        return self._identify_wav(wav)
 
     def identify_audio(self, audio: np.ndarray, sr: int) -> tuple[Optional[str], float]:
         import soundfile as sf
@@ -354,22 +611,76 @@ class SpeakerIdentifier:
             except Exception:
                 pass
 
+        return self._identify_wav(wav)
+
+    def _identify_wav(self, wav: np.ndarray) -> tuple[Optional[str], float]:
+        """Full-utterance match, refined by per-window majority vote on long clips.
+
+        One embedding over a long utterance blends everything in it: if two
+        people spoke, the blend matches nobody (or worse, the wrong person).
+        Windowed voting catches that — a majority of windows voting for a
+        DIFFERENT speaker than the full-clip match means mixed audio, reject.
+        A failed full-clip match can also be rescued when the windows agree.
+        """
         emb = self._embedding_for_wav(wav)
-        return self._match(emb)
+        name, score = self._match(emb)
+
+        if len(wav) < MULTI_MIN_S * SAMPLE_RATE:
+            return name, score
+
+        window = int(WINDOW_S * SAMPLE_RATE)
+        hop = int(HOP_S * SAMPLE_RATE)
+        votes: dict[Optional[str], list[float]] = {}
+        n_windows = 0
+        for start in range(0, len(wav) - window + 1, hop):
+            chunk = wav[start:start + window]
+            wemb = self.encoder.embed(chunk)
+            wemb = wemb / (np.linalg.norm(wemb) + 1e-9)
+            wname, wscore = self._match(wemb)
+            votes.setdefault(wname, []).append(wscore)
+            n_windows += 1
+        if not n_windows:
+            return name, score
+
+        top_name, top_scores = max(
+            votes.items(), key=lambda kv: (len(kv[1]), sum(kv[1]) / len(kv[1]))
+        )
+        majority = len(top_scores) * 2 > n_windows
+
+        if majority and top_name is not None:
+            vote_score = sum(top_scores) / len(top_scores)
+            if name is None:
+                # Full-clip embedding failed but the windows consistently agree.
+                return top_name, vote_score
+            if top_name == name:
+                return name, max(score, vote_score)
+            # Windows majority-vote a different speaker than the blend — mixed
+            # audio or a speaker change mid-utterance. Don't guess.
+            return None, score
+        if majority and top_name is None and name is not None:
+            # Most windows matched nobody: the full-clip match rode on a blend.
+            return None, score
+        return name, score
 
     def _match(self, emb: Optional[np.ndarray]) -> tuple[Optional[str], float]:
         if emb is None or not self.speakers:
             return None, 0.0
 
-        # Score each speaker by the MAX cosine similarity across their samples.
+        # Score each speaker by the MEAN of its top-K cosine similarities, so a
+        # noise clip that grazes a single reference can't fake a high score.
         scored: list[tuple[str, float, float]] = []
         for name, data in self.speakers.items():
-            best = 0.0
-            for owner_emb in data["embeddings"]:
-                score = float(np.dot(emb, owner_emb))
-                if score > best:
-                    best = score
+            sims = sorted(
+                (float(np.dot(emb, owner_emb)) for owner_emb in data["embeddings"]),
+                reverse=True,
+            )
+            if not sims:
+                continue
+            k = min(MATCH_TOPK, len(sims))
+            best = sum(sims[:k]) / k
             scored.append((name, best, data["threshold"]))
+        if not scored:
+            return None, 0.0
 
         scored.sort(key=lambda x: x[1], reverse=True)
         best_name, best_score, best_thr = scored[0]
@@ -379,7 +690,17 @@ class SpeakerIdentifier:
         if best_score < best_thr:
             return None, best_score
         # Reject ambiguous matches: top two speakers too close together.
-        if (best_score - second_score) < MATCH_MARGIN:
+        if (best_score - second_score) < self.match_margin:
             return None, best_score
+        # Cohort gate: an utterance that scores nearly as high against generic
+        # background voices as against the matched speaker is not a real match.
+        if self.cohort:
+            cohort_sims = sorted(
+                (float(np.dot(emb, c)) for c in self.cohort), reverse=True
+            )
+            k = min(MATCH_TOPK, len(cohort_sims))
+            cohort_score = sum(cohort_sims[:k]) / k
+            if (best_score - cohort_score) < COHORT_MARGIN:
+                return None, best_score
 
         return best_name, best_score
