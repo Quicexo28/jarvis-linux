@@ -172,6 +172,20 @@ const TOOLS = [
     method: 'GET', path: '/api/skills/time/now',
   },
 
+  /* ----- Mobile context (rutina del usuario via iPhone) ----- */
+  {
+    name: 'mobile_where',
+    description: 'Dónde está el usuario y estado actual de su celular (ubicación/lugar, batería, modo concentración, dormido/despierto). Úsalo para "¿dónde estoy?", "¿cuánta batería tengo?", "¿estoy en casa?".',
+    inputSchema: { type: 'object', properties: {} },
+    method: 'GET', path: '/api/skills/mobile/where',
+  },
+  {
+    name: 'mobile_routine',
+    description: 'Resumen de la rutina del día del usuario a partir de eventos del celular (llegadas/salidas de lugares, cargador, concentración, dormir/despertar). Úsalo para "resumen de mi rutina hoy", "¿qué he hecho hoy?". date opcional YYYY-MM-DD.',
+    inputSchema: { type: 'object', properties: { date: { type: 'string', description: 'Fecha YYYY-MM-DD (opcional, por defecto hoy)' } } },
+    method: 'GET', path: '/api/skills/mobile/routine',
+  },
+
   /* ----- Navigation ----- */
   {
     name: 'open_view',
@@ -244,6 +258,86 @@ const TOOLS = [
     method: 'POST', path: '/api/skills/system/sleep',
   },
   {
+    name: 'launch_app',
+    description: 'Abre una aplicación del sistema (GUI) en el escritorio del señor vía Hyprland. Úsalo cuando pida "abre/lanza/inicia" una app: "abre el navegador", "lanza la terminal", "abre los archivos", "abre spotify". Pasa el nombre amistoso ("navegador") o el binario directo ("firefox", "kitty"). Para navegador/archivos hay atajos; cualquier otro nombre se ejecuta tal cual.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'Nombre amistoso o binario de la app a abrir (ej. "navegador", "firefox", "kitty").' },
+      },
+      required: ['app'],
+    },
+    method: 'POST', path: '/api/skills/system/launch',
+  },
+  {
+    name: 'run_terminal',
+    description: 'Ejecuta un comando de terminal (shell) en la máquina del señor y devuelve stdout, stderr y código de salida. AUTO MODE: tienes autoridad para hacer lo que el señor pida en el sistema — instalar, mover archivos, consultar estado, encender/apagar servicios, lo que sea. Usa detach=true para procesos GUI o que no terminan (apps, servidores) — no espera salida. Para comandos normales (consultas, scripts) deja detach en false y razona sobre el resultado. Nunca leas rutas ni salida cruda en voz alta; resume en lenguaje natural.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Comando de shell a ejecutar (bash).' },
+        cwd: { type: 'string', description: 'Directorio de trabajo (opcional, default HOME).' },
+        detach: { type: 'boolean', description: 'true para lanzar desacoplado sin esperar salida (apps GUI, procesos largos).' },
+        timeout: { type: 'integer', description: 'Timeout en ms (opcional, default 30000, máx 300000).' },
+      },
+      required: ['command'],
+    },
+    method: 'POST', path: '/api/skills/system/terminal',
+  },
+  {
+    name: 'system_power',
+    description: 'Controla la energía del equipo del señor. action: off (apagar), reboot (reiniciar), suspend, lock, logout. "apaga el pc"→off, "reinicia"→reboot, "suspende"→suspend, "bloquea"→lock. SEGURO: off y reboot son irreversibles — la PRIMERA llamada (sin confirm) devuelve needs_confirm=true; NO lo repitas en bucle: pregúntale en voz al señor "¿confirmo que apago/reinicio?" y SOLO si dice que sí, vuelve a llamar con confirm=true. suspend/lock/logout no necesitan confirmación.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['off', 'reboot', 'suspend', 'lock', 'logout'] },
+        confirm: { type: 'boolean', description: 'true para ejecutar off/reboot tras confirmación verbal del señor. Omítelo en la primera llamada.' },
+      },
+      required: ['action'],
+    },
+    method: 'POST', path: '/api/skills/system/power',
+  },
+  {
+    name: 'system_volume',
+    description: 'Controla el volumen del sistema (PipeWire). action: up (subir), down (bajar), set (poner en value 0-100), mute (silenciar), unmute, toggle (alternar mute), get (consultar). "sube el volumen"→up, "bájale"→down, "pon el volumen en 30"→set value=30, "silencio"→mute. step opcional para up/down (default 5).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['up', 'down', 'set', 'mute', 'unmute', 'toggle', 'get'] },
+        value: { type: 'integer', description: 'Nivel 0-100 para action=set.' },
+        step: { type: 'integer', description: 'Paso 1-50 para up/down (default 5).' },
+      },
+      required: ['action'],
+    },
+    method: 'POST', path: '/api/skills/system/volume',
+  },
+  {
+    name: 'system_bluetooth',
+    description: 'Gestiona Bluetooth. action: status (estado), devices (emparejados), scan (buscar cercanos), connect/disconnect (target = nombre o MAC), on/off (encender/apagar adaptador). "qué dispositivos bluetooth hay"→devices, "conecta los audífonos"→connect target="audífonos", "busca dispositivos"→scan.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['status', 'devices', 'scan', 'connect', 'disconnect', 'on', 'off'] },
+        target: { type: 'string', description: 'Nombre (parcial) o MAC del dispositivo para connect/disconnect.' },
+      },
+      required: ['action'],
+    },
+    method: 'POST', path: '/api/skills/system/bluetooth',
+  },
+  {
+    name: 'system_process',
+    description: 'Inspecciona y cierra procesos. action: list (top por CPU), kill (cerrar por name — coincidencia parcial; protege procesos críticos del sistema y a Jarvis). "qué está consumiendo"→list, "cierra spotify"→kill name="spotify". No puede matar systemd/hyprland/pipewire/jarvis ni PIDs bajos.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'kill'] },
+        name: { type: 'string', description: 'Nombre del proceso a cerrar (para action=kill).' },
+      },
+      required: ['action'],
+    },
+    method: 'POST', path: '/api/skills/system/process',
+  },
+  {
     name: 'toggle_voice',
     description: 'Activa o desactiva la captura de voz (STT). Si enabled se omite, alterna. Usa esto cuando el señor pida "apaga la voz", "no me escuches un momento", "vuelve a escucharme".',
     inputSchema: {
@@ -282,11 +376,17 @@ const TOOLS = [
   },
   {
     name: 'obsidian_note_create',
-    description: 'Guarda una nota en Obsidian. Úsalo cuando el señor diga "toma nota", "guarda esto", "apúntame".',
+    description: 'Guarda una nota organizada en la bóveda Obsidian. Úsalo cuando el señor diga "toma nota", "guarda esto", "apúntame". Reglas: conocimiento por tema → "area" (fisica | ia | programacion | tema libre, se crea la carpeta); información de un proyecto → "project" (actualiza 02-Proyectos/<Proyecto>.md, nunca duplica); mediciones/sesiones/capítulos de una misma serie → "series" (subcarpeta con nota hub que enlaza cada entrada). Pasa SIEMPRE "aliases": cómo se menciona el tema hablando, en minúsculas — el auto-linker los usa para conectar el grafo.',
     inputSchema: {
       type: 'object',
       properties: {
         body: { type: 'string', description: 'Contenido de la nota' },
+        title: { type: 'string', description: 'Título descriptivo (el archivo sale en kebab-case de aquí)' },
+        area: { type: 'string', description: 'Tema de conocimiento: fisica | ia | programacion | otro tema libre' },
+        project: { type: 'string', description: 'Nombre del proyecto si la nota es información de un proyecto (ej. "Jarvis", "App-Entrenamiento")' },
+        series: { type: 'string', description: 'Nombre de la serie/experimento si la nota es una entrada de una serie (ej. "tiempo de vuelo")' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Tags del frontmatter (tema, subtema)' },
+        aliases: { type: 'array', items: { type: 'string' }, description: 'Cómo se menciona hablando, en minúsculas (obligatorio para el grafo)' },
         speaker_name: { type: 'string', description: 'Nombre del speaker (opcional)' },
       },
       required: ['body'],
@@ -383,30 +483,83 @@ const TOOLS = [
   /* ----- Visor 3D ----- */
   {
     name: 'show_3d',
-    description: 'Muestra el visor 3D de figuras matemáticas. kind="parametric" (superficie x/y/z en u,v, mathjs), kind="polytope" (hipercubo/cross N-D), o kind="implicit" (isosuperficie f(x,y,z)=isoValue por marching cubes — para superficies de Fermi, gyroides, metaballs). Ejemplos: toro = {kind:"parametric", x:"cos(u)*(2+cos(v))", y:"sin(u)*(2+cos(v))", z:"sin(v)", uRange:[0,6.28], vRange:[0,6.28]}. Teseracto = {kind:"polytope", type:"hypercube", dimension:4}. SUPERFICIE DE FERMI DEL COBRE (FCC, banda-s tight-binding, recortada a la 1ª zona de Brillouin) = {kind:"implicit", f:"-(cos(x)*cos(y)+cos(y)*cos(z)+cos(z)*cos(x))", isoValue:-0.5, bounds:[-3.1416,3.1416], brillouinZone:"fcc", title:"Superficie de Fermi — Cu"}. (isoValue cerca de -0.5 produce los cuellos en ⟨111⟩ que tocan los puntos L.) Para cerrar usa hide_3d.',
+    description: `Muestra el visor 3D matemático. Acepta UNA figura (campos al nivel superior) o VARIAS simultáneas en objects:[...], cada una con kind, color, opacity, position/rotation/scale propios (coordenadas matemáticas, z hacia arriba). scene:{axes,grid,title} añade ejes etiquetados y rejilla — NO los actives para figuras sueltas sin referencias posicionales exactas (auto-on ya cubre graph/vectors/plane/line); solo cuando las coordenadas importan o el usuario lo pide.
+KINDS: "primitive" (sólidos exactos shape=sphere|box|cylinder|cone|torus — para composiciones con tangencia/contención precisas), "parametric" (superficie x/y/z en u,v, mathjs), "polytope" (hipercubo/cross N-D animado, caras translúcidas y color por 4ª coordenada), "implicit" (isosuperficie f(x,y,z)=isoValue por marching cubes — Fermi, gyroides), "graph" (y=f(x) curva o z=f(x,y) superficie, autodetecta si f usa y), "curve" (curva paramétrica x(t),y(t),z(t)), "vectors" (flechas n-D proyectadas a R³, showSpan dibuja el span de v1,v2), "plane" (plano por normal+point o vectores u,v), "line" (recta point+direction).
+EJEMPLOS. Esferas concéntricas: {objects:[{kind:"primitive",shape:"sphere",radius:1,color:"#38d5ff",opacity:0.55},{kind:"primitive",shape:"sphere",radius:1.6,color:"#ff5f8f",opacity:0.3}]}. Cubo inscrito en cilindro (esquinas tocando la pared: radio=(lado/2)*sqrt(2)): {objects:[{kind:"primitive",shape:"cylinder",radius:1.4142,height:2,opacity:0.3},{kind:"primitive",shape:"box",size:[2,2,2],color:"#7cff6b",opacity:0.7}]}. Esferas tangentes: distancia entre centros = r1+r2 (usa position). Teseracto: {kind:"polytope",type:"hypercube",dimension:4,faces:true,speed:1}. Gráfica: {kind:"graph",f:"sin(x)/x",xRange:[-10,10]} (superficie: f:"sin(x)*cos(y)" + yRange). Espacio vectorial: {kind:"vectors",vectors:[[2,1,0],[0,1,2]],labels:["v1","v2"],showSpan:true} (vectores de dimensión >3 se proyectan). Recta: {kind:"line",point:[0,0,1],direction:[1,2,0]}. Plano: {kind:"plane",normal:[1,1,1]}. Fermi del cobre: {kind:"implicit",f:"-(cos(x)*cos(y)+cos(y)*cos(z)+cos(z)*cos(x))",isoValue:-0.5,bounds:[-3.1416,3.1416],brillouinZone:"fcc"}. Para añadir sin borrar usa add_3d; para cerrar, hide_3d.`,
     inputSchema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['parametric', 'polytope', 'implicit'], description: 'Tipo de figura' },
-        x: { type: 'string', description: '[parametric] expresión mathjs para x(u,v)' },
-        y: { type: 'string', description: '[parametric] expresión mathjs para y(u,v)' },
-        z: { type: 'string', description: '[parametric] expresión mathjs para z(u,v)' },
+        objects: { type: 'array', items: { type: 'object', description: 'Figura — mismos campos que el nivel superior (kind, color, position, ...)' }, description: 'Varias figuras simultáneas. Si se usa, ignora los campos de figura del nivel superior.' },
+        scene: {
+          type: 'object',
+          description: 'Opciones de escena',
+          properties: {
+            title: { type: 'string' },
+            axes: { type: 'boolean', description: 'Ejes x/y/z etiquetados (auto-on para graph/vectors/plane/line)' },
+            grid: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['xy', 'xz', 'yz'] }], description: 'Rejilla de referencia en ese plano (true = xy)' },
+            axisLength: { type: 'number', description: 'Longitud de los ejes, default 6' },
+          },
+        },
+        kind: { type: 'string', enum: ['parametric', 'polytope', 'implicit', 'primitive', 'curve', 'graph', 'vectors', 'plane', 'line'], description: 'Tipo de figura (modo una-sola-figura)' },
+        title: { type: 'string', description: 'Nombre de la figura (aparece en la leyenda)' },
+        color: { type: 'string', description: 'Color hex de la figura; sin él se asigna una paleta distinta por figura' },
+        opacity: { type: 'number', minimum: 0, maximum: 1, description: 'Translucidez — clave para figuras contenidas/solapadas' },
+        wireframe: { type: 'boolean', description: 'Malla de alambre en vez de sólido' },
+        position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Centro [x,y,z] en coords matemáticas (z arriba)' },
+        rotation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Euler [rx,ry,rz] en radianes' },
+        scale: { type: 'number', description: 'Factor de escala uniforme' },
+        x: { type: 'string', description: '[parametric|curve] mathjs x(u,v) o x(t)' },
+        y: { type: 'string', description: '[parametric|curve] mathjs y(u,v) o y(t)' },
+        z: { type: 'string', description: '[parametric|curve] mathjs z(u,v) o z(t)' },
         uRange: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[parametric] rango de u: [min, max]' },
         vRange: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[parametric] rango de v: [min, max]' },
-        segments: { type: 'integer', minimum: 8, maximum: 120, description: '[parametric] resolución de la malla, default 64' },
-        type: { type: 'string', enum: ['hypercube', 'cross'], description: '[polytope] tipo: hypercube (teseracto y más) o cross (ortoplex)' },
-        dimension: { type: 'integer', minimum: 2, maximum: 7, description: '[polytope] número de dimensiones (4 = teseracto)' },
-        f: { type: 'string', description: '[implicit] expresión mathjs f(x,y,z); se dibuja la isosuperficie f=isoValue. Para Fermi es la energía E(kx,ky,kz).' },
+        segments: { type: 'integer', minimum: 8, maximum: 120, description: '[parametric|graph] resolución de malla' },
+        type: { type: 'string', enum: ['hypercube', 'cross'], description: '[polytope] hypercube (teseracto y más) o cross (ortoplex)' },
+        dimension: { type: 'integer', minimum: 2, maximum: 7, description: '[polytope] dimensiones (4 = teseracto)' },
+        faces: { type: 'boolean', description: '[polytope] caras 2D translúcidas (default: sí en hipercubos 4D+)' },
+        speed: { type: 'number', description: '[polytope] multiplicador de la rotación N-D (0 = congelar)' },
+        colorByW: { type: 'boolean', description: '[polytope] colorear por la 4ª coordenada (default: sí en 4D+)' },
+        f: { type: 'string', description: '[implicit] f(x,y,z) para isosuperficie · [graph] f(x) o f(x,y)' },
         isoValue: { type: 'number', description: '[implicit] valor de la isosuperficie (nivel de Fermi)' },
-        bounds: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[implicit] caja de muestreo [min,max] por eje, default [-3.1416,3.1416]' },
-        resolution: { type: 'integer', minimum: 8, maximum: 64, description: '[implicit] celdas por eje del marching cubes, default 40' },
-        brillouinZone: { type: 'string', enum: ['fcc', 'bcc', 'sc'], description: '[implicit] recorta a la 1ª zona de Brillouin de esta red (fcc=cobre, octaedro truncado)' },
-        title: { type: 'string', description: 'Título a mostrar en el visor' },
-        color: { type: 'string', description: 'color hex (parametric "#38d5ff", implicit "#ffb347")' },
+        bounds: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[implicit] caja de muestreo [min,max] por eje' },
+        resolution: { type: 'integer', minimum: 8, maximum: 64, description: '[implicit] celdas del marching cubes, default 40' },
+        brillouinZone: { type: 'string', enum: ['fcc', 'bcc', 'sc'], description: '[implicit] recorta a la 1ª zona de Brillouin' },
+        shape: { type: 'string', enum: ['sphere', 'box', 'cylinder', 'cone', 'torus'], description: '[primitive] sólido exacto' },
+        radius: { type: 'number', description: '[primitive] radio (torus: radio mayor)' },
+        size: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[primitive box] lados [sx,sy,sz]' },
+        height: { type: 'number', description: '[primitive cylinder|cone] altura (eje = z matemático)' },
+        tube: { type: 'number', description: '[primitive torus] radio del tubo' },
+        tRange: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[curve] rango del parámetro t' },
+        samples: { type: 'integer', minimum: 16, maximum: 1024, description: '[curve|graph] puntos de muestreo' },
+        xRange: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[graph] rango de x, default [-6,6]' },
+        yRange: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[graph] rango de y (superficies)' },
+        vectors: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: '[vectors] lista de vectores, cualquier dimensión (>3 se proyecta)' },
+        labels: { type: 'array', items: { type: 'string' }, description: '[vectors] etiqueta por vector' },
+        colors: { type: 'array', items: { type: 'string' }, description: '[vectors] color por vector' },
+        origin: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[vectors] origen de las flechas' },
+        showSpan: { type: 'boolean', description: '[vectors] dibuja span(v1,v2) como retícula + plano' },
+        point: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[plane|line] punto por el que pasa' },
+        normal: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[plane] vector normal' },
+        u: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[plane] vector director 1 (alternativa a normal)' },
+        v: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[plane] vector director 2' },
+        direction: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[line] vector director' },
+        length: { type: 'number', description: '[line] longitud dibujada, default 24' },
+        arrow: { type: 'boolean', description: '[line] punta de flecha en el extremo positivo' },
       },
-      required: ['kind'],
     },
     method: 'POST', path: '/api/skills/model3d/show',
+  },
+  {
+    name: 'add_3d',
+    description: 'Añade una o más figuras a la escena 3D actual SIN borrar las existentes (mismos campos que show_3d: figura única al nivel superior u objects:[...]). Úsalo para construir composiciones incrementales: "añade otra esfera", "ahora mete un plano". Si el visor está cerrado, lo abre.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        objects: { type: 'array', items: { type: 'object', description: 'Figura — mismos campos que show_3d' }, description: 'Figuras a añadir' },
+        kind: { type: 'string', enum: ['parametric', 'polytope', 'implicit', 'primitive', 'curve', 'graph', 'vectors', 'plane', 'line'], description: 'Tipo (modo una-sola-figura; el resto de campos como en show_3d)' },
+      },
+    },
+    method: 'POST', path: '/api/skills/model3d/add',
   },
   {
     name: 'hide_3d',
@@ -441,18 +594,137 @@ const TOOLS = [
     },
     method: 'GET', path: '/api/skills/cloud/list',
   },
+
+  // ---- Distributed agents (remote machines over Tailscale) ----
+  // remote_* bridge to /api/agents/*. `transform` reshapes the flat tool args
+  // into the hub's { machine, op: { op, params } } RPC envelope.
+  {
+    name: 'remote_machines',
+    description: 'Lista las máquinas remotas (agentes) conectadas al cerebro y sus capacidades. Úsalo antes de un comando remoto para saber qué máquinas hay ("main", etc.) y si están en línea.',
+    inputSchema: { type: 'object', properties: {} },
+    method: 'GET', path: '/api/agents/list',
+  },
+  {
+    name: 'remote_sysinfo',
+    description: 'Info de sistema (CPU, RAM, disco, uptime) de una máquina remota. Ej: remote_sysinfo(machine="main").',
+    inputSchema: {
+      type: 'object',
+      properties: { machine: { type: 'string', description: 'Nombre de la máquina, ej "main"' } },
+      required: ['machine'],
+    },
+    method: 'POST', path: '/api/agents/rpc',
+    transform: (a) => ({ machine: a.machine, op: { op: 'sys_info' } }),
+  },
+  {
+    name: 'remote_search',
+    description: 'Busca archivos por nombre en una máquina remota (Everything en Windows, fallback walkdir). Ej: remote_search(machine="main", query="informe.pdf").',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        machine: { type: 'string', description: 'Nombre de la máquina, ej "main"' },
+        query:   { type: 'string', description: 'Texto a buscar en nombres de archivo' },
+        max_results: { type: 'integer', minimum: 1, maximum: 500, description: 'Máximo de resultados (opcional)' },
+      },
+      required: ['machine', 'query'],
+    },
+    method: 'POST', path: '/api/agents/rpc',
+    transform: (a) => ({
+      machine: a.machine,
+      op: { op: 'search', params: { query: a.query, root: null, max_results: a.max_results ?? null } },
+    }),
+  },
+  {
+    name: 'remote_exec',
+    description: 'Ejecuta un comando en una máquina remota y devuelve stdout/stderr/exit code. Requiere que el agente tenga exec habilitado en su allowlist local. Ej: remote_exec(machine="main", command="ipconfig").',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        machine: { type: 'string', description: 'Nombre de la máquina, ej "main"' },
+        command: { type: 'string', description: 'Ejecutable o comando' },
+        args:    { type: 'array', items: { type: 'string' }, description: 'Argumentos (opcional)' },
+        timeout_ms: { type: 'integer', minimum: 1000, description: 'Timeout en ms (opcional)' },
+      },
+      required: ['machine', 'command'],
+    },
+    method: 'POST', path: '/api/agents/rpc',
+    transform: (a) => ({
+      machine: a.machine,
+      op: { op: 'exec', params: { command: a.command, args: a.args ?? [], cwd: null, timeout_ms: a.timeout_ms ?? null, stream: false } },
+    }),
+  },
+  {
+    name: 'remote_read_file',
+    description: 'Lee un archivo de una máquina remota y devuelve su contenido (texto UTF-8). Ej: remote_read_file(machine="main", path="C:\\\\Users\\\\santi\\\\nota.txt"). Para archivos grandes usa offset/length.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        machine: { type: 'string', description: 'Nombre de la máquina, ej "main"' },
+        path:    { type: 'string', description: 'Ruta absoluta en la máquina remota' },
+        offset:  { type: 'integer', minimum: 0, description: 'Byte de inicio (opcional, para paginar)' },
+        length:  { type: 'integer', minimum: 1, description: 'Bytes a leer (opcional, máx 4 MiB)' },
+      },
+      required: ['machine', 'path'],
+    },
+    method: 'POST', path: '/api/agents/rpc',
+    // The agent opens path.raw as-is; `os` is metadata it ignores for fs ops.
+    transform: (a) => ({
+      machine: a.machine,
+      op: { op: 'read_file', params: { path: { raw: a.path, os: a.os ?? 'Windows' }, offset: a.offset ?? null, length: a.length ?? null } },
+    }),
+    // Decode the base64 payload into text so the model reads the file directly.
+    postTransform: (r) => {
+      try {
+        if (r?.result?.status === 'read_file' && typeof r.result.data_base64 === 'string') {
+          r.result.text = Buffer.from(r.result.data_base64, 'base64').toString('utf8')
+        }
+      } catch { /* leave base64 as-is */ }
+      return r
+    },
+  },
+  {
+    name: 'remote_write_file',
+    description: 'Escribe (crea o sobrescribe) un archivo de texto en una máquina remota. Requiere write_file habilitado en la allowlist del agente. Ej: remote_write_file(machine="main", path="C:\\\\tmp\\\\x.txt", content="hola"). append=true para añadir al final.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        machine: { type: 'string', description: 'Nombre de la máquina, ej "main"' },
+        path:    { type: 'string', description: 'Ruta absoluta destino en la máquina remota' },
+        content: { type: 'string', description: 'Contenido de texto a escribir' },
+        append:  { type: 'boolean', description: 'true = añadir al final; false = sobrescribir (por defecto)' },
+      },
+      required: ['machine', 'path', 'content'],
+    },
+    method: 'POST', path: '/api/agents/rpc',
+    transform: (a) => ({
+      machine: a.machine,
+      op: { op: 'write_file', params: { path: { raw: a.path, os: a.os ?? 'Windows' }, data_base64: Buffer.from(a.content ?? '', 'utf8').toString('base64'), append: a.append ?? false } },
+    }),
+  },
+  {
+    name: 'remote_wake',
+    description: 'Despierta una máquina remota apagada/suspendida por Wake-on-LAN (usa las MACs que el agente registró). Solo funciona si la máquina está en la MISMA red LAN que el portátil (el magic packet no viaja por Tailscale). Ej: remote_wake(machine="main").',
+    inputSchema: {
+      type: 'object',
+      properties: { machine: { type: 'string', description: 'Nombre de la máquina, ej "main"' } },
+      required: ['machine'],
+    },
+    method: 'POST', path: '/api/agents/wake',
+  },
 ]
 
 const TOOL_BY_NAME = Object.fromEntries(TOOLS.map((t) => [t.name, t]))
 
 async function callBackend(tool, args) {
   let url = `${BACKEND}${tool.path}`
+  // Tools may reshape flat args into the backend's expected body (e.g. remote_*
+  // wrapping into the hub RPC envelope).
+  const payload = tool.transform ? tool.transform(args || {}) : (args || {})
   const init = {
     method: tool.method,
     headers: { 'Content-Type': 'application/json' },
   }
   if (tool.method !== 'GET') {
-    init.body = JSON.stringify(args || {})
+    init.body = JSON.stringify(payload)
   } else if (args && Object.keys(args).length > 0) {
     url += '?' + new URLSearchParams(
       Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)]))
@@ -466,7 +738,7 @@ async function callBackend(tool, args) {
     const err = (data && (data.error || data.detail)) || `http_${res.status}`
     throw new Error(err)
   }
-  return data
+  return tool.postTransform ? tool.postTransform(data) : data
 }
 
 const server = new Server(

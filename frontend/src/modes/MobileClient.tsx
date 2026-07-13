@@ -43,7 +43,11 @@ export function MobileClient() {
   const [sending, setSending]     = useState(false)
   const [online, setOnline]       = useState<boolean | null>(null)
   const [telemetry, setTelemetry] = useState<SystemTelemetry | null>(null)
+  const [geoStatus, setGeoStatus] = useState<'off' | 'on' | 'denied'>('off')
+  const [place, setPlace]         = useState<string | null>(null)
   const recognitionRef            = useRef<any>(null)
+  const geoWatchRef               = useRef<number | null>(null)
+  const lastGeoSentRef            = useRef(0)
 
   const pushMsg = (role: ChatMessage['role'], text: string) =>
     setMessages((prev) => [...prev.slice(-9), { id: ++msgIdCounter, role, text }])
@@ -94,6 +98,71 @@ export function MobileClient() {
 
   // Cleanup voice recognition on unmount
   useEffect(() => () => { recognitionRef.current?.stop() }, [])
+
+  // Which device this page runs on, so phone and tablet don't mask each other.
+  const CTX_DEVICE = /Android/i.test(navigator.userAgent) ? 'tablet' : 'iphone'
+
+  // Foreground location reporting. iOS requires a user gesture to grant the
+  // geolocation permission, so this is wired to a button. Throttled to ~60s.
+  const enableLocation = useCallback(() => {
+    if (!navigator.geolocation) { setGeoStatus('denied'); return }
+    if (geoWatchRef.current != null) return
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
+        setGeoStatus('on')
+        const now = Date.now()
+        if (now - lastGeoSentRef.current < 60_000) return
+        lastGeoSentRef.current = now
+        const { latitude, longitude, accuracy } = pos.coords
+        request('/api/mobile/ctx/location', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lat: latitude, lon: longitude, accuracy, source: 'web', device: CTX_DEVICE }),
+        }).catch(() => {})
+      },
+      () => setGeoStatus('denied'),
+      { enableHighAccuracy: false, maximumAge: 30_000, timeout: 20_000 },
+    )
+    geoWatchRef.current = id
+  }, [])
+
+  // Stop watching position on unmount.
+  useEffect(() => () => {
+    if (geoWatchRef.current != null) navigator.geolocation.clearWatch(geoWatchRef.current)
+  }, [])
+
+  // Report foreground presence (visible/hidden) so Jarvis infers when the phone
+  // is in use. Fires on mount, on visibility change, and every 60s.
+  useEffect(() => {
+    const report = () => {
+      request('/api/mobile/ctx/presence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ foreground: document.visibilityState === 'visible', device: CTX_DEVICE }),
+      }).catch(() => {})
+    }
+    report()
+    document.addEventListener('visibilitychange', report)
+    const timer = setInterval(report, 60_000)
+    return () => { document.removeEventListener('visibilitychange', report); clearInterval(timer) }
+  }, [])
+
+  // Pull current location/place for display.
+  useEffect(() => {
+    let cancelled = false
+    const pull = async () => {
+      try {
+        const r = await request<{ ok: boolean; current: any }>('/api/mobile/ctx/current')
+        const loc = r.current?.location
+        if (!cancelled) {
+          setPlace(loc?.place ?? (loc ? `${loc.lat?.toFixed(3)}, ${loc.lon?.toFixed(3)}` : null))
+        }
+      } catch {}
+    }
+    pull()
+    const timer = setInterval(pull, 60_000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [])
 
   // Poll telemetry every 30s
   useEffect(() => {
@@ -167,6 +236,18 @@ export function MobileClient() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Location */}
+      <div style={S.section}>
+        <div style={S.label}>UBICACION</div>
+        {geoStatus === 'on' ? (
+          <div style={{ opacity: 0.7 }}>{place ?? 'Obteniendo posición...'}</div>
+        ) : geoStatus === 'denied' ? (
+          <div style={{ opacity: 0.4 }}>Permiso de ubicación denegado.</div>
+        ) : (
+          <button style={S.btn} onClick={enableLocation}>Activar ubicación</button>
+        )}
       </div>
 
       {/* System stats */}

@@ -25,6 +25,8 @@ const MIME = {
   '.glb':   'model/gltf-binary',
   '.wav':   'audio/wav',
   '.mp3':   'audio/mpeg',
+  '.wasm':  'application/wasm',
+  '.webmanifest': 'application/manifest+json',
 }
 
 /**

@@ -13,7 +13,8 @@
 // buffered OR 600 ms have elapsed since the first chunk (whichever first),
 // so short replies still start fast.
 
-import workletUrl from './pcm-stream-worklet.js?url'
+import workletSrc from './pcm-stream-worklet.js?raw'
+import { ttsBusStart, ttsBusLevels, ttsBusEnd } from './ttsLevelBus'
 
 const XTTS_SAMPLE_RATE = 24000
 const PREROLL_BUFFERED_MS = 100
@@ -24,6 +25,7 @@ let workletReady: Promise<void> | null = null
 // Master gain node — all TTS worklet nodes route through this so we can duck
 // the volume while the user is speaking without touching individual sentences.
 let masterGain: GainNode | null = null
+
 
 /**
  * Public accessor for the single shared AudioContext + worklet so other
@@ -68,7 +70,13 @@ async function getCtx(): Promise<AudioContext> {
     } catch {
       sharedCtx = new Ctor() as AudioContext
     }
-    workletReady = sharedCtx.audioWorklet.addModule(workletUrl)
+    // Use a Blob URL so WebKitGTK (Tauri) can load the module regardless of
+    // the page scheme (tauri:// blocks addModule() with file-like URLs).
+    const blob = new Blob([workletSrc], { type: 'application/javascript' })
+    const blobUrl = URL.createObjectURL(blob)
+    workletReady = sharedCtx.audioWorklet.addModule(blobUrl)
+      .then(() => URL.revokeObjectURL(blobUrl))
+      .catch((e) => { URL.revokeObjectURL(blobUrl); console.error('[tts-worklet] addModule failed:', e); throw e })
     // Create master gain routed to destination — recreated with ctx.
     masterGain = sharedCtx.createGain()
     masterGain.gain.value = 1.0
@@ -99,6 +107,83 @@ interface StreamOptions {
 function toWsUrl(httpOrWs: string): string {
   if (httpOrWs.startsWith('ws://') || httpOrWs.startsWith('wss://')) return httpOrWs
   return httpOrWs.replace(/^http/, 'ws')
+}
+
+export interface TtsSession {
+  /** Enqueue a sentence. Synthesized + played server-side, gaplessly after prior. */
+  speak: (text: string) => void
+  /** Signal no more sentences; player finishes the queue then closes. */
+  end: () => void
+  /** Resolves when the whole reply has finished playing (or aborted). */
+  done: Promise<void>
+}
+
+/**
+ * Persistent multi-sentence TTS over ONE WebSocket. The backend keeps a single
+ * paplay process alive for the whole turn and pipes each sentence into it
+ * serially — gapless between sentences, no overlap, no respawn dead-air.
+ *
+ * Real audio plays server-side (PipeWire). This client only relays text and
+ * waits for {type:"end"}; the silent watchdog frame from the server is ignored.
+ */
+export function streamTtsSession(opts: {
+  url: string
+  lang?: string
+  fx?: boolean
+  speed?: number
+  signal?: AbortSignal
+}): TtsSession {
+  const { url, lang = 'es', fx = false, speed, signal } = opts
+  const ws = new WebSocket(toWsUrl(url))
+  ws.binaryType = 'arraybuffer'
+
+  let open = false
+  let ended = false
+  const pending: string[] = []
+
+  let resolveDone!: () => void
+  let rejectDone!: (e: Error) => void
+  const done = new Promise<void>((res, rej) => { resolveDone = res; rejectDone = rej })
+
+  const sendRaw = (obj: unknown) => { try { ws.send(JSON.stringify(obj)) } catch {} }
+  const sendSentence = (text: string) =>
+    sendRaw({ text, lang, fx, ...(speed !== undefined ? { speed } : {}) })
+
+  ws.onopen = () => {
+    open = true
+    for (const t of pending) sendSentence(t)
+    pending.length = 0
+    if (ended) sendRaw({ type: 'end' })
+  }
+
+  ws.onmessage = (ev) => {
+    if (typeof ev.data !== 'string') return // ignore silent watchdog frame
+    try {
+      const msg = JSON.parse(ev.data)
+      if (msg.type === 'start') { ttsBusStart() }
+      else if (msg.type === 'levels') { ttsBusLevels(msg.t0, msg.dt, msg.v) }
+      else if (msg.type === 'end') { ttsBusEnd(); resolveDone(); try { ws.close() } catch {} }
+      else if (msg.type === 'error') { ttsBusEnd(); rejectDone(new Error(`tts ${msg.error || 'error'}`)); try { ws.close() } catch {} }
+    } catch { /* ignore */ }
+  }
+  ws.onerror = () => { ttsBusEnd(); rejectDone(new Error('tts ws_error')) }
+  ws.onclose = () => { ttsBusEnd(); resolveDone() } // settle if server closed without explicit end
+
+  const onAbort = () => { ttsBusEnd(); sendRaw({ type: 'abort' }); try { ws.close() } catch {}; resolveDone() }
+  signal?.addEventListener('abort', onAbort, { once: true })
+
+  return {
+    speak: (text: string) => {
+      if (!text) return
+      if (open) sendSentence(text)
+      else pending.push(text)
+    },
+    end: () => {
+      ended = true
+      if (open) sendRaw({ type: 'end' })
+    },
+    done,
+  }
 }
 
 export async function streamTtsAndPlay(opts: StreamOptions): Promise<void> {
@@ -139,13 +224,12 @@ export async function streamTtsAndPlay(opts: StreamOptions): Promise<void> {
     }
   }, 9000)
 
-  // Release the worklet to start draining its buffer (it's been emitting silence
-  // while buffering). Gated on the previous sentence finishing so playback is
-  // gapless without overlap.
+  // Release the worklet to start draining its buffer.
   let played = false
   const startPlayback = () => {
     if (played) return
     played = true
+    ttsBusStart()
     try { node.port.postMessage('__play__') } catch {}
   }
   // Connect the node immediately so the worklet runs and buffers frames; it stays
@@ -171,6 +255,7 @@ export async function streamTtsAndPlay(opts: StreamOptions): Promise<void> {
     const data = ev.data
     if (data === '__drained__') {
       console.log('[tts-stream] drained')
+      ttsBusEnd()
       try { node.disconnect() } catch {}
       resolveDone?.()
       return
@@ -185,6 +270,7 @@ export async function streamTtsAndPlay(opts: StreamOptions): Promise<void> {
   }
 
   const onAbort = () => {
+    ttsBusEnd()
     try { ws.send(JSON.stringify({ type: 'abort' })) } catch {}
     try { ws.close() } catch {}
     // Disconnect immediately instead of posting '__end__': '__end__' lets the
@@ -201,6 +287,9 @@ export async function streamTtsAndPlay(opts: StreamOptions): Promise<void> {
     console.log('[tts-stream] ws open')
     try {
       ws.send(JSON.stringify({ text, lang, fx, ...(speed !== undefined ? { speed } : {}) }))
+      // Single-shot: tell the persistent-player backend no more sentences follow,
+      // so it ends the paplay process after this one and emits {type:"end"}.
+      ws.send(JSON.stringify({ type: 'end' }))
     } catch (e) {
       rejectDone?.(e as Error)
     }
@@ -237,6 +326,14 @@ export async function streamTtsAndPlay(opts: StreamOptions): Promise<void> {
       return
     }
     const samples = new Float32Array(ab)
+    // Browser-played path has the real PCM in hand: derive the hologram
+    // envelope locally (one RMS value per frame, on the buffered timeline).
+    if (samples.length) {
+      let sum = 0
+      for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i]
+      const rms = Math.min(1, Math.sqrt(sum / samples.length) * 3.5)
+      ttsBusLevels(bufferedSamples / XTTS_SAMPLE_RATE, samples.length / XTTS_SAMPLE_RATE, [rms])
+    }
     node.port.postMessage(samples, [samples.buffer])
     bufferedSamples += samples.length
     frameCount += 1

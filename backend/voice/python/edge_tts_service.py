@@ -64,6 +64,60 @@ FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
 JARVIS_NAME_RE = re.compile(r'\b[Jj][Aa][Rr][Vv][Ii][Ss]\b')
 
+# ── Language handling for the multilingual voice ─────────────────────────────
+# The *Multilingual* voices (Andrew, Emma, …) auto-detect each utterance's
+# language from its text. That is GREAT for Spanish sentences sprinkled with
+# English tech words ("conecté el bluetooth") — the loanword stays English — but
+# on short/ambiguous ALL-Spanish replies ("Sí, señor.", "Listo.") the detector
+# guessed English and spoke them with English phonetics.
+#
+# edge-tts hardcodes the SSML wrapper `<speak xml:lang='en-US'>`, so the detector
+# falls back to ENGLISH when unsure. The free Read-Aloud endpoint REJECTS an
+# inner `<lang>` hard-lock (NoAudioReceived) but ACCEPTS a changed OUTER xml:lang,
+# which measurably shifts pronunciation (verified: es-CO output ≠ en-US, and it
+# also re-accents English words like "bluetooth"). So we stamp a Spanish locale
+# on the outer wrapper — EXCEPT when the utterance contains a word we deliberately
+# want kept in English (wifi, bluetooth, brand names); for those we leave en-US
+# and let auto-detect do its mixed-language thing. Net effect per sentence:
+#   plain Spanish reply        -> forced Spanish   (fixes the mis-detect bug)
+#   reply with a tech loanword -> auto-detect      (loanword stays English)
+# EDGE_TTS_SSML_LANG overrides the locale (any Spanish works: es-CO/es-MX/es-ES).
+# EDGE_TTS_KEEP_EN is the comma-separated English-word whitelist.
+SSML_LANG = os.environ.get('EDGE_TTS_SSML_LANG', 'es-CO')
+_KEEP_EN = [w.strip().lower() for w in os.environ.get(
+    'EDGE_TTS_KEEP_EN',
+    'wifi,bluetooth,firefox,chrome,brave,spotify,telegram,whatsapp,gmail,'
+    'youtube,obsidian,hyprland,kitty,podcast,online,streaming,router,mouse',
+).split(',') if w.strip()]
+_KEEP_EN_RE = (
+    re.compile(r'\b(?:' + '|'.join(re.escape(w) for w in _KEEP_EN) + r')\b', re.IGNORECASE)
+    if _KEEP_EN else None
+)
+
+import edge_tts.communicate as _edge_communicate  # noqa: E402
+
+
+def _mkssml_forced_lang(tc, escaped_text):
+    if isinstance(escaped_text, (bytes, bytearray)):
+        escaped_text = bytes(escaped_text).decode('utf-8')
+    # Keep en-US (auto-detect) when a whitelisted English word is present so
+    # loanwords/brands render in English; otherwise force Spanish so short
+    # all-Spanish replies stop being mis-detected as English.
+    lang = 'en-US' if (_KEEP_EN_RE and _KEEP_EN_RE.search(escaped_text)) else SSML_LANG
+    return (
+        f"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{lang}'>"
+        f"<voice name='{tc.voice}'>"
+        f"<prosody pitch='{tc.pitch}' rate='{tc.rate}' volume='{tc.volume}'>"
+        f"{escaped_text}"
+        "</prosody>"
+        "</voice>"
+        "</speak>"
+    )
+
+
+_edge_communicate.mkssml = _mkssml_forced_lang
+print(f'[edge-tts] SSML lang={SSML_LANG}, keep-English={_KEEP_EN}', flush=True)
+
 
 def preprocess_text(text: str) -> str:
     if JARVIS_NAME_SUB and JARVIS_NAME_SUB.lower() != 'jarvis':

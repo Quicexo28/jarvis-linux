@@ -4,6 +4,9 @@ import { useGestureStore } from '../state/gestureStore'
 export function GestureMonitor() {
   const enabled = useGestureStore(s => s.enabled)
   const output = useGestureStore(s => s.output)
+  const status = useGestureStore(s => s.status)
+  const statusDetail = useGestureStore(s => s.statusDetail)
+  const fps = useGestureStore(s => s.fps)
   const [clickFlash, setClickFlash] = useState(false)
   const [backFlash, setBackFlash] = useState(false)
 
@@ -39,6 +42,21 @@ export function GestureMonitor() {
         <div style={{ fontSize: 10, color: 'var(--text-dim)', opacity: 0.7 }}>Gestos desactivados.</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+          {/* Pipeline status: starting / running (delegate + fps) / error */}
+          {status === 'starting' && (
+            <div style={{ fontSize: 9, color: '#ffd700' }}>Iniciando cámara y modelo…</div>
+          )}
+          {status === 'running' && (
+            <div style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'monospace' }}>
+              {statusDetail} · {fps} fps
+            </div>
+          )}
+          {status === 'error' && (
+            <div style={{ fontSize: 9, color: '#ff5252', lineHeight: 1.4 }}>
+              Error: {statusDetail}
+            </div>
+          )}
 
           {/* Hand detection status */}
           <div style={{ display: 'flex', gap: 16 }}>
@@ -102,9 +120,10 @@ export function GestureMonitor() {
                 <line x1={0} y1={crossSize / 2} x2={crossSize} y2={crossSize / 2} stroke="#ffffff15" strokeWidth={0.5} />
                 <circle cx={crossSize / 2} cy={crossSize / 2} r={crossSize / 2 - 2} fill="none" stroke="#ffffff08" strokeWidth={0.5} />
                 {output.point.active && (
+                  // screenX/Y ya vienen en coords de pantalla 0..1 (espejo aplicado en el hook)
                   <circle
-                    cx={crossSize / 2 + output.point.screenX * (crossSize / 2 - 4)}
-                    cy={crossSize / 2 + output.point.screenY * (crossSize / 2 - 4)}
+                    cx={4 + output.point.screenX * (crossSize - 8)}
+                    cy={4 + output.point.screenY * (crossSize - 8)}
                     r={4} fill="#64ffda" opacity={0.8}
                   />
                 )}

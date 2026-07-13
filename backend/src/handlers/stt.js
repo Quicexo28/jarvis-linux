@@ -74,6 +74,10 @@ export async function handleSttStreamUpgrade(req, socket, head) {
   wss.handleUpgrade(req, socket, head, (clientWs) => {
     const upstreamUrl = STT_URL.replace('http', 'ws') + '/stream'
     const upstream = new WsClient(upstreamUrl)
+    // Keepalive ping timer (browsers auto-pong): keeps a long-lived streaming
+    // socket from being reaped by any intermediary and surfaces a dead peer fast.
+    let pingTimer = null
+    const cleanup = () => { if (pingTimer) { clearInterval(pingTimer); pingTimer = null } }
 
     // Relay transcripts upstream -> client immediately (no race with 'open').
     upstream.on('message', (data) => {
@@ -88,6 +92,7 @@ export async function handleSttStreamUpgrade(req, socket, head) {
     let upstreamOpen = false
     upstream.on('open', () => {
       upstreamOpen = true
+      pingTimer = setInterval(() => { try { clientWs.ping() } catch {} }, 15000)
       for (const [d, b] of pending) {
         try { upstream.send(d, { binary: b }) } catch {}
       }
@@ -101,19 +106,33 @@ export async function handleSttStreamUpgrade(req, socket, head) {
       }
     })
 
-    upstream.on('error', () => {
+    // Close-cause diagnostics: log WHICH side tore the socket down and with what
+    // code. The frontend reconnect churn ("ws close 1000") is a clean close, not
+    // a crash — these lines reveal the true initiator (browser vs python) so the
+    // real trigger can be pinned from journald instead of guessed.
+    upstream.on('error', (err) => {
+      console.warn('[stt-proxy] upstream(python) error:', err?.message)
+      cleanup()
       try { clientWs.close(1011, 'upstream_error') } catch {}
     })
 
-    upstream.on('close', () => {
-      try { clientWs.close(1000) } catch {}
+    upstream.on('close', (code, reason) => {
+      console.log(`[stt-proxy] upstream(python) closed code=${code} reason=${reason?.toString?.() || '-'} -> closing client`)
+      cleanup()
+      // 1005/1006 aren't sendable close codes; fall back to a clean 1000.
+      const out = (code >= 1000 && code !== 1005 && code !== 1006) ? code : 1000
+      try { clientWs.close(out) } catch {}
     })
 
-    clientWs.on('close', () => {
+    clientWs.on('close', (code, reason) => {
+      console.log(`[stt-proxy] client(browser) closed code=${code} reason=${reason?.toString?.() || '-'} -> closing upstream`)
+      cleanup()
       try { upstream.close() } catch {}
     })
 
-    clientWs.on('error', () => {
+    clientWs.on('error', (err) => {
+      console.warn('[stt-proxy] client(browser) error:', err?.message)
+      cleanup()
       try { upstream.close() } catch {}
     })
   })

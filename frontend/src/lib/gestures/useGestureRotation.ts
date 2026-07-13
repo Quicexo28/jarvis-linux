@@ -48,7 +48,12 @@ export function useGestureRotation(
     enabled = true,
   } = opts
 
-  const output = useGestureStore(s => s.output)
+  // Selectores PRIMITIVOS, no `s.output`: el engine publica un objeto nuevo por
+  // frame (~25/s) — suscribirse al objeto re-renderizaba el host (AwakeApp
+  // entero) en cada frame aunque nada hubiera cambiado.
+  const grabActive = useGestureStore(s => s.output.grab.active)
+  const grabDeltaX = useGestureStore(s => s.output.grab.deltaX)
+  const grabDeltaY = useGestureStore(s => s.output.grab.deltaY)
 
   const frameRef = useRef<GestureRotationFrame>({
     deltaYaw: 0, deltaPitch: 0, grabActive: false, justReleased: false,
@@ -64,13 +69,12 @@ export function useGestureRotation(
       return
     }
 
-    const { grab } = output
     const wasGrabbing = prevGrabRef.current
-    const isGrabbing = grab.active
+    const isGrabbing = grabActive
 
     // Clutch engage: capture base position, reset smoothing state
     if (isGrabbing && !wasGrabbing) {
-      baseRef.current = { x: grab.deltaX, y: grab.deltaY }
+      baseRef.current = { x: grabDeltaX, y: grabDeltaY }
       smoothedRef.current = { x: 0, y: 0 }
       prevSmoothedRef.current = { x: 0, y: 0 }
     }
@@ -84,8 +88,8 @@ export function useGestureRotation(
     }
 
     // Delta from clutch base
-    const rawX = grab.deltaX - baseRef.current.x
-    const rawY = grab.deltaY - baseRef.current.y
+    const rawX = grabDeltaX - baseRef.current.x
+    const rawY = grabDeltaY - baseRef.current.y
 
     // EMA smoothing (reduces jitter from MediaPipe tracking noise)
     const newSX = applyEMA(smoothedRef.current.x, rawX, emaAlpha)
@@ -103,7 +107,7 @@ export function useGestureRotation(
     const finalY = applyNonLinear(applyDeadZone(dY, deadZone), nonLinearExp) * sensitivity
 
     frameRef.current = { deltaYaw: finalX, deltaPitch: finalY, grabActive: true, justReleased: false }
-  }, [output.grab.active, output.grab.deltaX, output.grab.deltaY, enabled, sensitivity, emaAlpha, deadZone, nonLinearExp])
+  }, [grabActive, grabDeltaX, grabDeltaY, enabled, sensitivity, emaAlpha, deadZone, nonLinearExp])
 
   return frameRef
 }

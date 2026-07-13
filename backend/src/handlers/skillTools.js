@@ -10,7 +10,10 @@
 
 import { json, readBody } from '../lib/http.js'
 import { requestClient as skillBusRequest, hasClient as skillBusHasClient } from '../lib/skillBus.js'
+import { broadcastWake } from '../lib/wakeSignal.js'
+import { broadcastPttStart, broadcastPttStop } from '../lib/pttBus.js'
 import { addReminder, listReminders } from '../lib/reminders.js'
+import { getCurrentState, getDevices, summarizeDay } from '../lib/mobileContext.js'
 import { notifyJarvis, saveToCloud, listCloudFiles } from '../lib/cloudStorage.js'
 import { runCommand, gitCheckpoint, gitRollback, scheduleRestart } from '../lib/selfCode.js'
 import { getSpeakerMode } from '../lib/speakerContext.js'
@@ -26,12 +29,19 @@ import {
 // All timer/chrono endpoints route through the renderer skill bus, where the
 // authoritative store lives. If no renderer is connected (DORMANT/LISTENING),
 // we fail explicitly so Claude can apologize instead of silently dropping.
+// Timestamp of the last UI action pushed to the renderer (display cards, views,
+// 3D, ring...). speech.js compares it against the turn start to catch replies
+// that claim "queda en pantalla" when no UI verb actually ran.
+let lastUiActionAt = 0
+export function getLastUiActionAt() { return lastUiActionAt }
+
 async function bridgeToBus(verb, payload, res) {
   if (!skillBusHasClient()) {
     return json(res, 503, { ok: false, error: 'renderer_not_connected', detail: 'La interfaz no está despierta.' })
   }
   try {
     const result = await skillBusRequest(verb, payload || {})
+    lastUiActionAt = Date.now()
     return json(res, 200, { ok: true, result })
   } catch (e) {
     return json(res, 500, { ok: false, error: 'skill_bus_failed', detail: e.message })
@@ -159,6 +169,39 @@ export async function handleReminderList(req, res) {
   return json(res, 200, { ok: true, result: { reminders: items } })
 }
 
+/* ----- MOBILE CONTEXT (rutina del usuario) ----- */
+
+export function handleMobileWhere(_req, res) {
+  const c = getCurrentState()
+  const loc = c.location
+  const result = {
+    place: loc?.place ?? null,
+    coords: loc ? { lat: loc.lat, lon: loc.lon } : null,
+    updatedAt: loc?.ts ?? null,
+    battery: c.battery ? { level: c.battery.level, charging: c.battery.charging } : null,
+    focus: c.focus?.mode ?? null,
+    sleep: c.sleep?.state ?? null,
+  }
+  // Per-device battery/place (iphone, tablet, ...) when any device has reported.
+  const devices = getDevices()
+  if (Object.keys(devices).length) {
+    result.devices = Object.fromEntries(
+      Object.entries(devices).map(([name, d]) => [name, {
+        battery: d.battery ? { level: d.battery.level, charging: d.battery.charging } : null,
+        place: d.location?.place ?? null,
+        updatedAt: d.battery?.ts ?? d.location?.ts ?? null,
+      }])
+    )
+  }
+  return json(res, 200, { ok: true, result })
+}
+
+export function handleMobileRoutine(req, res) {
+  let date = null
+  try { date = new URL(req.url, 'http://localhost').searchParams.get('date') } catch {}
+  return json(res, 200, { ok: true, result: { summary: summarizeDay(date || undefined) } })
+}
+
 /* ----- NOTIFY ----- */
 
 export async function handleNotifyNow(req, res) {
@@ -173,7 +216,7 @@ export async function handleNotifyNow(req, res) {
 /* ----- VIEW / NAVIGATION ----- */
 
 const VALID_VIEWS = ['home','house','plan2d','plan3d','space','cloud','system','mobile','utils','timer','chrono']
-const VALID_OVERLAYS = ['terminal','gesture_debug','gesture_trainer','clap_trainer','speaker_config']
+const VALID_OVERLAYS = ['terminal','gesture_debug','clap_trainer','speaker_config']
 
 export async function handleViewOpen(req, res) {
   return withBody(req, (body) => {
@@ -225,11 +268,26 @@ export async function handleSystemSleep(req, res) {
   return bridgeToBus('sleep_system', {}, res)
 }
 
+export async function handleSystemWake(_req, res) {
+  broadcastWake()
+  return json(res, 200, { ok: true })
+}
+
 export async function handleVoiceToggle(req, res) {
   return withBody(req, (body) => {
     const payload = typeof body.enabled === 'boolean' ? { enabled: body.enabled } : {}
     return bridgeToBus('toggle_voice', payload, res)
   }, res)
+}
+
+export async function handlePttStart(_req, res) {
+  broadcastPttStart()
+  return json(res, 200, { ok: true })
+}
+
+export async function handlePttStop(_req, res) {
+  broadcastPttStop()
+  return json(res, 200, { ok: true })
 }
 
 export async function handleClapToggle(req, res) {
@@ -280,7 +338,15 @@ export async function handleObsidianNoteCreate(req, res) {
     if (!text) return json(res, 400, { ok: false, error: 'missing_body' })
     const speakerName = body.speaker_name ? String(body.speaker_name) : null
     try {
-      const result = await writeNote(speakerName, { body: text })
+      const result = await writeNote(speakerName, {
+        body: text,
+        title: body.title ? String(body.title) : undefined,
+        area: body.area ? String(body.area) : undefined,
+        project: body.project ? String(body.project) : undefined,
+        series: body.series ? String(body.series) : undefined,
+        tags: Array.isArray(body.tags) ? body.tags : undefined,
+        aliases: Array.isArray(body.aliases) ? body.aliases : undefined,
+      })
       return json(res, 200, { ok: true, result })
     } catch (e) {
       return json(res, 500, { ok: false, error: 'obsidian_failed', detail: e.message })
@@ -330,11 +396,19 @@ export async function handleObsidianPersonalize(req, res) {
 
 /* ----- DISPLAY / PICKER ----- */
 
+// Timestamp of the last successful display_show request. speech.js reads it to
+// detect turns where the model CLAIMED "queda en pantalla" without actually
+// calling show_display (hallucinated compliance) and fires a corrective turn.
+let lastDisplayShowAt = 0
+export function getLastDisplayShowAt() { return lastDisplayShowAt }
+
 // Show a card on screen with content awkward to verbalize (path/url/formula/
 // text/markdown/candidates). Body is forwarded as the DisplayCardData.
 export async function handleDisplayShow(req, res) {
   return withBody(req, (body) => {
     if (!body || !body.kind) return json(res, 400, { ok: false, error: 'missing_kind' })
+    lastDisplayShowAt = Date.now()
+    console.log(`[display] show kind=${body.kind} title=${String(body.title ?? '').slice(0, 60)}`)
     return bridgeToBus('display_show', body, res)
   }, res)
 }
@@ -354,31 +428,28 @@ export async function handlePickFile(req, res) {
 
 /* ----- MODEL 3D ----- */
 
-const VALID_3D_KINDS = ['parametric', 'polytope', 'implicit']
+const VALID_3D_KINDS = ['parametric', 'polytope', 'implicit', 'primitive', 'curve', 'graph', 'vectors', 'plane', 'line']
+const KIND_DETAIL = `each spec.kind must be one of: ${VALID_3D_KINDS.join(', ')}`
+
+// Accepts a single spec ({kind:...}) or a multi-object scene ({objects:[...]} /
+// legacy {specs:[...]}). Kind validation only — geometry params are validated
+// leniently by the renderer, which degrades gracefully on bad math.
+function validateModel3dBody(body, res, verb) {
+  const list = Array.isArray(body?.objects) ? body.objects
+    : Array.isArray(body?.specs) ? body.specs
+    : [body]
+  if (!list.length) return json(res, 400, { ok: false, error: 'empty_objects' })
+  const invalid = list.find((s) => !VALID_3D_KINDS.includes(s?.kind))
+  if (invalid) return json(res, 400, { ok: false, error: 'invalid_kind', detail: KIND_DETAIL })
+  return bridgeToBus(verb, body, res)
+}
 
 export async function handleModel3dShow(req, res) {
-  return withBody(req, (body) => {
-    if (Array.isArray(body?.specs)) {
-      const invalid = body.specs.find((s) => !VALID_3D_KINDS.includes(s?.kind))
-      if (invalid) return json(res, 400, { ok: false, error: 'invalid_kind', detail: 'each spec.kind must be parametric, polytope, or implicit' })
-      return bridgeToBus('model3d_show', body, res)
-    }
-    const kind = body?.kind
-    if (!VALID_3D_KINDS.includes(kind)) {
-      return json(res, 400, { ok: false, error: 'invalid_kind', detail: 'kind must be parametric, polytope, or implicit' })
-    }
-    return bridgeToBus('model3d_show', body, res)
-  }, res)
+  return withBody(req, (body) => validateModel3dBody(body, res, 'model3d_show'), res)
 }
 
 export async function handleModel3dAdd(req, res) {
-  return withBody(req, (body) => {
-    const kind = body?.kind
-    if (!VALID_3D_KINDS.includes(kind)) {
-      return json(res, 400, { ok: false, error: 'invalid_kind', detail: 'kind must be parametric, polytope, or implicit' })
-    }
-    return bridgeToBus('model3d_add', body, res)
-  }, res)
+  return withBody(req, (body) => validateModel3dBody(body, res, 'model3d_add'), res)
 }
 
 export async function handleModel3dHide(req, res) {

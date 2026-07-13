@@ -32,11 +32,18 @@ Environment=STT_DENOISE_MODE=deepfilter
 # (scripts/create-voiceprint.sh) — WAV samples re-embed automatically.
 Environment=SPEAKER_ENCODER=ecapa
 Environment=JARVIS_OWNER_SPEAKER=santiago
-# Endpointing: chunks of silence (32ms each) before a segment finalizes.
-# 54 -> ~1.73s, wider than the default 38 (~1.22s) so a natural mid-thought
-# pause doesn't finalize early and make Jarvis answer before the user is done.
-# Barge-in still lets the user cut a reply short. Lower if latency feels off.
-Environment=STT_SILENCE_CHUNKS=54
+# Endpointing: chunks of silence (32ms each) — HARD CAP before a segment
+# finalizes. 31 -> ~0.99s. Adaptive tiers finalize sooner: ~0.51s when the
+# speculative transcript ends in .!? and ~0.70s when it has no continuation
+# cue (trailing comma/conjunction waits the full cap). Whisper omitting
+# terminal punctuation no longer forces the long wait, and a lone 32ms noise
+# blip (fan) no longer resets the silence tail (STT_RESUME_CHUNKS debounce).
+Environment=STT_SILENCE_CHUNKS=31
+# Speculative decode fires after this many silence chunks (12 -> ~0.38s).
+# Earlier spec = whisper result ready sooner = early-final fires more often and
+# the final endpoint rarely waits on the decode. A pause that resumes just
+# wastes one spec decode (GPU idle at that moment anyway).
+Environment=STT_SPEC_AT=12
 
 [Install]
 WantedBy=default.target

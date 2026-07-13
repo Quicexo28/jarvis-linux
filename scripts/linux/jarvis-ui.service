@@ -1,24 +1,24 @@
 [Unit]
-Description=Jarvis UI (Chromium app-mode)
+Description=Jarvis UI (Tauri)
 After=jarvis-backend.service graphical-session.target
 Requires=jarvis-backend.service
 
 [Service]
 Type=simple
-ExecStartPre=/bin/sleep 2
-ExecStart=/usr/bin/chromium \
-  --app=http://localhost:8788 \
-  --no-default-browser-check \
-  --disable-infobars \
-  --autoplay-policy=no-user-gesture-required \
-  --use-fake-ui-for-media-stream=false \
-  --ozone-platform-hint=auto \
-  --enable-features=UseOzonePlatform
+# Esperar el socket Wayland real: en el boot, graphical-session.target llega
+# antes de que Hyprland cree wayland-1 y Tauri hace panic (exit 101) — se veía
+# como "el binario ni arranca" con restart counter 2-3 en cada boot.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && exit 0; sleep 0.5; done; echo "wayland socket timeout" >&2; exit 1'
+ExecStart=/home/santiago2/jarvis-linux/frontend/src-tauri/target/release/jarvis
 Restart=on-failure
 RestartSec=3
-# Supports both X11 and Wayland. --ozone-platform-hint=auto picks at runtime.
-Environment=DISPLAY=:0
-Environment=WAYLAND_DISPLAY=wayland-0
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=DISPLAY=:1
+Environment=GDK_BACKEND=wayland
+Environment=WEBKIT_DISABLE_DMABUF_RENDERER=1
+Environment=WEBKIT_INSPECTOR_SERVER=127.0.0.1:9222
 
 [Install]
 WantedBy=default.target

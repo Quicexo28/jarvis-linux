@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { json, readBody } from '../lib/http.js'
 import { markInteraction, getAttentionState, setVoiceMuted } from '../lib/attentionState.js'
 import { resetSession } from '../lib/speakerContext.js'
+import { broadcastWake } from '../lib/wakeSignal.js'
 
 const CONFIG_DIR = join(homedir(), '.config', 'jarvis')
 const WAKE_PROFILE_PATH = join(CONFIG_DIR, 'wake-model-profile.json')
@@ -16,6 +17,8 @@ export async function handleWakeDetected(req, res) {
     markInteraction()
     setVoiceMuted(false)
     resetSession()
+    // Open the listening window in the AWAKE renderer (wake_word mode).
+    broadcastWake()
     const state = getAttentionState()
     console.log(`[wake] detected confidence=${confidence.toFixed(3)} ts=${ts} → state=${state}`)
     return json(res, 200, { ok: true, confidence, state })

@@ -13,6 +13,7 @@
  */
 
 import { existsSync, mkdirSync, statSync, appendFileSync, writeFileSync, readFileSync, readdirSync } from 'fs'
+import { spawn } from 'node:child_process'
 import { join } from 'path'
 import https from 'node:https'
 import http from 'node:http'
@@ -179,6 +180,152 @@ function deriveTitle(text) {
   return cleaned.slice(0, 60).trim() + '…'
 }
 
+// --- Reglas de organización de la bóveda (ver ~/Jarvis-Vault/CLAUDE.md) ------
+
+// Tras cada escritura corre 00-System/auto-linker.py (debounced) para que las
+// menciones queden conectadas al grafo sin esperar al timer systemd de 15 min.
+let linkerTimer = null
+function scheduleAutoLinker() {
+  if (!isConfigured()) return
+  const script = join(getVaultPath(), '00-System', 'auto-linker.py')
+  if (!existsSync(script)) return
+  if (linkerTimer) clearTimeout(linkerTimer)
+  linkerTimer = setTimeout(() => {
+    linkerTimer = null
+    try {
+      const p = spawn('python3', [script], { stdio: 'ignore', detached: true })
+      p.on('error', () => {})
+      p.unref()
+    } catch {}
+  }, 15_000)
+  if (typeof linkerTimer.unref === 'function') linkerTimer.unref()
+}
+
+// Reusa una carpeta/nota existente que solo difiere en mayúsculas/acentos/guiones
+// (el LLM dice "fisica" pero la carpeta es "Fisica"; "tiempo de vuelo" vs
+// "Tiempo-de-Vuelo") para no crear hermanos casi-duplicados.
+function matchExistingEntry(parent, wanted) {
+  if (!existsSync(parent)) return null
+  try {
+    for (const entry of readdirSync(parent)) {
+      const base = entry.replace(/\.md$/i, '')
+      if (slugify(base) === slugify(wanted)) return base
+    }
+  } catch {}
+  return null
+}
+
+// "física de partículas" → "Fisica-De-Particulas" (estilo de carpetas/hubs)
+function titleKebab(s) {
+  const words = slugify(s).split('-').filter(Boolean)
+  if (!words.length) return 'Sin-Tema'
+  return words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('-')
+}
+
+// Aliases SIEMPRE en minúsculas (contrato del auto-linker: coinciden con cómo
+// se menciona el tema hablando). Sin aliases explícitos, cae al título.
+function lcAliases(aliases, fallback) {
+  const list = (Array.isArray(aliases) ? aliases : [])
+    .map(a => String(a ?? '').trim().toLowerCase()).filter(Boolean)
+  if (!list.length && fallback) {
+    const t = String(fallback).toLowerCase().replace(/…$/, '').trim()
+    if (t) list.push(t)
+  }
+  return [...new Set(list)]
+}
+
+function yamlList(items) {
+  return `[${items.map(x => JSON.stringify(String(x))).join(', ')}]`
+}
+
+// [[YYYY-MM-DD]] si hoy hay transcripción en 06-Conversaciones/
+function todaysConversationLink() {
+  const date = todayIso()
+  const file = join(getVaultPath(), '06-Conversaciones', `${date}.md`)
+  return existsSync(file) ? `[[${date}]]` : null
+}
+
+// Merge de alias hablados de una hub en 00-System/linker-aliases.json.
+// Solo toca la clave de la hub — preserva "_exclude" y el resto del mapa.
+function registerLinkerAliases(hubName, aliases) {
+  if (!aliases.length) return
+  const file = join(getVaultPath(), '00-System', 'linker-aliases.json')
+  let map = {}
+  try { map = JSON.parse(readFileSync(file, 'utf-8')) } catch {}
+  if (typeof map !== 'object' || map === null || Array.isArray(map)) map = {}
+  const current = Array.isArray(map[hubName]) ? map[hubName] : []
+  const merged = [...new Set([...current, ...aliases])]
+  if (merged.length === current.length) return
+  map[hubName] = merged
+  try { writeFileSync(file, JSON.stringify(map, null, 2) + '\n', 'utf-8') } catch {}
+}
+
+// Inserta una línea de lista bajo un heading (al final de su bloque), o crea
+// la sección al final del archivo si no existe. No duplica si el archivo ya
+// enlaza la nota.
+function appendUnderHeading(file, heading, line) {
+  try {
+    if (!existsSync(file)) return
+    const existing = readFileSync(file, 'utf-8')
+    const target = line.match(/\[\[([^\]]+)\]\]/)?.[1]
+    if (target && existing.includes(`[[${target}]]`)) return
+    const lines = existing.split('\n')
+    const h = lines.findIndex(l => l.trim() === heading)
+    if (h === -1) {
+      appendFileSync(file, (existing.endsWith('\n') ? '' : '\n') + `\n${heading}\n\n${line}\n`, 'utf-8')
+      return
+    }
+    let end = h + 1
+    while (end < lines.length && !/^#{1,6} /.test(lines[end])) end++
+    while (end > h + 1 && lines[end - 1].trim() === '') end--
+    lines.splice(end, 0, line)
+    writeFileSync(file, lines.join('\n'), 'utf-8')
+  } catch {}
+}
+
+// Garantiza la nota hub del tema (<Tema>/<Tema>.md) y su registro en la rama
+// Conocimiento del cerebro (02-Proyectos/Jarvis.md → ## Cerebro).
+function ensureThemeHub(root, themeDir, theme) {
+  const hubFile = join(themeDir, `${theme}.md`)
+  if (existsSync(hubFile)) return
+  const spoken = theme.toLowerCase().replace(/-/g, ' ')
+  const fm = `---\naliases: ${yamlList([spoken])}\ntags: ${yamlList([slugify(theme), 'conocimiento'])}\n---\n\n# ${theme}\n\nHub del conocimiento de ${spoken}. Rama del cerebro de [[Jarvis]].\n`
+  try { writeFileSync(hubFile, fm, 'utf-8') } catch { return }
+  registerLinkerAliases(theme, [spoken])
+  appendUnderHeading(join(root, '02-Proyectos', 'Jarvis.md'), '## Cerebro', `- **Conocimiento:** [[${theme}]]`)
+}
+
+// Crea la nota hub de un experimento/serie si falta (en <Tema>/Experimentos/)
+// y registra la nueva nota de datos en su tabla resumen. Si la hub existente
+// no tiene tabla, cae a una línea de lista para no romper el markdown.
+function appendToHub(hubDir, hubName, noteName, hubAliases, theme, themeHubFile) {
+  const hubFile = join(hubDir, `${hubName}.md`)
+  const row = `| [[${noteName}]] | ${todayIso()} |`
+  try {
+    if (!existsSync(hubFile)) {
+      const fm = `---\naliases: ${yamlList(hubAliases)}\ntags: [experimento, hub]\n---\n\n# ${hubName}\n\n## Notas\n\n| Nota | Fecha |\n|---|---|\n${row}\n\n## Relacionado\n\n- Tema: [[${theme}]]\n`
+      writeFileSync(hubFile, fm, 'utf-8')
+      appendUnderHeading(themeHubFile, '## Experimentos', `- [[${hubName}]]`)
+    } else {
+      const existing = readFileSync(hubFile, 'utf-8')
+      if (!existing.includes(`[[${noteName}]]`)) {
+        const lines = existing.split('\n')
+        let idx = -1
+        for (let i = lines.length - 1; i >= 0; i--) {
+          if (lines[i].trim().startsWith('|')) { idx = i; break }
+        }
+        if (idx >= 0) {
+          lines.splice(idx + 1, 0, row)
+          writeFileSync(hubFile, lines.join('\n'), 'utf-8')
+        } else {
+          appendFileSync(hubFile, (existing.endsWith('\n') ? '' : '\n') + `- [[${noteName}]] — ${todayIso()}\n`, 'utf-8')
+        }
+      }
+    }
+    registerLinkerAliases(hubName, hubAliases)
+  } catch {}
+}
+
 // --- Etapa C — intent-driven writes ---
 
 export async function writeTask(speakerName, { text, source, mode } = {}) {
@@ -200,39 +347,112 @@ export async function writeTask(speakerName, { text, source, mode } = {}) {
     } else {
       appendFileSync(file, entry, 'utf-8')
     }
+    scheduleAutoLinker()
     return { ok: true, file, title }
   } catch (e) {
     return { skipped: true, reason: 'write_failed', detail: String(e) }
   }
 }
 
-// area: 'ia' | 'fisica' | 'programacion' | null (default: IA)
-export async function writeNote(speakerName, { title, body, tags, area } = {}) {
+/**
+ * Crea una nota siguiendo las reglas de organización de la bóveda
+ * (~/Jarvis-Vault/CLAUDE.md — nunca en la raíz):
+ *  - project → 02-Proyectos/<Proyecto>.md (append de sección; nunca duplica la nota)
+ *  - area    → 03-Conocimiento/<Tema>/ ('ia'|'fisica'|'programacion' o tema libre;
+ *              crea el tema con su nota hub colgada del cerebro [[Jarvis]])
+ *  - series  → hub en <Tema>/Experimentos/<Hub>.md + nota en Experimentos/Datos/;
+ *              la nota queda en la tabla de la hub y termina con `**Experimento:** [[Hub]]`
+ *  - frontmatter con aliases en minúsculas (obligatorios: los usa el auto-linker) y tags
+ *  - `**Origen:** [[YYYY-MM-DD]]` si existe la conversación del día
+ * Tras escribir dispara el auto-linker (debounced) para conectar el grafo.
+ */
+export async function writeNote(speakerName, { title, body, tags, area, aliases, project, series } = {}) {
   if (!isConfigured()) return { skipped: true, reason: 'not_configured' }
   const root = getVaultPath()
 
-  const areaMap = {
-    ia: '03-Conocimiento/IA-LLMs-Agentes',
-    fisica: '03-Conocimiento/Fisica',
-    programacion: '03-Conocimiento/Programacion',
-  }
-  const subdir = areaMap[(area || '').toLowerCase()] || '03-Conocimiento/IA-LLMs-Agentes'
-  const dir = join(root, subdir)
-  if (!ensureDir(dir)) return { skipped: true, reason: 'mkdir_failed' }
-
   const text = String(body ?? '').trim() || '(sin texto)'
   const derivedTitle = title || deriveTitle(text)
-  const slug = slugify(derivedTitle)
-  const d = new Date()
-  const pad = (n) => String(n).padStart(2, '0')
-  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
-  const file = join(dir, `${stamp}-${slug}.md`)
+  const aliasList = lcAliases(aliases, derivedTitle)
+  const tagList = Array.isArray(tags) ? tags.map(t => String(t ?? '').trim()).filter(Boolean) : []
+  const convoLink = todaysConversationLink()
 
-  const tagLine = Array.isArray(tags) && tags.length ? `tags: [${tags.map(t => JSON.stringify(t)).join(', ')}]\n` : ''
-  const content = `---\ntype: nota\narea: ${subdir}\ncreated: ${isoNow()}\n${tagLine}---\n\n# ${derivedTitle}\n\n${text}\n`
+  // Información de proyecto: actualiza la nota existente, no crea duplicados.
+  if (project) {
+    const projDir = join(root, '02-Proyectos')
+    if (!ensureDir(projDir)) return { skipped: true, reason: 'mkdir_failed' }
+    const name = matchExistingEntry(projDir, project) || titleKebab(project)
+    const file = join(projDir, `${name}.md`)
+    const origin = convoLink ? `\n**Origen:** ${convoLink}\n` : ''
+    const section = `\n## ${todayIso()} — ${derivedTitle}\n\n${text}\n${origin}`
+    try {
+      if (!existsSync(file)) {
+        const fm = `---\naliases: ${yamlList(lcAliases(aliases, project))}\ntags: ${yamlList(['proyecto', ...tagList])}\n---\n\n# ${name}\n`
+        writeFileSync(file, fm + section, 'utf-8')
+      } else {
+        appendFileSync(file, section, 'utf-8')
+      }
+      scheduleAutoLinker()
+      return { ok: true, file, title: derivedTitle }
+    } catch (e) {
+      return { skipped: true, reason: 'write_failed', detail: String(e) }
+    }
+  }
+
+  // Conocimiento por tema: carpetas conocidas o tema libre bajo 03-Conocimiento/.
+  // Cada tema tiene nota hub (<Tema>/<Tema>.md) colgada del cerebro ([[Jarvis]]).
+  const areaMap = { ia: 'IA-LLMs-Agentes', fisica: 'Fisica', programacion: 'Programacion' }
+  const conocimiento = join(root, '03-Conocimiento')
+  const key = String(area ?? '').trim().toLowerCase()
+  const theme = areaMap[key]
+    || (key ? (matchExistingEntry(conocimiento, key) || titleKebab(key)) : 'IA-LLMs-Agentes')
+  const themeDir = join(conocimiento, theme)
+  if (!ensureDir(themeDir)) return { skipped: true, reason: 'mkdir_failed' }
+  ensureThemeHub(root, themeDir, theme)
+  const themeHubFile = join(themeDir, `${theme}.md`)
+  let dir = themeDir
+
+  // Serie (mediciones, sesiones, capítulos): hub en <Tema>/Experimentos/,
+  // notas de datos en <Tema>/Experimentos/Datos/ (estructura de la bóveda).
+  let hubName = null
+  let hubDir = null
+  if (series) {
+    hubDir = join(themeDir, 'Experimentos')
+    if (!ensureDir(hubDir)) return { skipped: true, reason: 'mkdir_failed' }
+    hubName = matchExistingEntry(hubDir, series) || titleKebab(series)
+    dir = join(hubDir, 'Datos')
+    if (!ensureDir(dir)) return { skipped: true, reason: 'mkdir_failed' }
+  }
+
+  const slug = slugify(derivedTitle)
+  let noteName = slug
+  let file = join(dir, `${noteName}.md`)
+  for (let i = 2; existsSync(file); i++) {
+    noteName = `${slug}-${i}`
+    file = join(dir, `${noteName}.md`)
+  }
+
+  const fmLines = [`aliases: ${yamlList(aliasList)}`]
+  if (tagList.length) fmLines.push(`tags: ${yamlList(tagList)}`)
+  fmLines.push(`created: ${isoNow()}`)
+
+  // Vínculo padre obligatorio: la hub del experimento para notas de serie,
+  // la hub del tema para el resto. + conversación de origen si existe.
+  const footerLinks = []
+  if (hubName) footerLinks.push(`**Experimento:** [[${hubName}]]`)
+  else footerLinks.push(`**Tema:** [[${theme}]]`)
+  if (convoLink) footerLinks.push(`**Origen:** ${convoLink}`)
+  const footer = `\n---\n\n${footerLinks.join('\n')}\n`
+
+  const content = `---\n${fmLines.join('\n')}\n---\n\n# ${derivedTitle}\n\n${text}\n${footer}`
 
   try {
     writeFileSync(file, content, 'utf-8')
+    if (hubName) {
+      const spoken = String(series).toLowerCase().replace(/-/g, ' ').trim()
+      const hubAliases = [...new Set([spoken, String(series).toLowerCase().trim()])].filter(Boolean)
+      appendToHub(hubDir, hubName, noteName, hubAliases, theme, themeHubFile)
+    }
+    scheduleAutoLinker()
     return { ok: true, file, title: derivedTitle }
   } catch (e) {
     return { skipped: true, reason: 'write_failed', detail: String(e) }
@@ -294,6 +514,7 @@ export async function appendHistoryEntry(speakerName, { userText, assistantReply
     } else {
       appendFileSync(file, entry, 'utf-8')
     }
+    scheduleAutoLinker()
     return { ok: true, file }
   } catch (e) {
     return { skipped: true, reason: 'write_failed', detail: String(e) }
@@ -318,6 +539,7 @@ export async function updatePersonalization(speakerName, { fact } = {}) {
     } else {
       appendFileSync(file, factLine + '\n', 'utf-8')
     }
+    scheduleAutoLinker()
     return { ok: true, file }
   } catch (e) {
     return { skipped: true, reason: 'write_failed', detail: String(e) }

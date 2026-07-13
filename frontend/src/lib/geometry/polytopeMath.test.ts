@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildHypercube, buildCross, rotateInPlane, projectToR3 } from './polytopeMath'
+import { buildHypercube, buildCross, buildHypercubeFaces, rotateInPlane, projectToR3 } from './polytopeMath'
 
 describe('buildHypercube', () => {
   it('2D square: 4 vertices, 4 edges', () => {
@@ -42,6 +42,34 @@ describe('buildCross', () => {
     const edgeSet = new Set(c.edges.map(([a, b]) => `${a}-${b}`))
     expect(edgeSet.has('0-1')).toBe(false)
     expect(edgeSet.has('2-3')).toBe(false)
+  })
+})
+
+describe('buildHypercubeFaces', () => {
+  it('3D cube: 6 square faces', () => {
+    expect(buildHypercubeFaces(3).length).toBe(6)
+  })
+  it('4D tesseract: 24 square faces', () => {
+    expect(buildHypercubeFaces(4).length).toBe(24)
+  })
+  it('5D: C(5,2) * 2^3 = 80 faces', () => {
+    expect(buildHypercubeFaces(5).length).toBe(80)
+  })
+  it('each face is a unit square: 4 distinct vertices differing in exactly 2 axes', () => {
+    const { vertices } = buildHypercube(4)
+    for (const quad of buildHypercubeFaces(4)) {
+      expect(new Set(quad).size).toBe(4)
+      // union of differing axes across the cycle spans exactly 2 dimensions
+      const varying = new Set<number>()
+      for (let k = 0; k < 4; k++) {
+        const a = vertices[quad[k]]
+        const b = vertices[quad[(k + 1) % 4]]
+        const diff = a.map((c, d) => c !== b[d] ? d : -1).filter((d) => d >= 0)
+        expect(diff.length).toBe(1) // consecutive corners differ in exactly one axis (cyclic order)
+        varying.add(diff[0])
+      }
+      expect(varying.size).toBe(2)
+    }
   })
 })
 

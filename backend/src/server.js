@@ -11,6 +11,9 @@ import { handleSttStreamUpgrade } from './handlers/stt.js'
 import { handleJarvisTtsStreamUpgrade } from './handlers/jarvis.js'
 import { warmupSpeechSession } from './handlers/speech.js'
 import { handleSkillBusUpgrade } from './lib/skillBus.js'
+import { authorize } from './lib/webAuth.js'
+import { handleWakeBusUpgrade } from './lib/wakeSignal.js'
+import { handlePttBusUpgrade } from './lib/pttBus.js'
 import { migrateStraySpeakers } from './lib/obsidian.js'
 import { startScheduler } from './lib/reminders.js'
 import { attachAgentBridge } from './agent/bridge.js'
@@ -42,6 +45,14 @@ const server = http.createServer(async (req, res) => {
 const agentBridge = attachAgentBridge(server)
 
 server.on('upgrade', (req, socket, head) => {
+  // Same token gate as HTTP dispatch — browsers send the jarvis_auth cookie
+  // on same-origin WS handshakes, local renderers bypass via loopback.
+  const auth = authorize(req)
+  if (!auth.ok) {
+    socket.write(`HTTP/1.1 ${auth.code} ${auth.code === 403 ? 'Forbidden' : 'Unauthorized'}\r\nConnection: close\r\n\r\n`)
+    socket.destroy()
+    return
+  }
   const url = new URL(req.url, `http://${req.headers.host}`)
   if (url.pathname === '/api/jarvis/stt/stream') {
     handleSttStreamUpgrade(req, socket, head)
@@ -51,6 +62,10 @@ server.on('upgrade', (req, socket, head) => {
     handleSkillBusUpgrade(req, socket, head)
   } else if (url.pathname === '/api/mobile/gesture/ws') {
     handleMobileGestureUpgrade(req, socket, head)
+  } else if (url.pathname === '/api/jarvis/wake-bus') {
+    handleWakeBusUpgrade(req, socket, head)
+  } else if (url.pathname === '/api/jarvis/ptt-bus') {
+    handlePttBusUpgrade(req, socket, head)
   } else if (agentBridge.handleUpgrade(req, socket, head)) {
     // claimed by the agent bridge (/api/jarvis/agent/ws)
   } else {
@@ -69,8 +84,10 @@ try { migrateStraySpeakers() } catch (e) { console.warn('[obsidian] migrate skip
 // Watch vault for new PDFs → convert to .md → delete PDF.
 startPdfWatcher().catch((e) => console.warn('[pdfWatcher] start failed:', e?.message))
 
-// Cloudflare quick tunnel — public HTTPS URL for mobile QR outside LAN.
-startCloudflareTunnel(port)
+// Remote access rides Tailscale by default (QR URLs + `tailscale serve` for
+// HTTPS). The public Cloudflare quick tunnel is opt-in only — it exposed the
+// whole API to the internet behind nothing but URL secrecy.
+if (env.JARVIS_TUNNEL === 'cloudflare') startCloudflareTunnel(port)
 
 // Telegram reminder scheduler — fires due reminders even while DORMANT.
 startScheduler()

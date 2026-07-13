@@ -3,17 +3,23 @@ import type { ReactNode, CSSProperties } from 'react'
 interface HudBtnProps {
   children: ReactNode
   onClick?: () => void
+  onMouseDown?: () => void
+  onMouseUp?: () => void
+  onMouseLeave?: () => void
   active?: boolean
   disabled?: boolean
   className?: string
   style?: CSSProperties
 }
 
-export function HudBtn({ children, onClick, active = false, disabled = false, className = '', style }: HudBtnProps) {
+export function HudBtn({ children, onClick, onMouseDown, onMouseUp, onMouseLeave, active = false, disabled = false, className = '', style }: HudBtnProps) {
   return (
     <button
       className={`hud-btn${active ? ' active' : ''}${className ? ` ${className}` : ''}`}
       onClick={onClick}
+      onMouseDown={onMouseDown}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseLeave}
       disabled={disabled}
       style={style}
     >

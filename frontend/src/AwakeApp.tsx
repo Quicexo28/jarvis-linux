@@ -9,8 +9,8 @@ import { HudBtn } from './components/HudBtn'
 import { CoreTerminal } from './components/CoreTerminal'
 import { GlassPanel } from './components/GlassPanel'
 import { GestureMonitor } from './components/GestureMonitor'
+import { GesturePointer } from './components/GesturePointer'
 import { GestureDebugView } from './components/GestureDebugView'
-import { GestureTrainer } from './components/GestureTrainer'
 import { SpeakerIdPanel } from './components/SpeakerIdPanel'
 import { SpeakerConfigWindow } from './components/SpeakerConfigWindow'
 import { TtsTestWidget } from './components/TtsTestWidget'
@@ -24,12 +24,14 @@ import { VoiceHalo } from './components/VoiceHalo'
 import { useAudioLevel } from './hooks/useAudioLevel'
 import { WorldScene } from './scenes/WorldScene'
 import { PlanSelectorOverlay } from './components/PlanSelectorOverlay'
+import { ListeningOverlay } from './components/ListeningOverlay'
 import { DisplayCard } from './components/DisplayCard'
 import { Model3DViewer } from './components/Model3DViewer'
 import { WakeWordWizard } from './components/WakeWordWizard'
 import { getApiBase } from './api/client'
-import { streamTtsAndPlay, setTtsDucking } from './audio/streamingTts'
+import { streamTtsAndPlay, streamTtsSession, setTtsDucking, type TtsSession } from './audio/streamingTts'
 import { streamConverse } from './audio/converse'
+import { ttsBusThinking } from './audio/ttsLevelBus'
 import { useClapDetection } from './hooks/useClapDetection'
 import { useLocalStt } from './hooks/useLocalStt'
 import { useSkillBus } from './hooks/useSkillBus'
@@ -50,13 +52,69 @@ import { useModel3dStore } from './state/model3dStore'
 // Modes that fully replace the world canvas when zoomed
 const CANVAS_MODES = new Set(['plan2d', 'plan3d', 'space'])
 
+// wake_word gate. Tolerant of common Whisper mis-spellings of "jarvis".
+const WAKE_RE = /\b(j+arvis|y+arvis|ll?arvis|jervis|jarbis)\b/i
+const WAKE_WINDOW_MS = 15000
+// Ctrl+C grace: while Jarvis is THINKING (turn accepted, not yet speaking) a new
+// final normally interrupts and replaces the turn. Within this window after the
+// turn started, a final that DUPLICATES the in-flight utterance is treated as a
+// trailing STT fragment (reconnect re-finalize / late segment) and ignored, so
+// the same sentence can't restart its own turn ("si le repites se corta").
+const INTERRUPT_GRACE_MS = 1200
+
+// --- Self-echo detection by content ----------------------------------------
+// Speaker confidence cannot reliably separate Jarvis's own echo from the owner
+// (similar tone). Instead we look at NOVEL words: words the mic heard that
+// Jarvis did NOT just say. Pure echo carries zero novel words. When the user
+// talks over Jarvis the transcript is a MIX (Jarvis's words + the user's), but
+// the user's words are still novel — so counting novel words (absolute, not a
+// ratio) lets a real interruption through even while echo dominates the mix.
+function normalizeForEcho(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // strip accents
+    .replace(/[^a-z0-9ñ\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// Single-word commands that should always count as a real interruption even
+// though one word alone is below the novel-word count threshold.
+const INTERRUPT_WORDS = new Set([
+  'para', 'parate', 'detente', 'espera', 'stop', 'callate', 'silencio',
+  'jarvis', 'oye', 'no', 'cancela',
+])
+
+// Decide whether a transcript heard during/just-after TTS is real speech (vs
+// pure self-echo). Returns true to ALLOW (treat as a real utterance / barge-in).
+function hasRealSpeech(transcript: string, spokenNormalized: string): boolean {
+  const words = normalizeForEcho(transcript).split(' ').filter(Boolean)
+  if (words.length === 0) return false
+  // Nothing was spoken → nothing to be echo of → it's real.
+  if (!spokenNormalized) return true
+  const spoken = new Set(spokenNormalized.split(' '))
+  let novel = 0
+  let hasCommand = false
+  for (const w of words) {
+    if (!spoken.has(w)) {
+      novel++
+      if (INTERRUPT_WORDS.has(w)) hasCommand = true
+    }
+  }
+  // ≥2 novel words → real content present even if mixed with echo.
+  // 1 novel word that's a known command → short interruption ("para", "jarvis").
+  return novel >= 2 || hasCommand
+}
+
 export function AwakeApp() {
   const mode            = useJarvisStore(s => s.mode)
   const zoomedMode      = useJarvisStore(s => s.zoomedMode)
   const setZoomedMode   = useJarvisStore(s => s.setZoomedMode)
+  const voiceMode       = useJarvisStore(s => s.voiceMode)
+  const setVoiceMode    = useJarvisStore(s => s.setVoiceMode)
   const voiceEnabled    = useJarvisStore(s => s.voiceEnabled)
-  const setVoiceEnabled = useJarvisStore(s => s.setVoiceEnabled)
-  const wakeListening   = useJarvisStore(s => s.wakeListening)
+  const wakeListening    = useJarvisStore(s => s.wakeListening)
+  const setWakeListening = useJarvisStore(s => s.setWakeListening)
   const clapWakeEnabled  = useJarvisStore(s => s.clapWakeEnabled)
   const setClapWakeEnabled = useJarvisStore(s => s.setClapWakeEnabled)
   const setCoreInput    = useJarvisStore(s => s.setCoreInput)
@@ -67,7 +125,6 @@ export function AwakeApp() {
   const setRingLevel    = useJarvisStore(s => s.setRingLevel)
   const rotateRing      = useJarvisStore(s => s.rotateRing)
   const setActiveRingMode = useJarvisStore(s => s.setActiveRingMode)
-  const ringAngle       = useJarvisStore(s => s.ringAngle)
   const setRingAngle    = useJarvisStore(s => s.setRingAngle)
   const setBootState    = useBootStore(s => s.setBootState)
 
@@ -77,7 +134,17 @@ export function AwakeApp() {
 
   const gestureEnabled    = useGestureStore(s => s.enabled)
   const setGestureEnabled = useGestureStore(s => s.setEnabled)
-  const gestureOutput     = useGestureStore(s => s.output)
+  // Selectores primitivos, NUNCA `s.output` entero: el engine publica un objeto
+  // nuevo ~25 veces/s y suscribirse al objeto re-renderizaba toda la app AWAKE
+  // en cada frame de gesto (lag de cursor + jank). El puntero vive en
+  // <GesturePointer/> con su propia suscripción.
+  const gestureClick      = useGestureStore(s => s.output.click)
+  const gestureBack       = useGestureStore(s => s.output.back)
+  const pinchActive       = useGestureStore(s => s.output.pinch.active)
+  const pinchZoom         = useGestureStore(s => s.output.pinch.zoom)
+  const grabActive        = useGestureStore(s => s.output.grab.active)
+  const grabDeltaX        = useGestureStore(s => s.output.grab.deltaX)
+  const grabDeltaY        = useGestureStore(s => s.output.grab.deltaY)
   const model3dOpen       = useModel3dStore(s => s.open)
 
   useGesturePipeline()
@@ -100,12 +167,11 @@ export function AwakeApp() {
   const [pendingCanvasMode, setPendingCanvasMode] = useState<Mode | null>(null)
   const gestureDebugOpen = useUiStore(s => s.gestureDebugOpen)
   const setGestureDebugOpen = useUiStore(s => s.setGestureDebugOpen)
-  const gestureTrainerOpen = useUiStore(s => s.gestureTrainerOpen)
-  const setGestureTrainerOpen = useUiStore(s => s.setGestureTrainerOpen)
   const speakerConfigOpen = useUiStore(s => s.speakerConfigOpen)
   const setSpeakerConfigOpen = useUiStore(s => s.setSpeakerConfigOpen)
   const terminalOpen = useUiStore(s => s.terminalOpen)
   const setTerminalOpen = useUiStore(s => s.setTerminalOpen)
+  const pttActive         = useJarvisStore(s => s.pttActive)
   const [processingReply] = useState(false)
   const [copiedUrl, setCopiedUrl]           = useState<string | null>(null)
   const qrCanvasRef        = useRef<HTMLCanvasElement>(null)
@@ -157,17 +223,17 @@ export function AwakeApp() {
 
   // Gesture: click → enter zoomed mode
   useEffect(() => {
-    if (!gestureOutput.click || zoomedMode) return
+    if (!gestureClick || zoomedMode) return
     enterMode(activeRingMode)
-  }, [gestureOutput.click])
+  }, [gestureClick])
 
   // Gesture: back → handle back
   useEffect(() => {
-    if (gestureOutput.back) {
+    if (gestureBack) {
       if (zoomedMode != null) handleBack()
       else if (ringLevel === 'house-sub' || ringLevel === 'utils-sub') setRingLevel('main')
     }
-  }, [gestureOutput.back])
+  }, [gestureBack])
 
   // Start ticker singletons globally (idempotent). They keep counting even when
   // the panel is closed so opening it again shows the up-to-date state.
@@ -177,15 +243,20 @@ export function AwakeApp() {
   // Uses useGestureRotation (clutch + EMA + dead zone) for smooth, precise control.
   const MAIN_RING_SLOTS = 5  // MAIN_RING has 5 modes: home, house, system, cloud, utils
 
+  // OJO: ringAngle NO va en las deps y se lee con getState(). Con ringAngle en
+  // deps, setRingAngle re-disparaba el efecto, que releía el MISMO deltaYaw del
+  // ref y volvía a sumar → loop infinito de setState (React #185, tumbaba toda
+  // la app al primer arrastre). El efecto debe correr solo cuando el pipeline
+  // publica un frame nuevo (deltas/flags de grab en deps).
   useEffect(() => {
-    if (gestureOutput.pinch.active || zoomedMode != null || model3dOpen) return
+    if (pinchActive || zoomedMode != null || model3dOpen) return
 
-    const { deltaYaw, grabActive, justReleased } = ringRotRef.current
+    const { deltaYaw, grabActive: dragging, justReleased } = ringRotRef.current
 
-    if (grabActive) {
+    if (dragging) {
       // Drag: update continuous ringAngle. Only affect main ring while at main level.
-      if (ringLevel === 'main') {
-        setRingAngle(ringAngle + deltaYaw)
+      if (ringLevel === 'main' && deltaYaw !== 0) {
+        setRingAngle(useJarvisStore.getState().ringAngle + deltaYaw)
       }
       return
     }
@@ -193,21 +264,21 @@ export function AwakeApp() {
     if (justReleased && ringLevel === 'main') {
       // Snap to nearest slot and update activeRingMode
       const MAIN_RING: Mode[] = ['home', 'house', 'system', 'cloud', 'utils']
-      const slot = snapToNearestSlot(ringAngle, MAIN_RING_SLOTS)
+      const slot = snapToNearestSlot(useJarvisStore.getState().ringAngle, MAIN_RING_SLOTS)
       setRingAngle(slot)
       setActiveRingMode(MAIN_RING[slot])
     }
-  }, [gestureOutput.grab.active, gestureOutput.grab.deltaX, gestureOutput.grab.deltaY,
-      gestureOutput.pinch.active, zoomedMode, ringAngle, ringLevel,
+  }, [grabActive, grabDeltaX, grabDeltaY,
+      pinchActive, zoomedMode, ringLevel,
       setRingAngle, setActiveRingMode])
 
   // Gesture: pinch → zoom into hologram (ring only)
   useEffect(() => {
-    if (zoomedMode !== null || !gestureOutput.pinch.active) {
+    if (zoomedMode !== null || !pinchActive) {
       setPinchZoomProgress(0)
       return
     }
-    const raw = (gestureOutput.pinch.zoom - 1.0) / (PINCH_ENTER_THRESHOLD - 1.0)
+    const raw = (pinchZoom - 1.0) / (PINCH_ENTER_THRESHOLD - 1.0)
     const progress = Math.max(0, Math.min(1, raw))
     setPinchZoomProgress(progress)
 
@@ -215,7 +286,7 @@ export function AwakeApp() {
       setPinchZoomProgress(0)
       enterMode(activeRingMode)
     }
-  }, [gestureOutput.pinch.zoom, gestureOutput.pinch.active, zoomedMode, activeRingMode])
+  }, [pinchZoom, pinchActive, zoomedMode, activeRingMode])
 
   useEffect(() => {
     let cancelled = false
@@ -283,6 +354,7 @@ export function AwakeApp() {
     if (zoomedMode !== 'system' || !mobileToken) return
     const activated = mobileToken.activated || mobileStatus?.connected === true
     if (activated) { setCountdown('Sesión activa'); return }
+    if (mobileToken.permanent) { setCountdown('Token permanente'); return }
     const tick = () => {
       const diff = mobileToken.expiresAt - Date.now()
       if (diff <= 0) { setCountdown('Expirado'); return }
@@ -311,9 +383,15 @@ export function AwakeApp() {
   }
 
   const speakAbortRef = useRef<AbortController | null>(null)
+  // Normalized text Jarvis is currently / was just speaking, used to detect
+  // self-echo by content (the only reliable signal when the TTS voice is cloned
+  // from the owner, so speaker-confidence can't tell echo from real owner).
+  const spokenTextRef = useRef('')
   // True only while TTS audio is actually playing. Gates barge-in: a new owner
   // utterance may cut Jarvis off only while he's speaking.
   const speakingRef = useRef(false)
+  // Timestamp (ms) when the last TTS finished. Used for post-speech echo cooldown.
+  const postSpeakTimeRef = useRef(0)
   // Timer that auto-restores TTS gain if the user starts speaking but doesn't
   // produce a final transcript (background noise, too short for Whisper, etc.).
   const duckRestoreRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -324,6 +402,9 @@ export function AwakeApp() {
     const ctrl = new AbortController()
     speakAbortRef.current = ctrl
     speakingRef.current = true
+    // Remember what we're saying so the STT gate can recognize its own echo by
+    // content, independent of speaker confidence.
+    spokenTextRef.current = normalizeForEcho(text)
     return streamTtsAndPlay({
       url: `${getApiBase()}/api/jarvis/tts/ws`,
       text,
@@ -363,48 +444,126 @@ export function AwakeApp() {
   // release (firing when its speak() promise resolves) would clear the busy flag
   // of the new barge-in turn.
   const turnSeqRef = useRef(0)
-  const enrollHintShownRef = useRef(false)
+  // Start time + normalized text of the in-flight turn — used by the Ctrl+C
+  // interrupt guard to tell a real new command from a trailing STT fragment of
+  // the utterance already being processed.
+  const turnStartRef = useRef(0)
+  const turnTextRef = useRef('')
+
+  // wake_word listening window. Opened by hearing "jarvis" (on-device) or by the
+  // wake-bus. While open we respond to every utterance; each turn re-arms the
+  // timer so a conversation keeps going. Closes after inactivity.
+  const wakeWindowRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const openWakeWindow = useCallback(() => {
+    setWakeListening(true)
+    if (wakeWindowRef.current) clearTimeout(wakeWindowRef.current)
+    wakeWindowRef.current = setTimeout(() => setWakeListening(false), WAKE_WINDOW_MS)
+  }, [setWakeListening])
+
 
   // Local STT (faster-whisper) — always-on when voice enabled.
   // Each final transcript is sent to the backend for intent classification + response.
-  const handleSttFinal = useCallback((text: string, speakerConfidence: number) => {
+  const handleSttFinal = useCallback((text: string, speakerConfidence: number, sttSpeakerName?: string, meta?: { avgLogprob?: number; confidence?: number }) => {
     if (!text.trim()) return
+
+    // Minimum confidence required even outside of barge-in. TTS echo through
+    // the mic returns conf ≈ 0 (speaker is Jarvis, not owner). Real owner
+    // utterances should be >= 0.55 after lowering the voiceprint threshold.
+    if (speakerConfidence < 0.55) {
+      console.log(`[turn] ignored (low conf ${speakerConfidence?.toFixed?.(2)}): "${text}"`)
+      return
+    }
+
+    // Self-echo filter (novel-word based). Active while Jarvis speaks and for a
+    // short tail after (the mic still carries residual echo). We drop the final
+    // ONLY if it has no real speech — i.e. it's just Jarvis's own words coming
+    // back. If the user talks over Jarvis, the transcript is a mix but still
+    // carries novel words / a command word, so a genuine interruption (or
+    // talking before the STT window closes) is NOT blocked.
+    const msSinceSpoke = Date.now() - postSpeakTimeRef.current
+    const echoActive = speakingRef.current || msSinceSpoke < 1200
+    if (echoActive && !hasRealSpeech(text, spokenTextRef.current)) {
+      console.log(`[turn] ignored (self-echo, no novel words): "${text}"`)
+      return
+    }
+
+    // wake_word gate. Mic is always open in this mode; we only act when the
+    // window is open. Hearing "jarvis" opens it (and this same utterance is
+    // handled, with the wake word stripped). Each accepted turn re-arms the
+    // window so a back-and-forth keeps going without repeating "jarvis".
+    if (voiceMode === 'wake_word') {
+      const heard = WAKE_RE.test(text)
+      if (!wakeListening && !heard) {
+        console.log(`[wake] gated (no wake word): "${text}"`)
+        return
+      }
+      openWakeWindow()
+      if (heard) {
+        const stripped = text.replace(WAKE_RE, ' ').replace(/\s+/g, ' ').trim()
+        if (stripped) text = stripped
+      }
+    }
+
     // Always restore TTS gain when a final arrives — whether we barge in or not.
     // fast=true so the new reply (if any) plays at full volume immediately.
     if (duckRestoreRef.current) { clearTimeout(duckRestoreRef.current); duckRestoreRef.current = null }
     setTtsDucking(false, true)
-    if (turnBusyRef.current) {
-      // Barge-in: cut Jarvis off only while he's actually speaking, and only for
-      // a confident owner utterance with real content. The cloned TTS voice
-      // doesn't match the owner embedding (low conf) so Jarvis won't interrupt
-      // himself via mic echo; AEC (echoCancellation) is the first line.
-      const wordCount = text.trim().split(/\s+/).length
-      const canBargeIn = speakingRef.current && speakerConfidence >= 0.65 && wordCount >= 2
-      if (!canBargeIn) { console.log(`[turn] ignored (busy): "${text}"`); return }
-      console.log(`[turn] barge-in -> stop speaking, new turn: "${text}"`)
+
+    // Barge-in / Ctrl+C. A new real final (it already passed the novel-word echo
+    // filter above, so it's genuine speech) interrupts the in-flight turn —
+    // whether Jarvis is SPEAKING or still THINKING — and starts fresh, instead
+    // of being dropped or waiting for the reply. This is the "Ctrl+C in the CLI"
+    // behavior: aborting the turn's controller cancels the NDJSON stream AND any
+    // TTS playback. (Echo never reaches here.)
+    if (speakingRef.current) {
+      console.log(`[turn] barge-in (speaking, conf=${speakerConfidence?.toFixed?.(2)}): "${text}"`)
       speakAbortRef.current?.abort()
-      // fall through: this final becomes a fresh turn below
+      // fall through: this final becomes a fresh turn
+    } else if (turnBusyRef.current) {
+      // Thinking (Claude working, not yet speaking). Guard against the SAME
+      // utterance's trailing STT fragment (a reconnect re-finalize or a late
+      // segment) restarting the turn: within the grace window, ignore a final
+      // that duplicates / is contained in the one already in flight.
+      const sinceStart = Date.now() - turnStartRef.current
+      const norm = normalizeForEcho(text)
+      const prior = turnTextRef.current
+      const dup = !!prior && (norm === prior || prior.includes(norm) || norm.includes(prior))
+      if (sinceStart < INTERRUPT_GRACE_MS && dup) {
+        console.log(`[turn] ignored (dup tail within grace ${sinceStart}ms): "${text}"`)
+        return
+      }
+      console.log(`[turn] interrupt (thinking → Ctrl+C, conf=${speakerConfidence?.toFixed?.(2)}): "${text}"`)
+      speakAbortRef.current?.abort()
+      // fall through: this final replaces the in-flight turn
     }
     setCoreInput(text)
-    if (!speakerName && !enrollHintShownRef.current) {
-      enrollHintShownRef.current = true
-      setCoreReply('Para identificarte y guardar tus tareas, configura tu nombre y graba una muestra de voz en el panel Sistema.')
-    }
-    // Pass speakerName only when STT is confident the owner is talking,
-    // otherwise leave null so the backend writes to Speakers/Unknown/.
-    const nameForTurn = (speakerName && speakerConfidence >= 0.65) ? speakerName : null
+    // Prefer the human-readable name from the store; fall back to the STT-detected
+    // speaker ID (e.g. "owner") so turns are always attributed when the voiceprint
+    // matches, even before the user has configured a display name.
+    const resolvedName = speakerName || (speakerConfidence >= 0.65 ? sttSpeakerName : undefined)
+    const nameForTurn = resolvedName || null
 
     const myTurn = ++turnSeqRef.current
     turnBusyRef.current = true
+    turnStartRef.current = Date.now()
+    turnTextRef.current = normalizeForEcho(text)
     // Longer safety than the buffered path: a streamed multi-sentence reply can
     // legitimately take a while across sentences.
     const safety = setTimeout(() => { if (turnSeqRef.current === myTurn) turnBusyRef.current = false }, 30000)
     const release = () => {
       clearTimeout(safety)
-      if (turnSeqRef.current === myTurn) { turnBusyRef.current = false; speakingRef.current = false }
+      ttsBusThinking(false) // turn over (spoken, silent, or failed) — back to idle
+      if (turnSeqRef.current === myTurn) {
+        turnBusyRef.current = false
+        speakingRef.current = false
+        postSpeakTimeRef.current = Date.now()
+        // Don't close the wake window here — the inactivity timer (re-armed each
+        // turn in the gate above) owns closing it, so follow-up turns within the
+        // window don't need the wake word repeated.
+      }
     }
 
-    const payload = { text, speakerConfidence, speakerName: nameForTurn, alwaysOn: true, context: { mode } }
+    const payload = { text, speakerConfidence, speakerName: nameForTurn, alwaysOn: true, context: { mode }, avgLogprob: meta?.avgLogprob, confidence: meta?.confidence }
     console.log(`[speech] -> converse text="${text}" conf=${speakerConfidence?.toFixed?.(2) ?? speakerConfidence} name=${nameForTurn}`)
 
     // One AbortController for the whole turn: aborting it (barge-in / newer turn)
@@ -418,21 +577,21 @@ export function AwakeApp() {
     let shown = ''
     ctrl.signal.addEventListener('abort', () => { speakingRef.current = false }, { once: true })
 
-    // Pipeline: each sentence starts SYNTHESIZING the instant it arrives (its
-    // WS opens and fills the worklet buffer), but PLAYBACK is gated on the
-    // previous sentence finishing (gate = prior play promise). So sentence N+1
-    // is already buffered when N ends → it starts immediately, no audible gap.
-    let tail: Promise<void> = Promise.resolve()
+    // One persistent TTS session for the whole reply. Sentences pipe into a
+    // single server-side paplay back-to-back: gapless, no overlap, no respawn
+    // dead-air. The session is created lazily on the first sentence.
+    let session: TtsSession | null = null
     const speakSentence = (t: string) => {
-      const gate = tail
       spoke = true
       speakingRef.current = true
-      tail = streamTtsAndPlay({ url: ttsUrl, text: t, lang: 'es', fx: true, signal: ctrl.signal, gate })
-        .catch((e) => {
-          if ((e as any)?.name !== 'AbortError') console.warn('[tts] sentence failed:', (e as Error)?.message)
-        })
+      ttsBusThinking(false) // reply started — hologram switches to speak-inflate
+      if (ctrl.signal.aborted) return
+      if (!session) session = streamTtsSession({ url: ttsUrl, lang: 'es', fx: true, signal: ctrl.signal })
+      session.speak(t)
     }
 
+    ttsBusThinking(true) // turn in flight — hologram grows while the brain works
+    ctrl.signal.addEventListener('abort', () => ttsBusThinking(false), { once: true })
     streamConverse(`${getApiBase()}/api/jarvis/converse`, payload, {
       signal: ctrl.signal,
       onSentence: (t) => {
@@ -447,7 +606,7 @@ export function AwakeApp() {
         if (result?.reply) setCoreReply(result.reply)
       },
     })
-      .then(() => tail) // wait for the last queued sentence to finish playing
+      .then(() => { session?.end(); return session?.done }) // flush + wait for full reply to finish
       .catch(async (e) => {
         if ((e as any)?.name === 'AbortError' || ctrl.signal.aborted) return
         console.warn('[speech] converse failed, falling back to process-speech:', (e as Error)?.message)
@@ -462,10 +621,17 @@ export function AwakeApp() {
         } catch (e2) { console.warn('[speech] fallback failed', e2) }
       })
       .finally(release)
-  }, [mode, setCoreInput, setCoreReply, voiceEnabled, speakerName, speak])
+  }, [mode, setCoreInput, setCoreReply, voiceEnabled, voiceMode, wakeListening, openWakeWindow, speakerName, speak])
 
+  // wake_word keeps the mic OPEN continuously (so the wake word can ever be
+  // heard). The response is gated on the word "jarvis" in handleSttFinal, not on
+  // the mic being closed.
+  const sttEnabled =
+    voiceMode === 'continuous' ||
+    voiceMode === 'wake_word' ||
+    (voiceMode === 'ptt' && pttActive)
   const { listening: sttListening } = useLocalStt({
-    enabled: voiceEnabled,
+    enabled: sttEnabled,
     onFinalTranscript: handleSttFinal,
     onInterimTranscript: (text) => {
       setCoreInput(text)
@@ -481,7 +647,34 @@ export function AwakeApp() {
     speak(getWakeConfirmation(focusedEntity?.label)).finally(() => { clearTimeout(safety); if (turnSeqRef.current === myTurn) turnBusyRef.current = false })
   }, [focusedEntity, speak])
 
-  useClapDetection({ enabled: clapWakeEnabled && voiceEnabled, onDoubleClap: handleWakeDetected })
+  useClapDetection({ enabled: clapWakeEnabled && voiceMode !== 'off', onDoubleClap: handleWakeDetected })
+
+  // In wake_word mode, an external trigger (openWakeWord via wake-bus) can also
+  // open the listening window, in addition to the on-device "jarvis" gate below.
+  useEffect(() => {
+    if (voiceMode !== 'wake_word') return
+    let ws: WebSocket | null = null
+    let stopped = false
+
+    function connect() {
+      if (stopped) return
+      ws = new WebSocket(`${getApiBase().replace(/^http/, 'ws')}/api/jarvis/wake-bus`)
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data as string)
+          if (msg.type === 'wake') openWakeWindow()
+        } catch {}
+      }
+      ws.onclose = () => { if (!stopped) setTimeout(connect, 3000) }
+      ws.onerror = () => ws?.close()
+    }
+    connect()
+    return () => {
+      stopped = true
+      ws?.close()
+      setWakeListening(false)
+    }
+  }, [voiceMode, openWakeWindow, setWakeListening])
 
   // Skill bus: lets self-built backend skills drive renderer primitives
   // (camera, notifications) while AWAKE.
@@ -490,6 +683,13 @@ export function AwakeApp() {
 
   const isVoiceActive = sttListening || wakeListening
   const audioLevel = useAudioLevel({ enabled: isVoiceActive || processingReply })
+
+  // Early duck: as soon as mic level rises (before any transcript), fade Jarvis
+  // down. duckTts() is a no-op when TTS isn't playing, so no guard needed here.
+  useEffect(() => {
+    if (audioLevel > 0.12) duckTts()
+  }, [audioLevel, duckTts])
+
   const haloState: 'capturing' | 'processing' | null = processingReply ? 'processing' : isVoiceActive ? 'capturing' : null
   const isCanvasMode  = zoomedMode && CANVAS_MODES.has(zoomedMode)
 
@@ -521,6 +721,7 @@ export function AwakeApp() {
 
       {haloState === 'processing' && <VoiceHalo active={true} audioLevel={audioLevel} state="processing" />}
 
+
       {/* World scene — fades out when canvas-mode overlay fully covers it.
           When a panel mode is open we dim (not hide) the carousel via CSS. */}
       <div className="world-layer" style={{
@@ -531,6 +732,12 @@ export function AwakeApp() {
       }}>
         <WorldScene />
       </div>
+
+      {/* Listening window indicator (wake_word window open, or PTT held) */}
+      <ListeningOverlay
+        listening={isVoiceActive}
+        ptt={voiceMode === 'ptt'}
+      />
 
       {/* Pinch zoom vignette */}
       {pinchZoomProgress > PINCH_VIGNETTE_START && (
@@ -592,8 +799,19 @@ export function AwakeApp() {
           {!terminalOpen && (
             <div className="core-menu core-menu-enter">
               <HudBtn onClick={() => setTerminalOpen(true)}>Terminal</HudBtn>
-              <HudBtn active={sttListening} onClick={() => setVoiceEnabled(!voiceEnabled)}>
-                {sttListening ? 'Escuchando' : 'Activar voz'}
+              <HudBtn
+                active={voiceMode !== 'off'}
+                onClick={() => {
+                  const cycle: Record<string, import('./state/jarvisStore').VoiceMode> = {
+                    off: 'continuous', continuous: 'wake_word', wake_word: 'ptt', ptt: 'off',
+                  }
+                  setVoiceMode(cycle[voiceMode])
+                }}
+              >
+                {voiceMode === 'off'       ? 'Voz apagada'
+                 : voiceMode === 'continuous' ? (sttListening ? 'Escuchando…' : 'Siempre activa')
+                 : voiceMode === 'wake_word'  ? (sttListening ? 'Escuchando…' : 'Wake word')
+                 : /* ptt */                   (sttListening ? 'Escuchando…' : 'Modo PTT')}
               </HudBtn>
               <HudBtn active={clapWakeEnabled} onClick={() => setClapWakeEnabled(!clapWakeEnabled)}>
                 {clapWakeEnabled ? 'Aplauso activo' : 'Activar aplauso'}
@@ -653,7 +871,23 @@ export function AwakeApp() {
                 </button>
               </div>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 10 }}>
-                {mobileToken?.tailscaleUrl ? (
+                {mobileToken?.tunnelUrl ? (
+                  <div
+                    style={{ border: '1px solid #64ffda44', borderRadius: 4, padding: 8, cursor: 'pointer' }}
+                    onClick={() => copyUrl(mobileToken.tunnelUrl!)}
+                    title="Copiar"
+                  >
+                    <div style={{ fontSize: 8, color: '#64ffda', marginBottom: 2 }}>
+                      TUNEL {copiedUrl === mobileToken.tunnelUrl ? '· Copiado' : '· Clic para copiar'}
+                    </div>
+                    <div style={{ wordBreak: 'break-all', opacity: 0.9 }}>{mobileToken.tunnelUrl}</div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 9, color: '#ffd700', opacity: 0.8 }}>
+                    ⏳ Túnel no listo — reiniciando backend...
+                  </div>
+                )}
+                {mobileToken?.tailscaleUrl && (
                   <div
                     style={{ border: '1px solid #00e5ff44', borderRadius: 4, padding: 8, cursor: 'pointer' }}
                     onClick={() => copyUrl(mobileToken.tailscaleUrl!)}
@@ -663,10 +897,6 @@ export function AwakeApp() {
                       TAILSCALE {copiedUrl === mobileToken.tailscaleUrl ? '· Copiado' : '· Clic para copiar'}
                     </div>
                     <div style={{ wordBreak: 'break-all', opacity: 0.9 }}>{mobileToken.tailscaleUrl}</div>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 9, color: '#ffd700', opacity: 0.8 }}>
-                    Tailscale no detectado — QR usa LAN
                   </div>
                 )}
                 <div
@@ -697,7 +927,6 @@ export function AwakeApp() {
           {/* Gestos */}
           <GestureMonitor />
           <HudBtn onClick={() => setGestureDebugOpen(true)}>Debug gestos</HudBtn>
-          <HudBtn onClick={() => setGestureTrainerOpen(true)}>Entrenar gestos ML</HudBtn>
 
           {/* Speaker ID */}
           <SpeakerIdPanel onOpenConfig={() => setSpeakerConfigOpen(true)} />
@@ -735,33 +964,27 @@ export function AwakeApp() {
 
       {/* Voice + Gesture toggles — floating top-right */}
       <GlassPanel style={{ position: 'fixed', top: 16, right: 36, padding: '6px 14px', zIndex: 100, display: 'flex', gap: 8 }}>
-        <HudBtn active={voiceEnabled} onClick={() => setVoiceEnabled(!voiceEnabled)}>
-          Voz
+        <HudBtn
+          active={voiceMode !== 'off'}
+          onClick={() => {
+            const cycle: Record<string, import('./state/jarvisStore').VoiceMode> = {
+              off: 'continuous', continuous: 'wake_word', wake_word: 'ptt', ptt: 'off',
+            }
+            setVoiceMode(cycle[voiceMode])
+          }}
+        >
+          {voiceMode === 'off' ? 'Voz' : voiceMode === 'continuous' ? 'Continuo' : voiceMode === 'wake_word' ? 'Wake' : 'PTT'}
         </HudBtn>
         <HudBtn active={gestureEnabled} onClick={() => setGestureEnabled(!gestureEnabled)}>
           Gestos
         </HudBtn>
       </GlassPanel>
 
-      {/* Point gesture pointer */}
-      {gestureOutput.point.active && (
-        <div style={{
-          position: 'fixed',
-          left: `${(1 - gestureOutput.point.screenX) * 100}%`,
-          top: `${gestureOutput.point.screenY * 100}%`,
-          width: 16, height: 16,
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, #00f0ff 0%, transparent 70%)',
-          boxShadow: '0 0 12px #00f0ff, 0 0 24px #00f0ff44',
-          transform: 'translate(-50%, -50%)',
-          pointerEvents: 'none',
-          zIndex: 9000,
-          transition: 'left 0.05s linear, top 0.05s linear',
-        }} />
-      )}
+      {/* Point gesture pointer — componente propio: se re-renderiza solo él a
+          la tasa del pipeline, no toda la app. */}
+      <GesturePointer />
 
       {gestureDebugOpen && <GestureDebugView onClose={() => setGestureDebugOpen(false)} />}
-      {gestureTrainerOpen && <GestureTrainer onClose={() => setGestureTrainerOpen(false)} />}
       {speakerConfigOpen && <SpeakerConfigWindow onClose={() => setSpeakerConfigOpen(false)} />}
 
       {/* Self-controlled via displayStore — Jarvis pushes content over the bus. */}

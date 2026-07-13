@@ -112,10 +112,15 @@ export async function handleJarvisTts(req, res) {
 
 /**
  * WebSocket upgrade handler for /api/jarvis/tts/ws.
- * Proxies a WS connection straight to the XTTS service's /synthesize/ws
- * endpoint. Bidirectional pass-through: client sends initial JSON params
- * + optional {type:"abort"}; upstream sends start/end JSON + binary PCM
- * frames. Lower per-chunk overhead than the HTTP streaming path.
+ *
+ * Plays TTS audio through the system PipeWire sink (paplay) so it follows
+ * the same output device as all other system audio — bypassing WebKit's
+ * AudioContext which doesn't reliably follow PipeWire's default sink.
+ *
+ * Protocol to client is kept minimal: {type:"start"} + one silent PCM frame
+ * (to satisfy the frontend watchdog timer), then {type:"end"} once paplay
+ * finishes. The frontend AudioWorklet drains the silent frame instantly and
+ * resolves — UI state stays correct without the client handling real audio.
  */
 export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
   let WsModule
@@ -128,51 +133,187 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
     return
   }
   const { WebSocket: WsClient, WebSocketServer } = WsModule
+  const { spawn } = await import('child_process')
 
   const wss = new WebSocketServer({ noServer: true })
   wss.handleUpgrade(req, socket, head, (clientWs) => {
     const upstreamUrl = XTTS_URL.replace(/^http/, 'ws') + '/synthesize/ws'
-    const upstream = new WsClient(upstreamUrl)
 
-    // Relay upstream -> client immediately. The TTS service streams {type:start}
-    // and the first PCM frames within ~15 ms of connecting; registering this
-    // listener inside the 'open' handler raced and dropped those early frames
-    // (silent TTS). Attach it now so nothing is missed.
-    upstream.on('message', (data, isBinary) => {
+    // ONE persistent player for the whole turn. paplay routes into the echo-cancel
+    // sink (JARVIS_AEC_SINK, default "jarvis_aec_sink"), which forwards to the
+    // system default sink (Bluetooth) AND gives PipeWire's module-echo-cancel the
+    // reference signal needed to strip Jarvis's own voice from the mic. Set
+    // JARVIS_AEC_SINK="" to bypass AEC and play straight to the default sink.
+    // Sentences are synthesized serially and piped into this SAME process
+    // back-to-back: no respawn gap, serial order means no overlap.
+    // xtts streams ~5x faster than realtime, so sentence N+1 is written into
+    // the still-buffered pipe while N is playing → gapless playback.
+    const aecSink = process.env.JARVIS_AEC_SINK ?? 'jarvis_aec_sink'
+    const deviceFlag = aecSink ? ` --device=${aecSink}` : ''
+    const player = spawn('sh', ['-c',
+      `ffmpeg -loglevel quiet -f f32le -ar 24000 -ac 1 -i pipe:0 -f s16le -ar 48000 -ac 2 - | paplay --raw --rate=48000 --channels=2 --format=s16le${deviceFlag}`,
+    ], { stdio: ['pipe', 'ignore', 'ignore'] })
+    player.stdin.on('error', () => {})
+
+    let aborted = false
+    let sentStart = false
+    let ended = false       // client signalled no more sentences
+
+    // Prefetch pipeline: synthesize up to PREFETCH sentences ahead on concurrent
+    // upstream connections, buffering each job's PCM in memory. A single writer
+    // (pump) drains those buffers into the paplay pipe strictly in order. The
+    // instant sentence N finishes draining, N+1's audio is already synthesized
+    // and sitting in RAM, so XTTS connection + first-token latency is hidden
+    // behind N's playback instead of opening a fresh WS at each boundary (the
+    // old serial model starved the pipe → audible gap between sentences).
+    const PREFETCH = 2
+    const jobs = []         // ordered: { text,lang,fx,speed, chunks:[], done, started, settled }
+    let writeIdx = 0        // index of the job currently draining into the pipe
+    let synthActive = 0     // open upstream connections
+
+    const sendJson = (obj) => {
       if (clientWs.readyState === WsClient.OPEN) {
-        clientWs.send(data, { binary: isBinary })
+        try { clientWs.send(JSON.stringify(obj)) } catch {}
       }
-    })
+    }
 
-    // Buffer client -> upstream frames until the upstream socket is open.
-    const pending = []
-    let upstreamOpen = false
-    upstream.on('open', () => {
-      upstreamOpen = true
-      for (const [d, b] of pending) {
-        try { upstream.send(d, { binary: b }) } catch {}
+    // Voice-level envelope for the UI hologram: audio plays server-side, so the
+    // client gets {type:"levels", t0, dt, v:[...]} — RMS per 100ms block, with
+    // t0 = seconds into the reply's audio timeline (cumulative samples, NOT
+    // wall time: the pipe fills faster than realtime). Computed here in pump
+    // order because drain order IS playback order (prefetch synthesizes out of
+    // order). The client re-anchors t0 to its own clock plus output latency.
+    const LEVEL_BLOCK = 2400 // samples @24k = 100ms
+    let levelBlockIdx = 0
+    let levelAcc = 0
+    let levelAccN = 0
+    const emitLevels = (buf) => {
+      let f
+      try {
+        const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + (buf.byteLength & ~3))
+        f = new Float32Array(ab)
+      } catch { return }
+      const vals = []
+      let firstBlock = null
+      for (let i = 0; i < f.length; i++) {
+        const s = f[i]
+        levelAcc += s * s
+        if (++levelAccN >= LEVEL_BLOCK) {
+          if (firstBlock === null) firstBlock = levelBlockIdx
+          // ~3.5x gain maps typical speech RMS (~0.05-0.25) onto 0..1.
+          vals.push(Math.min(1, Math.round(Math.sqrt(levelAcc / levelAccN) * 350) / 100))
+          levelBlockIdx++
+          levelAcc = 0
+          levelAccN = 0
+        }
       }
-      pending.length = 0
-    })
-    clientWs.on('message', (data, isBinary) => {
-      if (upstreamOpen && upstream.readyState === WsClient.OPEN) {
-        upstream.send(data, { binary: isBinary })
-      } else {
-        pending.push([data, isBinary])
-      }
-    })
+      if (vals.length) sendJson({ type: 'levels', t0: +(firstBlock * 0.1).toFixed(2), dt: 0.1, v: vals })
+    }
 
-    upstream.on('error', () => {
-      try { clientWs.close(1011, 'upstream_error') } catch {}
-    })
-    upstream.on('close', () => {
+    player.on('close', () => {
+      sendJson({ type: 'end' })
       try { clientWs.close(1000) } catch {}
     })
+
+    const ensureStart = () => {
+      if (sentStart) return
+      sentStart = true
+      sendJson({ type: 'start', sr: 24000, channels: 1, encoding: 'f32le' })
+      // One silent frame so the frontend watchdog clears.
+      const silent = Buffer.alloc(240 * 4)
+      if (clientWs.readyState === WsClient.OPEN) {
+        try { clientWs.send(silent, { binary: true }) } catch {}
+      }
+    }
+
+    const maybeEndPlayer = () => {
+      if (ended && writeIdx >= jobs.length && synthActive === 0) {
+        try { player.stdin.end() } catch {}
+      }
+    }
+
+    // Drain buffered audio into the pipe in order, advancing past finished jobs.
+    const pump = () => {
+      if (aborted) return
+      while (writeIdx < jobs.length) {
+        const job = jobs[writeIdx]
+        while (job.chunks.length) {
+          const buf = job.chunks.shift()
+          emitLevels(buf)
+          try { player.stdin.write(buf) } catch {}
+        }
+        if (job.done) { writeIdx++; continue } // drained + finished → next job
+        break                                  // still producing → wait
+      }
+      maybeEndPlayer()
+    }
+
+    // Open upstreams for not-yet-started jobs, up to PREFETCH concurrent.
+    const schedule = () => {
+      if (aborted) return
+      for (const job of jobs) {
+        if (synthActive >= PREFETCH) break
+        if (job.started) continue
+        job.started = true
+        synthActive++
+        const upstream = new WsClient(upstreamUrl)
+        const settle = () => {
+          if (job.settled) return
+          job.settled = true
+          job.done = true
+          synthActive--
+          if (aborted) return
+          pump()
+          schedule()
+        }
+        upstream.on('open', () => {
+          try {
+            upstream.send(JSON.stringify({
+              text: job.text, lang: job.lang, fx: job.fx,
+              ...(job.speed !== undefined ? { speed: job.speed } : {}),
+            }))
+          } catch {}
+        })
+        upstream.on('message', (data, isBinary) => {
+          if (aborted) return
+          if (isBinary) { job.chunks.push(data); pump() }
+          else {
+            const msg = JSON.parse(data.toString())
+            if (msg.type === 'start') ensureStart()
+            if (msg.type === 'error') sendJson(msg)
+          }
+        })
+        upstream.on('close', settle)
+        upstream.on('error', settle)
+      }
+    }
+
+    clientWs.on('message', (data, isBinary) => {
+      if (isBinary) return
+      let msg
+      try { msg = JSON.parse(data.toString()) } catch { return }
+      if (msg.type === 'abort') {
+        aborted = true
+        try { player.kill() } catch {}
+        try { clientWs.close(1000) } catch {}
+        return
+      }
+      if (msg.type === 'end') {
+        ended = true
+        maybeEndPlayer()
+        return
+      }
+      if (msg.text) {
+        jobs.push({ text: msg.text, lang: msg.lang ?? 'es', fx: msg.fx ?? false, speed: msg.speed, chunks: [], done: false, started: false, settled: false })
+        schedule()
+      }
+    })
+
     clientWs.on('close', () => {
-      try { upstream.close() } catch {}
+      if (!aborted) { aborted = true; try { player.kill() } catch {} }
     })
     clientWs.on('error', () => {
-      try { upstream.close() } catch {}
+      aborted = true; try { player.kill() } catch {}
     })
   })
 }

@@ -32,17 +32,25 @@ export function isQrRequest(text) {
 }
 
 export async function sendQrToTelegram() {
-  let qrUrl, expiresAt
+  let tunnelUrl, expiresAt
   try {
     const r = await fetch(`http://127.0.0.1:${PORT}/api/mobile/token`)
     if (!r.ok) throw new Error(`backend ${r.status}`)
     const data = await r.json()
-    qrUrl = data.qrUrl
+    tunnelUrl = data.tunnelUrl
     expiresAt = data.expiresAt
   } catch (e) {
     await notifyJarvis(`⚠️ Jarvis no está activo.\nAbre la app Jarvis en tu PC primero.\n_(${e?.message ?? 'sin respuesta'})_`)
     return null
   }
+
+  if (!tunnelUrl) {
+    await notifyJarvis('⏳ El túnel público aún no está listo.\nEspera unos segundos y vuelve a intentarlo.')
+    return null
+  }
+
+  const session = await fetch(`http://127.0.0.1:${PORT}/api/mobile/token`).then(r => r.json())
+  const qrUrl = `${tunnelUrl}?token=${session.token}`
 
   const tmpPath = path.join(os.tmpdir(), 'jarvis-mobile-qr-tg.png')
   try {

@@ -78,3 +78,10 @@ CLAUDE.md.original.md
 
 # Voice enrollment (personal data — never commit)
 backend/voice/samples/speaker/
+# Encrypted owner voiceprint — biometric data, never commit
+backend/voice/python/owner_voiceprint.enc
+backend/voice/python/owner_voiceprint.enc.*
+# Secrets loaded into env at boot — never commit
+backend/secrets.local.json
+maestro-skill.tar.gz
+scripts/__pycache__/

@@ -100,12 +100,30 @@ async function displayHide(): Promise<unknown> {
   return { hidden: true }
 }
 
-/** Show the 3D model viewer. payload is a Model3DSpec. */
+/** Normalize a model3d payload: single spec, {objects:[...]} or {specs:[...]} → spec array. */
+function model3dSpecs(payload: any): Model3DSpec[] {
+  const list = Array.isArray(payload?.objects) ? payload.objects
+    : Array.isArray(payload?.specs) ? payload.specs
+    : [payload]
+  if (!list.length) throw new Error('empty_model3d_specs')
+  for (const s of list) {
+    if (!MODEL3D_KINDS.includes(s?.kind)) throw new Error('invalid_model3d_kind')
+  }
+  return list as Model3DSpec[]
+}
+
+/** Show the 3D viewer. payload: single Model3DSpec, or { objects: Model3DSpec[], scene? }. */
 async function model3dShow(payload: any = {}): Promise<unknown> {
-  const kind = payload?.kind
-  if (!['parametric', 'polytope', 'implicit'].includes(kind)) throw new Error('invalid_model3d_kind')
-  useModel3dStore.getState().show(payload as Model3DSpec)
-  return { shown: true, kind, title: payload.title ?? '' }
+  const specs = model3dSpecs(payload)
+  useModel3dStore.getState().show(specs, payload?.scene)
+  return { shown: true, count: specs.length, kinds: specs.map((s) => s.kind) }
+}
+
+/** Append object(s) to the current 3D scene without clearing it. */
+async function model3dAdd(payload: any = {}): Promise<unknown> {
+  const specs = model3dSpecs(payload)
+  useModel3dStore.getState().add(specs)
+  return { added: specs.length, total: useModel3dStore.getState().objects.length }
 }
 
 /** Hide the 3D model viewer. */
@@ -122,7 +140,7 @@ import { useJarvisStore } from '../state/jarvisStore'
 import { useTimerStore } from '../state/timerStore'
 import { useChronoStore } from '../state/chronoStore'
 import { useDisplayStore } from '../state/displayStore'
-import { useModel3dStore, type Model3DSpec } from '../state/model3dStore'
+import { useModel3dStore, MODEL3D_KINDS, type Model3DSpec } from '../state/model3dStore'
 import type { Mode } from '../types'
 
 /** Open a mode panel/canvas. payload: { mode: Mode, subRing?: boolean } */
@@ -258,7 +276,7 @@ const VALID_MODES: ReadonlyArray<Mode> = [
 ]
 
 const VALID_OVERLAYS: ReadonlyArray<OverlayName> = [
-  'terminal', 'gesture_debug', 'gesture_trainer', 'speaker_config',
+  'terminal', 'gesture_debug', 'speaker_config',
 ]
 
 async function viewOpen(payload: { view?: string } = {}): Promise<unknown> {
@@ -293,7 +311,6 @@ async function viewCurrent(): Promise<unknown> {
     overlays: {
       terminal: u.terminalOpen,
       gesture_debug: u.gestureDebugOpen,
-      gesture_trainer: u.gestureTrainerOpen,
       speaker_config: u.speakerConfigOpen,
     },
     voiceEnabled: j.voiceEnabled,
@@ -342,6 +359,26 @@ async function toggleClapWake(payload: { enabled?: boolean } = {}): Promise<unkn
   return { clapWakeEnabled: next }
 }
 
+async function voiceModeSet(payload: { mode?: string }): Promise<unknown> {
+  const { setVoiceMode, voiceMode } = useJarvisStore.getState()
+  const m = payload.mode
+  if (m === 'off' || m === 'continuous' || m === 'wake_word' || m === 'ptt') {
+    setVoiceMode(m)
+    return { voiceMode: m }
+  }
+  return { voiceMode, error: 'unknown_mode' }
+}
+
+async function pttStart(): Promise<unknown> {
+  useJarvisStore.getState().setPttActive(true)
+  return { pttActive: true }
+}
+
+async function pttStop(): Promise<unknown> {
+  useJarvisStore.getState().setPttActive(false)
+  return { pttActive: false }
+}
+
 /** Enter PIP (mini window) mode. */
 async function bootPip(): Promise<unknown> {
   useBootStore.getState().enterPip()
@@ -363,6 +400,14 @@ async function gestureSet(payload: { enabled?: boolean } = {}): Promise<unknown>
   return { gestureEnabled: enabled }
 }
 
+/** Estado vivo del pipeline de gestos — observabilidad remota (curl / brain).
+ * Incluye el output actual: permite verificar por curl si un gesto está
+ * llegando al store mientras alguien lo hace frente a la cámara. */
+async function gestureStatus(): Promise<unknown> {
+  const g = useGestureStore.getState()
+  return { enabled: g.enabled, status: g.status, detail: g.statusDetail, fps: g.fps, output: g.output }
+}
+
 const PRIMITIVES: Record<string, Primitive> = {
   enumerate_devices: enumerateDevices,
   capture_photo: capturePhoto,
@@ -371,6 +416,7 @@ const PRIMITIVES: Record<string, Primitive> = {
   display_hide: displayHide,
   pick_file: pickFile,
   model3d_show: model3dShow,
+  model3d_add: model3dAdd,
   model3d_hide: model3dHide,
   mode_open: modeOpen,
   timer_create: timerCreate,
@@ -396,9 +442,13 @@ const PRIMITIVES: Record<string, Primitive> = {
   sleep_system: sleepSystem,
   toggle_voice: toggleVoice,
   toggle_clap_wake: toggleClapWake,
+  voice_mode_set:  voiceModeSet,
+  ptt_start: pttStart,
+  ptt_stop:  pttStop,
   boot_pip:    bootPip,
   boot_awake:  bootAwake,
   gesture_set: gestureSet,
+  gesture_status: gestureStatus,
 }
 
 /**

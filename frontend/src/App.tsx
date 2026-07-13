@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react'
+import { isTauri, tauriInvoke, tauriListen, getWindowLabel } from './platform/tauri'
 import { useBootStore } from './state/bootStore'
+import { useJarvisStore } from './state/jarvisStore'
+import { PttOverlayPage } from './PttOverlayPage'
+
+// Detect if this JS context is running inside the PTT overlay Tauri window.
+const IS_OVERLAY = getWindowLabel() === 'ptt-overlay'
 import { DormantLayer } from './components/DormantLayer'
 import { RadialTransition } from './components/RadialTransition'
 import { AwakeApp } from './AwakeApp'
@@ -22,12 +28,21 @@ function hasMobileSignal(): boolean {
 }
 
 export default function App() {
+  // Render the standalone overlay page when running in the ptt-overlay Tauri window
+  if (IS_OVERLAY) return <PttOverlayPage />
+
   const bootState = useBootStore((s) => s.bootState)
+  const setBootState = useBootStore((s) => s.setBootState)
+  const setPttActive = useJarvisStore((s) => s.setPttActive)
+  const pttActive    = useJarvisStore((s) => s.pttActive)
   const [transitionDone, setTransitionDone] = useState(false)
   const [awakeVisible, setAwakeVisible]     = useState(false)
   const [mobileState, setMobileState]       = useState<MobileState>(
     hasMobileSignal() ? 'checking' : 'desktop'
   )
+  // Modo web completo: ?ui=full en la URL del token persiste la GUI de
+  // escritorio (AwakeApp) para este navegador remoto; ?ui=mobile la revierte.
+  const [fullUi, setFullUi] = useState(() => localStorage.getItem('jarvis.ui.mode') === 'full')
 
   useEffect(() => {
     if (mobileState !== 'checking') return
@@ -40,8 +55,17 @@ export default function App() {
       if (urlToken) {
         setApiBase(window.location.origin)
         setMobileToken(urlToken)
+        const uiParam = new URLSearchParams(window.location.search).get('ui')
+        if (uiParam === 'full') {
+          localStorage.setItem('jarvis.ui.mode', 'full')
+          setFullUi(true)
+        } else if (uiParam === 'mobile') {
+          localStorage.removeItem('jarvis.ui.mode')
+          setFullUi(false)
+        }
         const url = new URL(window.location.href)
         url.searchParams.delete('token')
+        url.searchParams.delete('ui')
         window.history.replaceState({}, '', url.toString())
       }
 
@@ -67,6 +91,83 @@ export default function App() {
     detect()
   }, [mobileState])
 
+  // Super+J global shortcut from Tauri wakes from DORMANT.
+  // Two paths: Tauri event IPC and direct eval() fallback via window.__jarvisWake.
+  useEffect(() => {
+    const unlisten = tauriListen('jarvis:wake', () => setBootState('AWAKE'))
+    ;(window as any).__jarvisWake = () => setBootState('AWAKE')
+    return () => {
+      unlisten.then(fn => fn())
+      delete (window as any).__jarvisWake
+    }
+  }, [setBootState])
+
+  // Super+W / killactive → Rust intercepts close, hides window, emits jarvis:sleep
+  useEffect(() => {
+    const unlisten = tauriListen('jarvis:sleep', () => setBootState('DORMANT'))
+    return () => { unlisten.then(fn => fn()) }
+  }, [setBootState])
+
+  // Modo web completo remoto: sin Super+J ni clap con que despertar — arranca
+  // directo en AWAKE una vez autenticado.
+  useEffect(() => {
+    if (!isTauri() && mobileState === 'mobile' && fullUi) setBootState('AWAKE')
+  }, [mobileState, fullUi, setBootState])
+
+  // PTT bus: the NitroSense key (Hyprland code:425 → POST /api/skills/voice/ptt-start|stop)
+  // broadcasts ptt_start/ptt_stop here. Persistent WS with reconnect, mirroring the
+  // wake-bus in DormantLayer. Drives pttActive → STT gate + ptt-overlay window.
+  useEffect(() => {
+    let ws: WebSocket | null = null
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    function connect() {
+      if (stopped) return
+      ws = new WebSocket(`${getApiBase().replace(/^http/, 'ws')}/api/jarvis/ptt-bus`)
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data)
+          if (msg.type === 'ptt_start') setPttActive(true)
+          else if (msg.type === 'ptt_stop') setPttActive(false)
+        } catch {}
+      }
+      ws.onclose = () => { if (!stopped) timer = setTimeout(connect, 3000) }
+      ws.onerror = () => ws?.close()
+    }
+    connect()
+
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      ws?.close()
+    }
+  }, [setPttActive])
+
+  // Show/hide the Tauri ptt-overlay window when the PTT key is held. Lives here
+  // (always mounted) — not in AwakeApp — so the overlay works cross-workspace even
+  // while DORMANT, when AwakeApp is unmounted.
+  useEffect(() => {
+    tauriInvoke('set_ptt_overlay', { visible: pttActive }).catch(() => {})
+  }, [pttActive])
+
+  // F12 → open Tauri devtools
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'F12') tauriInvoke('open_devtools').catch(() => {})
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
+  // When DORMANT, move to special:jarvis workspace (stays visible to WebKit so JS keeps
+  // running for wake-bus WS and clap detection, but hidden from the user's screen).
+  useEffect(() => {
+    if (bootState === 'DORMANT') {
+      tauriInvoke('dormant_window').catch(() => {})
+    }
+  }, [bootState])
+
   useEffect(() => {
     if (bootState !== 'AWAKE') { setTransitionDone(false); setAwakeVisible(false) }
   }, [bootState])
@@ -85,7 +186,7 @@ export default function App() {
     )
   }
 
-  if (mobileState === 'mobile') return <MobileClient />
+  if (mobileState === 'mobile' && !fullUi) return <MobileClient />
 
   if (mobileState === 'expired') {
     return (

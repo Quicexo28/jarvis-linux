@@ -28,7 +28,7 @@ SPEAKER = "$SPEAKER"
 
 # Usar el mismo encoder que stt_service (SPEAKER_ENCODER=ecapa|resemblyzer)
 sys.path.insert(0, str(HERE / "../backend/voice/python"))
-from speaker_id import make_encoder, filter_consistent
+from speaker_id import make_encoder, filter_consistent, augment_variants
 from resemblyzer import preprocess_wav
 import numpy as _np
 
@@ -38,7 +38,7 @@ print(f"Encoder: {encoder.name} (dim={encoder.dim})")
 wavs = sorted(SAMPLES.glob("*.wav"))
 print(f"Procesando {len(wavs)} archivos WAV...")
 
-raw_embs, labels = [], []
+raw_embs, labels, wav_arrays = [], [], []
 for w in wavs:
     try:
         wav = preprocess_wav(w)
@@ -46,13 +46,32 @@ for w in wavs:
         emb = emb / (_np.linalg.norm(emb) + 1e-9)
         raw_embs.append(emb)
         labels.append(w.name)
+        wav_arrays.append(wav)
         print(f"  {w.name}: OK (dim={len(emb)})")
     except Exception as e:
         print(f"  {w.name}: ERROR - {e}")
 
 # Excluir refs inconsistentes (eco/ruido aprendido) antes de cifrar.
-filtered = filter_consistent(raw_embs, encoder.ref_floor, labels)
-embeddings = [e.tolist() for e in filtered]
+filtered, dropped = filter_consistent(raw_embs, encoder.ref_floor, labels, return_dropped=True)
+
+# Aumentar sobrevivientes con variantes sintéticas (reverb / distancia / ruido)
+# para cubrir condiciones acústicas no grabadas. SPEAKER_AUGMENT=0 desactiva.
+aug_embs = []
+if os.environ.get("SPEAKER_AUGMENT", "1") != "0":
+    dropped_set = set(dropped)
+    for i, wav in enumerate(wav_arrays):
+        if i in dropped_set:
+            continue
+        for var in augment_variants(wav):
+            try:
+                emb = encoder.embed(var)
+                aug_embs.append(emb / (_np.linalg.norm(emb) + 1e-9))
+            except Exception:
+                continue
+    if aug_embs:
+        print(f"Aumentadas: +{len(aug_embs)} variantes sintéticas")
+
+embeddings = [e.tolist() for e in list(filtered) + aug_embs]
 
 if len(embeddings) < 3:
     print("Error: no se pudieron procesar suficientes muestras")

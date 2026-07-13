@@ -18,14 +18,29 @@ import asyncio
 import io
 import json
 import os
+import re
 import struct
+import threading
+import urllib.request
 import tempfile
 import time
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import torch
+
+# Cap torch's CPU thread pool: DeepFilter (denoise) and ECAPA (speaker-id) now
+# run CONCURRENTLY on CPU — both defaulting to all cores oversubscribes and
+# showed up as multi-second den_ms/spk_ms spikes. Half the cores each is the
+# sweet spot; whisper is ctranslate2 (own pool, unaffected).
+torch.set_num_threads(
+    int(os.environ.get("STT_TORCH_THREADS", str(max(2, (os.cpu_count() or 8) // 2))))
+)
+
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -58,10 +73,47 @@ STT_HOTWORDS = os.environ.get(
 # Override with STT_INITIAL_PROMPT; set empty to disable.
 STT_INITIAL_PROMPT = os.environ.get(
     "STT_INITIAL_PROMPT",
-    "Conversación en español con Jarvis, el asistente personal de Santiago. "
-    "Comandos por voz: abre el plano, pon un temporizador, navega a la casa, "
+    # NO narrative self-description ("Jarvis, el asistente personal de Santiago"):
+    # Whisper regurgitates that sentence verbatim on silence/noise (the decoder was
+    # primed with those tokens, so the echo passes the no_speech/logprob gates as
+    # "confident" text). A neutral register hint + command examples still bias
+    # orthography/style without giving the model a self-describing sentence to echo.
+    # The _is_prompt_echo() guard below catches any residual paraphrase.
+    "Transcripción en español de Colombia. "
+    "Abre el plano, pon un temporizador, navega a la casa, "
     "sube el volumen, muéstrame el sistema.",
 )
+
+
+def _strip_accents(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn"
+    )
+
+
+# Prompt-echo guard. During silence/noise Whisper hallucinates a paraphrase of the
+# initial_prompt (e.g. "Comandos en español con Jarvis, el asistente personal de
+# Santiago") — high avg_logprob / low no_speech_prob, so the anti-hallucination
+# gates let it through as confident text. These anchors are narrative fragments a
+# real command NEVER contains, so dropping any transcript that holds one removes the
+# hallucination outright (empty text => never emitted) with zero risk to real speech.
+# Override/extend via STT_ECHO_ANCHORS (comma-separated).
+_ECHO_ANCHORS = tuple(
+    _strip_accents(a).strip().lower()
+    for a in os.environ.get(
+        "STT_ECHO_ANCHORS",
+        "en espanol con jarvis,asistente personal de,comandos por voz,"
+        "conversacion en espanol,comandos en espanol",
+    ).split(",")
+    if a.strip()
+)
+
+
+def _is_prompt_echo(text: str) -> bool:
+    if not text:
+        return False
+    norm = _strip_accents(text).lower()
+    return any(a in norm for a in _ECHO_ANCHORS)
 
 # Noise suppression mode (STT_DENOISE_MODE):
 #   highpass  (default) — gentle 90 Hz high-pass only. Kills rumble/HVAC without
@@ -127,6 +179,22 @@ def _df_torchaudio_shim() -> None:
     sys.modules["torchaudio.backend.common"] = common
 
 
+@contextmanager
+def _torch_cpu_only():
+    """Hide CUDA from torch for the duration of a df call. DeepFilterNet picks
+    cuda:0 whenever torch sees it, but the GPU is fully budgeted for whisper
+    (4 GB card) — df on CUDA just OOMs and knocks denoise down to high-pass.
+    CPU df is real-time anyway. Scoped so speaker-id/VAD device choices are
+    unaffected."""
+    import torch as _torch
+    orig = _torch.cuda.is_available
+    _torch.cuda.is_available = lambda: False
+    try:
+        yield
+    finally:
+        _torch.cuda.is_available = orig
+
+
 def _deepfilter(audio: np.ndarray) -> np.ndarray:
     """DeepFilterNet neural denoise. Lazy-loads the model once; falls back to a
     high-pass if deepfilternet isn't installed or any step fails."""
@@ -135,7 +203,8 @@ def _deepfilter(audio: np.ndarray) -> np.ndarray:
         if _df_state is None:
             _df_torchaudio_shim()
             from df.enhance import init_df  # type: ignore
-            model, df_state, _ = init_df(log_level="warning")
+            with _torch_cpu_only():
+                model, df_state, _ = init_df(log_level="warning")
             _df_state = (model, df_state)
         from df.enhance import enhance  # type: ignore
         import torch as _torch
@@ -145,7 +214,8 @@ def _deepfilter(audio: np.ndarray) -> np.ndarray:
         x = _torch.from_numpy(audio).unsqueeze(0)
         if df_sr != SAMPLE_RATE:
             x = _AF.resample(x, SAMPLE_RATE, df_sr)
-        out = enhance(model, df_state, x)
+        with _torch_cpu_only():
+            out = enhance(model, df_state, x)
         if df_sr != SAMPLE_RATE:
             out = _AF.resample(out, df_sr, SAMPLE_RATE)
         return out.squeeze(0).cpu().numpy().astype(np.float32, copy=False)
@@ -318,7 +388,9 @@ def _load_owner_voiceprint(si) -> bool:
                 flush=True,
             )
             return False
-        si.inject_speaker(OWNER_SPEAKER_NAME, embeddings, threshold)
+        # hidden=True: the owner identifies normally but never appears in the
+        # management UI — the encrypted voiceprint is not a user-editable profile.
+        si.inject_speaker(OWNER_SPEAKER_NAME, embeddings, threshold, hidden=True)
         print(
             f"[stt] owner voiceprint loaded: {len(embeddings)} embeddings "
             f"for '{OWNER_SPEAKER_NAME}' (threshold={threshold})",
@@ -330,26 +402,36 @@ def _load_owner_voiceprint(si) -> bool:
         return False
 
 
+def _resolve_learn_threshold():
+    """Scale the online-learning gate to the active encoder (unless pinned)."""
+    global LEARN_THRESHOLD
+    if "JARVIS_LEARN_THRESHOLD" not in os.environ and speaker_id is not None:
+        LEARN_THRESHOLD = _LEARN_THRESHOLD_BY_ENCODER.get(
+            speaker_id.encoder.name, LEARN_THRESHOLD
+        )
+
+
 def _init_speaker_id():
     global speaker_id
     from speaker_id import SpeakerIdentifier
     si = SpeakerIdentifier(SPEAKER_SAMPLES_DIR)
     # Always inject the encrypted owner voiceprint (merges with WAV samples if any).
     _load_owner_voiceprint(si)
+    # An empty speaker set is valid (e.g. right after a from-scratch re-enroll):
+    # identification just returns None until samples are recorded, while the
+    # management endpoints stay alive so the UI can enroll without a restart.
     if not si.speakers:
-        raise FileNotFoundError(
-            f"No speaker samples found under {SPEAKER_SAMPLES_DIR} "
-            "and no owner_voiceprint.enc available"
+        print(
+            f"[stt] speaker ID has no enrolled voices yet "
+            f"(record samples under {SPEAKER_SAMPLES_DIR})",
+            flush=True,
         )
     speaker_id = si
+    _resolve_learn_threshold()
 
 
 try:
     _init_speaker_id()
-    if "JARVIS_LEARN_THRESHOLD" not in os.environ:
-        LEARN_THRESHOLD = _LEARN_THRESHOLD_BY_ENCODER.get(
-            speaker_id.encoder.name, LEARN_THRESHOLD
-        )
     print(
         f"[stt] speaker ID ready (encoder={speaker_id.encoder.name} "
         f"speakers={list(speaker_id.speakers.keys())} learn_thr={LEARN_THRESHOLD})",
@@ -396,6 +478,24 @@ def speaker_id_status():
         "ready": True,
         "speakers": speaker_id.list_speakers(),
         "samples_dir": str(SPEAKER_SAMPLES_DIR),
+        # Owner voiceprint is hidden from the speakers list; this flag tells the
+        # UI that identification works without exposing the owner profile.
+        "owner_ready": any(
+            d.get("hidden") and d.get("embeddings")
+            for d in speaker_id.speakers.values()
+        ),
+        # System view: everything the config UI needs to show the new pipeline.
+        "encoder": speaker_id.encoder.name,
+        "default_threshold": speaker_id.default_threshold,
+        "match_margin": speaker_id.match_margin,
+        "cohort_size": len(speaker_id.cohort),
+        "wake_templates": len(speaker_id.wake_templates),
+        "trust_active": _trust_offset() < 0.0,
+        "voice_learning": VOICE_LEARNING,
+        "learn_threshold": LEARN_THRESHOLD,
+        "denoise_mode": DENOISE_MODE,
+        "whisper_model": WHISPER_MODEL,
+        "whisper_device": WHISPER_DEVICE,
     }
 
 
@@ -464,6 +564,9 @@ def speaker_delete(name: str):
     if not safe:
         raise HTTPException(status_code=400, detail="invalid name")
     if speaker_id is not None:
+        data = speaker_id.speakers.get(safe)
+        if data is not None and data.get("hidden"):
+            raise HTTPException(status_code=403, detail="owner voiceprint is protected")
         speaker_id.remove_speaker(safe)
     else:
         target = SPEAKER_SAMPLES_DIR / safe
@@ -480,8 +583,13 @@ def speaker_delete(name: str):
 def speaker_reload_single(name: str):
     if speaker_id is None:
         raise HTTPException(status_code=503, detail="speaker_id not initialized")
-    from speaker_id import _safe_name
+    from speaker_id import _safe_name, WAKE_DIRNAME
     safe = _safe_name(name)
+    if safe == WAKE_DIRNAME:
+        # The wake template set is not a speaker profile — reload it directly
+        # (full reload would re-embed every reference, needlessly expensive).
+        count = speaker_id.reload_wake()
+        return {"ok": True, "loaded": count > 0, "wake_templates": count}
     loaded = speaker_id.enroll_speaker(safe)
     return {"ok": True, "loaded": loaded, "speakers": speaker_id.list_speakers()}
 
@@ -533,14 +641,35 @@ async def transcribe(
             })
             full_text += seg.text
 
-        # Speaker identification
+        # Prompt-echo hallucination (see _is_prompt_echo): drop entirely so a
+        # silence/noise upload returns empty instead of the primed prompt text.
+        if _is_prompt_echo(full_text):
+            print(f"[stt] dropped prompt-echo hallucination: '{full_text.strip()}'", flush=True)
+            full_text = ""
+            segments = []
+
+        # Speaker identification — same rescue layers (wake voiceprint, trust
+        # continuity) as the streaming path, so short "Jarvis" uploads match.
         spk_name = None
         spk_confidence = 0.0
         if speaker_id is not None:
             try:
-                spk_name, spk_confidence = speaker_id.identify_file(tmp_path)
+                import soundfile as _sf
+                a, sr_in = _sf.read(tmp_path, dtype="float32")
+                if a.ndim > 1:
+                    a = a.mean(axis=1)
+                if sr_in == SAMPLE_RATE:
+                    spk_name, spk_confidence = _identify_speaker(a, None, full_text.strip())
+                else:
+                    spk_name, spk_confidence = speaker_id.identify_file(tmp_path)
             except Exception:
-                pass
+                try:
+                    spk_name, spk_confidence = speaker_id.identify_file(tmp_path)
+                except Exception:
+                    pass
+            # Same calibrated emission as the streaming path (see
+            # VERIFIED_CONF_FLOOR): gate-surviving matches report ≥ the floor.
+            spk_confidence = _calibrate_conf(spk_name, spk_confidence)
 
         return {
             "text": full_text.strip(),
@@ -552,6 +681,48 @@ async def transcribe(
         }
     finally:
         os.unlink(tmp_path)
+
+
+# Speculative prefix warm (#2): as soon as a speculative transcript is ready,
+# hand it to the Node backend so it can pre-run the stateless turn prefix
+# (LLM transcript correction) during the remaining silence tail. The final turn
+# then hits a cache instead of paying that LLM call. Fire-and-forget.
+BACKEND_URL = os.environ.get("JARVIS_BACKEND_URL", "http://127.0.0.1:8788")
+SPEC_NOTIFY = os.environ.get("STT_SPEC_NOTIFY", "1") != "0"
+
+_TERMINAL_PUNCT_RE = re.compile(r"[.!?…]\s*$")
+
+# High-precision "mid-thought" cues: a transcript ending in a comma/colon, an
+# ellipsis, or a Spanish conjunction/preposition/article almost never is a
+# finished sentence. Everything NOT matching this is treated as complete-enough,
+# because whisper frequently omits terminal punctuation in Spanish — requiring
+# a '.' to finalize early (the old logic) made most turns wait the full window.
+_CONTINUATION_RE = re.compile(
+    r"(?:[,;:]|\.\.\."
+    r"|\b(?:y|e|o|u|ni|que|de|del|al|a|en|con|sin|para|por|porque|pero|aunque"
+    r"|como|cuando|donde|mientras|si|el|la|los|las|un|una|unos|unas"
+    r"|mi|tu|su|mis|tus|sus|and|or|but|the|to|of|with|for)"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _notify_speculative(result: dict) -> None:
+    try:
+        payload = json.dumps({
+            "text": result.get("text", ""),
+            "avgLogprob": result.get("avg_logprob", 0.0),
+            "confidence": result.get("word_conf", 0.0),
+        }).encode()
+        req = urllib.request.Request(
+            f"{BACKEND_URL}/api/jarvis/speculative",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception:
+        pass  # backend down / endpoint missing — speculation is best-effort
 
 
 # --- WebSocket Streaming STT --------------------------------------------------
@@ -569,24 +740,60 @@ class StreamState:
         # 480 samples = 30ms at 16kHz (Silero VAD window)
         self.vad_chunk_size = 512
         # After this many silent VAD chunks, finalize (chunk=512smp@16k=32ms).
-        # 38 -> ~1216ms: wide enough that a slightly longer mid-thought pause
-        # doesn't cut the user off when they resume. Was 22 (~704ms); the +0.5s
-        # trades a touch of latency for not clipping. Override with
-        # STT_SILENCE_CHUNKS. Barge-in (frontend) lets the user cut a reply
-        # short, which compensates for the wider window.
+        # 38 -> ~1.22s HARD CAP: even a transcript that looks mid-thought
+        # (continuation cue) finalizes here. The adaptive tiers below finalize
+        # most turns earlier (~0.7-0.9s). Raised from 31 to give a pause-grace
+        # window: brief mid-sentence pauses no longer clip the turn. Override
+        # with STT_SILENCE_CHUNKS (lower = snappier, higher = more grace).
         self.max_silence_chunks = int(os.environ.get("STT_SILENCE_CHUNKS", "38"))
+        # Resume debounce: during the silence tail, require this many
+        # CONSECUTIVE speech chunks before resetting the silence counter. A
+        # single 32ms noise blip (fan, chair, click) used to reset the whole
+        # tail and restart the wait. Real resumed speech clears 2 chunks (64ms)
+        # trivially; buffered audio is unaffected either way.
+        self.resume_chunks = int(os.environ.get("STT_RESUME_CHUNKS", "2"))
+        self.pending_resume = 0
         # Speculative transcription: fire a snapshot transcription this many
         # chunks BEFORE the final threshold, during the silence tail, so its
         # ~0.3-0.5s cost overlaps the wait instead of adding to it. By default
         # the snapshot fires at ~22 chunks (the old final point), turning the
         # +0.5s we added into "free" time. Disable with STT_SPECULATIVE=0.
         self.speculative_enabled = os.environ.get("STT_SPECULATIVE", "1") != "0"
+        # Fire the snapshot EARLY in the silence tail (~0.6s) so by the time the
+        # adaptive endpoint (below) can fire, the transcription is already done.
+        # STT_SPEC_AT wins if set; otherwise fall back to the legacy lead-based
+        # placement relative to the final threshold.
         lead = int(os.environ.get("STT_SPECULATIVE_LEAD", "16"))
-        self.speculative_threshold = max(1, self.max_silence_chunks - lead)
+        spec_at_env = os.environ.get("STT_SPEC_AT")
+        if spec_at_env is not None:
+            self.speculative_threshold = max(1, int(spec_at_env))
+        else:
+            self.speculative_threshold = max(1, min(19, self.max_silence_chunks - lead))
+        # Adaptive endpointing, INVERTED default (was: require terminal
+        # punctuation to finalize early — whisper omits it so often in Spanish
+        # that most finished turns waited the full window). Now, once the
+        # speculative transcript is ready:
+        #   terminal punct (.!?)        -> finalize at ef_complete (~0.70s)
+        #   no continuation cue         -> finalize at ef_neutral  (~0.86s)
+        #   continuation cue (,/y/que…) -> wait max_silence_chunks (~1.22s cap)
+        # Grace bumped (was 16/22): a period whisper GUESSES mid-pause no longer
+        # cuts the señor off "al instante" — he gets ~0.7s before an early final.
+        # Disable with STT_EARLY_FINAL=0. STT_EARLY_FINAL_CHUNKS (legacy name)
+        # overrides the neutral tier.
+        self.early_final_enabled = os.environ.get("STT_EARLY_FINAL", "1") != "0"
+        legacy_ef = os.environ.get("STT_EARLY_FINAL_CHUNKS")
+        self.ef_neutral_chunks = int(os.environ.get("STT_EF_NEUTRAL_CHUNKS", legacy_ef or "27"))
+        self.ef_complete_chunks = int(os.environ.get("STT_EF_COMPLETE_CHUNKS", "22"))
+        if self.ef_complete_chunks > self.ef_neutral_chunks:
+            self.ef_complete_chunks = self.ef_neutral_chunks
+        if self.ef_neutral_chunks >= self.max_silence_chunks:
+            self.early_final_enabled = False
         # spec_fired stays True only while the latest snapshot is still valid
         # (no speech resumed after it). Speech resuming flips it back off so the
         # final won't reuse a stale snapshot.
         self.spec_fired = False
+        # One speculative backend notification per snapshot (LLM prefix warm).
+        self.spec_notified = False
         # Same-turn speaker context (#7): tail of the previous finalized segment,
         # pooled with the next short segment so its speaker embedding stabilizes.
         self.spk_prev_audio: Optional[np.ndarray] = None
@@ -637,12 +844,22 @@ class StreamState:
                 if not self.is_speaking:
                     self.is_speaking = True
                     self.speech_start_time = time.time()
-                self.silence_frames = 0
-                # Speech resumed after a speculative snapshot -> snapshot is now
-                # stale; allow a fresh one to fire on the next silence tail.
-                if self.spec_fired:
-                    self.spec_fired = False
+                    self.silence_frames = 0
+                elif self.silence_frames > 0:
+                    # In the silence tail: debounce. Only resume_chunks
+                    # CONSECUTIVE speech chunks reset the counter, so a lone
+                    # noise blip can't restart the whole wait.
+                    self.pending_resume += 1
+                    if self.pending_resume >= self.resume_chunks:
+                        self.pending_resume = 0
+                        self.silence_frames = 0
+                        # Speech resumed after a speculative snapshot -> snapshot
+                        # is stale; allow a fresh one on the next silence tail.
+                        if self.spec_fired:
+                            self.spec_fired = False
+                            self.spec_notified = False
             elif self.is_speaking:
+                self.pending_resume = 0
                 self.silence_frames += 1
                 if (self.speculative_enabled and not self.spec_fired
                         and self.silence_frames >= self.speculative_threshold
@@ -677,7 +894,9 @@ class StreamState:
         self.vad_buffer = np.array([], dtype=np.float32)
         self.is_speaking = False
         self.silence_frames = 0
+        self.pending_resume = 0
         self.spec_fired = False
+        self.spec_notified = False
         return audio
 
 
@@ -701,15 +920,20 @@ async def stream_stt(ws: WebSocket):
             return
         task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
-    async def _finalize(audio: np.ndarray, *, reuse_spec: bool):
+    async def _finalize(audio: np.ndarray, *, reuse_spec: bool, precomputed: Optional[dict] = None,
+                        path: str = "final"):
         """Transcribe a finalized segment and send the result to the client."""
         nonlocal spec_task
-        result = None
+        t_final = time.time()
+        result = precomputed
+        if result is not None:
+            _abandon(spec_task)
         # Reuse the speculative result iff it's still valid (no speech resumed
         # after the snapshot — tracked by state.spec_fired). Flush never reuses.
-        if reuse_spec and spec_task is not None and state.spec_fired:
+        elif reuse_spec and spec_task is not None and state.spec_fired:
             try:
                 result = await spec_task
+                path = "spec-reuse"
             except Exception:
                 result = None
         else:
@@ -738,24 +962,38 @@ async def stream_stt(ws: WebSocket):
         avg_logprob = result.get("avg_logprob", 0.0)
         word_conf = result.get("word_conf", 0.0)
         if transcript.strip():
+            wait_ms = int((time.time() - t_final) * 1000)
             print(
                 f"[stt] transcript: '{transcript.strip()}' speaker={spk_name} "
-                f"conf={spk_conf:.3f} logprob={avg_logprob:.2f} wconf={word_conf:.2f}",
+                f"conf={spk_conf:.3f} (raw={result.get('spk_conf_raw', spk_conf):.3f}) "
+                f"logprob={avg_logprob:.2f} wconf={word_conf:.2f} "
+                f"path={path} seg_ms={result.get('ms', -1)} "
+                f"(den={result.get('den_ms', -1)} wh={result.get('wh_ms', -1)} "
+                f"spk={result.get('spk_ms', -1)}) finalize_wait_ms={wait_ms}",
                 flush=True,
             )
-            await ws.send_json({
-                "text": transcript.strip(),
-                "isFinal": True,
-                "speakerName": spk_name,
-                "speakerConfidence": spk_conf,
-                "avgLogprob": avg_logprob,
-                "confidence": word_conf,
-            })
+            try:
+                await ws.send_json({
+                    "text": transcript.strip(),
+                    "isFinal": True,
+                    "speakerName": spk_name,
+                    "speakerConfidence": spk_conf,
+                    "avgLogprob": avg_logprob,
+                    "confidence": word_conf,
+                })
+            except Exception as e:
+                # Client vanished mid-reconnect: a failed send must NOT tear down
+                # the whole stream loop. Next receive() will surface the real
+                # disconnect and break cleanly.
+                print(f"[stt] final send failed (client gone?): {e}", flush=True)
 
     try:
         while True:
             message = await ws.receive()
             if message.get("type") == "websocket.disconnect":
+                # Log the initiator/code so the reconnect churn can be pinned:
+                # this is the CLEAN close path (no traceback) the logs were hitting.
+                print(f"[stt] /stream disconnect (code={message.get('code')})", flush=True)
                 break
 
             data = message.get("bytes")
@@ -778,6 +1016,51 @@ async def stream_stt(ws: WebSocket):
                     # Segment too short to transcribe — drop any pending snapshot.
                     _abandon(spec_task)
                     spec_task = None
+
+                # Silence tail housekeeping: once the speculative transcription
+                # is done we can (a) warm the backend's LLM prefix and (b) fire
+                # the adaptive early endpoint if the sentence looks complete.
+                if (event is None and state.is_speaking and state.spec_fired
+                        and spec_task is not None and spec_task.done()):
+                    try:
+                        spec_result = spec_task.result()
+                    except Exception:
+                        spec_result = None
+                    if spec_result is not None and spec_result["text"].strip():
+                        if SPEC_NOTIFY and not state.spec_notified:
+                            state.spec_notified = True
+                            asyncio.create_task(
+                                asyncio.to_thread(_notify_speculative, spec_result)
+                            )
+                        spec_text = spec_result["text"].strip()
+                        if _CONTINUATION_RE.search(spec_text):
+                            # Clearly mid-thought (comma / trailing conjunction)
+                            # → no early final; the ~1s hard cap still applies.
+                            required = None
+                        elif _TERMINAL_PUNCT_RE.search(spec_text):
+                            required = state.ef_complete_chunks
+                        else:
+                            # No punctuation ≠ unfinished: whisper drops terminal
+                            # punctuation constantly in Spanish. Neutral tier.
+                            required = state.ef_neutral_chunks
+                        if (state.early_final_enabled and required is not None
+                                and state.silence_frames >= required):
+                            # Transcription already in hand → finalize now
+                            # instead of waiting the full silence window (same
+                            # transcript the final would have reused anyway).
+                            audio_full = np.frombuffer(
+                                bytes(state.audio_buffer), dtype=np.float32
+                            )
+                            state.audio_buffer.clear()
+                            state.is_speaking = False
+                            state.silence_frames = 0
+                            state.pending_resume = 0
+                            state.spec_fired = False
+                            state.spec_notified = False
+                            await _finalize(
+                                audio_full, reuse_spec=False,
+                                precomputed=spec_result, path="early-final",
+                            )
                 continue
 
             text = message.get("text")
@@ -810,40 +1093,168 @@ async def stream_stt(ws: WebSocket):
         _abandon(spec_task)
 
 
-def _identify_speaker(audio: np.ndarray, spk_context: Optional[np.ndarray]) -> tuple:
-    """Speaker-id on the RAW segment, optionally re-tried on the concatenation
-    with the previous same-turn audio (#7): short utterances ("sí", "apaga la
-    luz") give noisy embeddings on their own — pooling with the turn's earlier
-    audio stabilizes them. The higher-confidence result wins, so a bad context
-    can never make things worse than the solo identification.
-    """
+# ── Trust continuity (owner-presence prior) ────────────────────────────────
+# After a confident owner identification, keep a decaying "the owner is here"
+# window. Segments inside it that *almost* passed the threshold (the candidate
+# WAS the owner, just short/off-condition) are retried with a threshold
+# discount that decays to zero over TRUST_TTL. The cohort gate always applies,
+# so noise can't exploit the discount; only near-miss owner matches can.
+TRUST_TTL_S = float(os.environ.get("JARVIS_TRUST_TTL", "60"))
+TRUST_MAX_OFFSET = float(os.environ.get("JARVIS_TRUST_OFFSET", "0.10"))
+TRUST_SET_MIN = float(os.environ.get("JARVIS_TRUST_SET_MIN", "0.72"))
+_owner_trust_time = 0.0
+
+
+def _touch_trust() -> None:
+    global _owner_trust_time
+    _owner_trust_time = time.time()
+
+
+def _trust_offset() -> float:
+    """Current threshold discount granted by owner-presence trust (≤ 0)."""
+    age = time.time() - _owner_trust_time
+    if age >= TRUST_TTL_S:
+        return 0.0
+    return -TRUST_MAX_OFFSET * (1.0 - age / TRUST_TTL_S)
+
+
+# Wake-word-ish transcripts ("jarvis" and its common mistranscriptions, alone
+# or with 1-2 filler words) qualify for the text-dependent wake voiceprint.
+_WAKE_TEXT_RE = re.compile(r"\b(jarvis|yarvis|jarbis|harvis|javis|charvis)\b", re.IGNORECASE)
+
+
+def _wake_eligible(audio: np.ndarray, text: Optional[str]) -> bool:
+    if len(audio) > SAMPLE_RATE * 2.5:
+        return False
+    if text is None:
+        return True
+    t = text.strip()
+    return bool(_WAKE_TEXT_RE.search(t)) and len(t.split()) <= 3
+
+
+# Calibrated emitted confidence: a match that survived the FULL gate stack
+# (per-speaker threshold + margin + cohort gate + duration adaptation + rescue
+# layers) is a high-probability identification even when the raw cosine is
+# modest (short clips physically score lower). Downstream consumers
+# (speech.js owner gate 0.65, intentClassifier 0.65, KNOWN 0.60) read the
+# emitted value; the RAW score stays internal for trust/learning decisions so
+# a calibrated floor can never inflate the voiceprint or the trust window.
+VERIFIED_CONF_FLOOR = float(os.environ.get("SPEAKER_VERIFIED_CONF_FLOOR", "0.80"))
+
+# Speaker-id runs on CPU while Whisper decodes on GPU — a small executor lets
+# _transcribe_segment overlap the two instead of paying them serially.
+_SPK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="spkid")
+
+
+def _calibrate_conf(spk_name: Optional[str], raw_conf: float) -> float:
+    if spk_name is None:
+        return raw_conf
+    return max(raw_conf, VERIFIED_CONF_FLOOR)
+
+
+def _identify_speaker_base(audio: np.ndarray,
+                           spk_context: Optional[np.ndarray]) -> tuple:
+    """Text-independent stage (no transcript needed): full-utterance match +
+    same-turn pooling (#7). Runs on CPU, so it can execute CONCURRENTLY with
+    Whisper's GPU decode — see _transcribe_segment."""
     spk_name, spk_conf = speaker_id.identify_audio(audio, SAMPLE_RATE)
     if spk_context is not None and len(spk_context) > 0:
         try:
             pooled = np.concatenate([spk_context, audio])
             ctx_name, ctx_conf = speaker_id.identify_audio(pooled, SAMPLE_RATE)
             if ctx_name is not None and ctx_conf > spk_conf:
-                return ctx_name, ctx_conf
+                spk_name, spk_conf = ctx_name, ctx_conf
         except Exception:
             pass
+    return spk_name, spk_conf
+
+
+def _identify_speaker_rescue(audio: np.ndarray, spk_name: Optional[str],
+                             spk_conf: float, text: Optional[str],
+                             audio_dn: Optional[np.ndarray] = None) -> tuple:
+    """Rescue stage, applied after the transcript exists. Returns
+    (name, conf, domain) where domain is "raw" or "denoised":
+
+    1. Wake voiceprint: utterances ≤2.5s whose transcript is (only) the wake
+       word are matched against the _wake/ template set (works from ~0.4s).
+    2. Denoised-domain retry: far-field / quiet speech drowns in room noise in
+       the RAW domain (embedding drifts toward the cohort's noise direction and
+       gets gated) while Whisper still hears it fine — because Whisper reads
+       the DeepFilter output. That denoised signal is already computed, so
+       re-embed it and run the FULL gate stack. Only fires when the raw domain
+       failed; the returned domain tag keeps online learning raw-only (a raw
+       segment that raw-matching rejected must never become a reference).
+    3. Trust continuity: shortly after a confident owner match, near-miss
+       owner scores are re-tried with a decaying threshold discount.
+    Every layer keeps the cohort gate.
+    """
+    if spk_name is None and _wake_eligible(audio, text):
+        try:
+            marker, wscore = speaker_id.match_wake(audio, SAMPLE_RATE)
+            if marker is not None:
+                print(f"[stt] wake voiceprint match (score={wscore:.3f})", flush=True)
+                return OWNER_SPEAKER_NAME, wscore, "raw"
+        except Exception:
+            pass
+
+    if spk_name is None and audio_dn is not None and len(audio_dn) > 0:
+        try:
+            d_name, d_conf = speaker_id.identify_audio(audio_dn, SAMPLE_RATE)
+            if d_name is not None:
+                print(f"[stt] denoised-domain rescue (conf={d_conf:.3f})", flush=True)
+                return d_name, d_conf, "denoised"
+        except Exception:
+            pass
+
+    if spk_name is None:
+        offset = _trust_offset()
+        if offset < 0.0:
+            try:
+                t_name, t_conf = speaker_id.identify_audio(
+                    audio, SAMPLE_RATE, thr_offset=offset
+                )
+                if t_name == OWNER_SPEAKER_NAME:
+                    print(
+                        f"[stt] trust-continuity accept (conf={t_conf:.3f} "
+                        f"offset={offset:.3f})",
+                        flush=True,
+                    )
+                    return t_name, t_conf, "raw"
+            except Exception:
+                pass
+
+    return spk_name, spk_conf, "raw"
+
+
+def _identify_speaker(audio: np.ndarray, spk_context: Optional[np.ndarray],
+                      text: Optional[str] = None) -> tuple:
+    """Full pipeline (base + rescue) for callers that already have the text.
+    Keeps the legacy (name, conf) shape — no denoised audio on this path."""
+    spk_name, spk_conf = _identify_speaker_base(audio, spk_context)
+    spk_name, spk_conf, _ = _identify_speaker_rescue(audio, spk_name, spk_conf, text)
     return spk_name, spk_conf
 
 
 def _transcribe_segment(audio: np.ndarray, spk_context: Optional[np.ndarray] = None) -> dict:
     """Transcribe a numpy audio segment.
 
-    Returns a dict: { text, spk_conf, spk_name, avg_logprob, word_conf }.
+    Returns a dict: { text, spk_conf, spk_name, avg_logprob, word_conf, ms }.
     avg_logprob/word_conf are the doubt signals consumed by the backend LLM
-    correction layer (#11).
+    correction layer (#11). ms = wall time of this call (latency tracer);
+    den_ms/wh_ms/spk_ms break it down (denoise / whisper decode / speaker-id
+    wait beyond whisper — spk runs concurrently, so spk_ms is usually ~0).
     """
-    import soundfile as sf
+    t_start = time.time()
 
     # Bifurcated audio paths: whisper gets the denoised signal (ASR likes clean
     # audio), speaker-id gets the RAW signal — neural denoising reshapes the
     # spectrum enough to shift voice embeddings, and enrollment was done on raw
     # audio, so denoise-before-embed degrades identification.
-    audio_raw = audio
-    audio = _denoise(audio)
+    # Private, writable copies: the caller's array may be a read-only
+    # np.frombuffer view, and the speaker-id thread reads audio_raw WHILE the
+    # denoise/whisper path works on audio — they must not share memory.
+    audio = np.array(audio, dtype=np.float32, copy=True)
+    audio_raw = audio.copy()
 
     # Energy gate: a segment quieter than MIN_RMS is room noise, not speech.
     # Drop it outright — never transcribe, never run speaker-id (which would
@@ -852,109 +1263,198 @@ def _transcribe_segment(audio: np.ndarray, spk_context: Optional[np.ndarray] = N
     rms = float(np.sqrt(np.mean(np.square(audio_raw)))) if len(audio_raw) else 0.0
     if rms < MIN_RMS:
         print(f"[stt] dropped low-energy segment (rms={rms:.4f} < {MIN_RMS})", flush=True)
-        return {"text": "", "spk_conf": 0.0, "spk_name": None, "avg_logprob": 0.0, "word_conf": 0.0}
+        return {"text": "", "spk_conf": 0.0, "spk_name": None, "avg_logprob": 0.0,
+                "word_conf": 0.0, "ms": int((time.time() - t_start) * 1000)}
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        sf.write(tmp.name, audio, SAMPLE_RATE, format="WAV")
-        tmp_path = tmp.name
-
-    try:
-        segments_iter, info = whisper_model.transcribe(
-            tmp_path,
-            language=STT_LANG,
-            # beam=5/best_of=5 matches the /transcribe path: the voice (stream)
-            # path was the LOWEST-quality decode at beam=3. More accuracy, tiny
-            # GPU cost. Override with STT_BEAM_SIZE.
-            beam_size=int(os.environ.get("STT_BEAM_SIZE", "5")),
-            best_of=int(os.environ.get("STT_BEAM_SIZE", "5")),
-            # Word-level timestamps (#12) so we can derive a per-word confidence
-            # for the doubt signal that gates the LLM correction layer (#11).
-            word_timestamps=True,
-            # Within-utterance priming (#10): coherence across this turn's
-            # internal segments. Per-turn only — see CONDITION_PREV comment.
-            condition_on_previous_text=CONDITION_PREV,
-            # Temperature fallback: when a greedy/beam decode fails the quality
-            # gates (avg_logprob / compression_ratio), Whisper retries hotter
-            # instead of keeping the bad result. The gates below still drop true
-            # junk, so this recovers garbled real speech without re-opening
-            # hallucination. Disable by setting STT_TEMP_FALLBACK=0.
-            temperature=(
-                [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-                if os.environ.get("STT_TEMP_FALLBACK", "1") != "0"
-                else 0.0
-            ),
-            no_speech_threshold=NO_SPEECH_THRESHOLD,
-            compression_ratio_threshold=2.4,
-            log_prob_threshold=AVG_LOGPROB_MIN,
-            vad_filter=True,
-            # Bias decoding toward Jarvis-specific vocabulary so names/commands
-            # (Jarvis, Brave, etc.) aren't castellanized or misheard.
-            hotwords=STT_HOTWORDS or None,
-            # Colombian-Spanish + domain priming for orthography/style.
-            initial_prompt=STT_INITIAL_PROMPT or None,
+    # Speaker-id (CPU) launched BEFORE the GPU decode so both run concurrently:
+    # the text-independent stage needs no transcript, and the text-dependent
+    # rescue layers run after Whisper only if this base stage failed.
+    spk_future = None
+    if speaker_id is not None:
+        spk_future = _SPK_EXECUTOR.submit(
+            _identify_speaker_base, audio_raw, spk_context
         )
+
+    audio = _denoise(audio)
+    den_ms = int((time.time() - t_start) * 1000)
+
+    t_wh = time.time()
+    # faster-whisper takes the float32 16k mono array directly — the old
+    # tempfile round-trip (write WAV + re-decode) was pure latency.
+    segments_iter, info = whisper_model.transcribe(
+        audio,
+        language=STT_LANG,
+        # beam=5/best_of=5 matches the /transcribe path: the voice (stream)
+        # path was the LOWEST-quality decode at beam=3. More accuracy, tiny
+        # GPU cost. Override with STT_BEAM_SIZE.
+        beam_size=int(os.environ.get("STT_BEAM_SIZE", "5")),
+        best_of=int(os.environ.get("STT_BEAM_SIZE", "5")),
+        # Word-level timestamps (#12) so we can derive a per-word confidence
+        # for the doubt signal that gates the LLM correction layer (#11).
+        word_timestamps=True,
+        # Within-utterance priming (#10): coherence across this turn's
+        # internal segments. Per-turn only — see CONDITION_PREV comment.
+        condition_on_previous_text=CONDITION_PREV,
+        # Temperature fallback: when a greedy/beam decode fails the quality
+        # gates (avg_logprob / compression_ratio), Whisper retries hotter
+        # instead of keeping the bad result. The gates below still drop true
+        # junk, so this recovers garbled real speech without re-opening
+        # hallucination. Disable by setting STT_TEMP_FALLBACK=0.
+        temperature=(
+            [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+            if os.environ.get("STT_TEMP_FALLBACK", "1") != "0"
+            else 0.0
+        ),
+        no_speech_threshold=NO_SPEECH_THRESHOLD,
+        compression_ratio_threshold=2.4,
+        log_prob_threshold=AVG_LOGPROB_MIN,
+        vad_filter=True,
+        # Bias decoding toward Jarvis-specific vocabulary so names/commands
+        # (Jarvis, Brave, etc.) aren't castellanized or misheard.
+        hotwords=STT_HOTWORDS or None,
+        # Colombian-Spanish + domain priming for orthography/style.
+        initial_prompt=STT_INITIAL_PROMPT or None,
+    )
+    kept = []
+    logprobs = []
+    word_probs = []
+    for seg in segments_iter:
+        if getattr(seg, "no_speech_prob", 0.0) > NO_SPEECH_THRESHOLD:
+            continue
+        if getattr(seg, "avg_logprob", 0.0) < AVG_LOGPROB_MIN:
+            continue
+        kept.append(seg.text.strip())
+        logprobs.append(float(getattr(seg, "avg_logprob", 0.0)))
+        for w in (getattr(seg, "words", None) or []):
+            p = getattr(w, "probability", None)
+            if p is not None:
+                word_probs.append(float(p))
+    text = " ".join(t for t in kept if t)
+
+    # Prompt-echo hallucination: drop it so it never reaches the client. Whisper
+    # emits it with high confidence during silence/noise; the logprob gates can't
+    # catch it (it was primed), but the narrative anchors give it away.
+    if _is_prompt_echo(text):
+        print(f"[stt] dropped prompt-echo hallucination: '{text}'", flush=True)
+        text = ""
         kept = []
         logprobs = []
         word_probs = []
-        for seg in segments_iter:
-            if getattr(seg, "no_speech_prob", 0.0) > NO_SPEECH_THRESHOLD:
-                continue
-            if getattr(seg, "avg_logprob", 0.0) < AVG_LOGPROB_MIN:
-                continue
-            kept.append(seg.text.strip())
-            logprobs.append(float(getattr(seg, "avg_logprob", 0.0)))
-            for w in (getattr(seg, "words", None) or []):
-                p = getattr(w, "probability", None)
-                if p is not None:
-                    word_probs.append(float(p))
-        text = " ".join(t for t in kept if t)
 
-        # Doubt signal (#8/#12): mean segment avg_logprob + mean word probability.
-        # Low values => Whisper was unsure => candidate for LLM correction (#11).
-        avg_logprob = (sum(logprobs) / len(logprobs)) if logprobs else 0.0
-        word_conf = (sum(word_probs) / len(word_probs)) if word_probs else 0.0
+    # Doubt signal (#8/#12): mean segment avg_logprob + mean word probability.
+    # Low values => Whisper was unsure => candidate for LLM correction (#11).
+    avg_logprob = (sum(logprobs) / len(logprobs)) if logprobs else 0.0
+    word_conf = (sum(word_probs) / len(word_probs)) if word_probs else 0.0
+    wh_ms = int((time.time() - t_wh) * 1000)
 
-        spk_name = None
-        spk_conf = 0.0
+    t_spk = time.time()
+    spk_name = None
+    spk_conf = 0.0
+    if spk_future is not None:
+        try:
+            spk_name, spk_conf = spk_future.result(timeout=10)
+        except Exception:
+            pass
+        spk_domain = "raw"
+        try:
+            # Rescue layers (wake voiceprint, denoised-domain retry, trust
+            # continuity) — only meaningful now that the transcript exists.
+            # `audio` is the DeepFilter output whisper just consumed.
+            spk_name, spk_conf, spk_domain = _identify_speaker_rescue(
+                audio_raw, spk_name, spk_conf, text, audio_dn=audio
+            )
+        except Exception:
+            pass
+
+        # Confident owner match (RAW score — calibration never feeds trust)
+        # → refresh the trust-continuity window.
+        if spk_name == OWNER_SPEAKER_NAME and spk_conf >= TRUST_SET_MIN:
+            _touch_trust()
+
+        # Anti-speaker-ID: Jarvis's own voice matched a decoy speaker. Reject
+        # it outright so the conversation loop can never feed on its own TTS.
+        if spk_name in NEGATIVE_SPEAKERS:
+            print(f"[stt] rejected self-voice (matched {spk_name})", flush=True)
+            return {"text": text, "spk_conf": 0.0, "spk_name": None,
+                    "avg_logprob": avg_logprob, "word_conf": word_conf,
+                    "ms": int((time.time() - t_start) * 1000)}
+
+        # Online adaptation: a confident owner utterance — learn from it so
+        # the voiceprint keeps improving. Gated on the RAW score; runs on a
+        # background thread (file write + embed + consistency check were
+        # ~100-300ms of reply latency for zero user-visible benefit).
+        # Learn from the RAW audio: references must live in the same domain
+        # as identification input (raw), not the denoised ASR path.
+        if (
+            VOICE_LEARNING
+            and spk_name == OWNER_SPEAKER_NAME
+            and spk_domain == "raw"
+            and spk_conf >= LEARN_THRESHOLD
+            and len(text.strip()) >= 4
+            and len(audio_raw) >= SAMPLE_RATE * 1.0
+        ):
+            _learn_async(spk_name, audio_raw.copy(), spk_conf)
+    spk_ms = int((time.time() - t_spk) * 1000)
+
+    return {"text": text, "spk_conf": _calibrate_conf(spk_name, spk_conf),
+            "spk_conf_raw": spk_conf, "spk_name": spk_name,
+            "avg_logprob": avg_logprob, "word_conf": word_conf,
+            "ms": int((time.time() - t_start) * 1000),
+            "den_ms": den_ms, "wh_ms": wh_ms, "spk_ms": spk_ms}
+
+
+def _learn_async(name: str, audio_raw: np.ndarray, raw_conf: float) -> None:
+    """Fire-and-forget online learning — off the reply's critical path."""
+    def _run():
+        try:
+            if speaker_id.learn_sample(name, audio_raw, SAMPLE_RATE):
+                print(f"[stt] learned owner sample (conf={raw_conf:.3f})", flush=True)
+        except Exception as e:
+            print(f"[stt] learn_sample failed: {e}", flush=True)
+    threading.Thread(target=_run, daemon=True).start()
+
+
+# Boot warmup: the FIRST whisper decode after service start pays CUDA/cuDNN
+# init + kernel autotune (measured: 44s on the RTX 3050 with large-v3) — an
+# unacceptable first-turn latency if it lands on a real utterance. Decode one
+# second of throwaway audio now, on a background thread, so the cost is paid
+# during boot. Also warms DeepFilter (CPU) and the ECAPA encoder.
+def _warmup_models() -> None:
+    try:
+        t0 = time.time()
+        dummy = (np.random.default_rng(0).standard_normal(SAMPLE_RATE) * 0.003
+                 ).astype(np.float32)
+        # vad_filter=False forces a real decode even on non-speech audio.
+        segs, _ = whisper_model.transcribe(
+            dummy, language=STT_LANG,
+            beam_size=int(os.environ.get("STT_BEAM_SIZE", "5")),
+            vad_filter=False, condition_on_previous_text=False,
+        )
+        for _ in segs:
+            pass
+        _denoise(dummy)
         if speaker_id is not None:
             try:
-                spk_name, spk_conf = _identify_speaker(audio_raw, spk_context)
+                speaker_id.encoder.embed(dummy)
             except Exception:
                 pass
+        print(f"[stt] model warmup done in {time.time() - t0:.1f}s", flush=True)
+    except Exception as e:
+        print(f"[stt] warmup failed (non-fatal): {e}", flush=True)
 
-            # Anti-speaker-ID: Jarvis's own voice matched a decoy speaker. Reject
-            # it outright so the conversation loop can never feed on its own TTS.
-            if spk_name in NEGATIVE_SPEAKERS:
-                print(f"[stt] rejected self-voice (matched {spk_name})", flush=True)
-                return {"text": text, "spk_conf": 0.0, "spk_name": None,
-                        "avg_logprob": avg_logprob, "word_conf": word_conf}
 
-            # Online adaptation: a confident owner utterance — learn from it so
-            # the voiceprint keeps improving. Skipped if it's too short to be a
-            # reliable reference. Echo can't reach here: it's caught above.
-            # Learn from the RAW audio: references must live in the same domain
-            # as identification input (raw), not the denoised ASR path.
-            if (
-                VOICE_LEARNING
-                and spk_name == OWNER_SPEAKER_NAME
-                and spk_conf >= LEARN_THRESHOLD
-                and len(text.strip()) >= 4
-                and len(audio_raw) >= SAMPLE_RATE * 1.0
-            ):
-                try:
-                    if speaker_id.learn_sample(spk_name, audio_raw, SAMPLE_RATE):
-                        print(f"[stt] learned owner sample (conf={spk_conf:.3f})", flush=True)
-                except Exception as e:
-                    print(f"[stt] learn_sample failed: {e}", flush=True)
-
-        return {"text": text, "spk_conf": spk_conf, "spk_name": spk_name,
-                "avg_logprob": avg_logprob, "word_conf": word_conf}
-    finally:
-        os.unlink(tmp_path)
+threading.Thread(target=_warmup_models, daemon=True, name="warmup").start()
 
 
 if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("STT_PORT", "8790"))
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    # Lenient WS keepalive: the streaming loop runs synchronous Silero VAD on the
+    # event loop, so a brief CPU-contention stall must NOT trip the default 20s
+    # ping timeout and kill an active mic socket. 30s interval / 90s timeout.
+    uvicorn.run(
+        app, host="127.0.0.1", port=port, log_level="info",
+        ws_ping_interval=float(os.environ.get("STT_WS_PING_INTERVAL", "30")),
+        ws_ping_timeout=float(os.environ.get("STT_WS_PING_TIMEOUT", "90")),
+    )

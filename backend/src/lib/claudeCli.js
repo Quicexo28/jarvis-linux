@@ -1,5 +1,5 @@
 import { spawn } from 'child_process'
-import { mkdirSync, writeFileSync, readdirSync, existsSync, rmSync, linkSync, copyFileSync, statSync } from 'fs'
+import { mkdirSync, writeFileSync, readdirSync, existsSync, rmSync, linkSync, copyFileSync, statSync, readFileSync, watch } from 'fs'
 import { tmpdir, homedir } from 'os'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
@@ -148,6 +148,83 @@ function syncAuthToDir(dir) {
   } catch {}
 }
 
+// --- Credential reconciliation across config dirs ----------------------------
+// Jarvis spawns Claude with CLAUDE_CONFIG_DIR pointed at lean dirs for fast
+// cold-start. Each dir holds its OWN .credentials.json with its own OAuth refresh
+// token. Anthropic ROTATES the refresh token on every refresh, invalidating the
+// previous one — so when the long-lived voice session refreshes its lean-dir
+// token, the real ~/.claude token silently dies and the next interactive `claude`
+// run forces a re-login. syncAuthToDir only ran at spawn time; the persistent
+// session almost never respawns, so the divergence went unhealed for hours.
+//
+// Fix: watch every config dir's credentials file and propagate the newest copy
+// to all others the instant any of them changes. Single source of truth, always.
+function authConfigDirs() {
+  const real = process['env']['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude')
+  return [
+    real,
+    join(homedir(), '.jarvis-claude-cfg'),
+    join(homedir(), '.jarvis-claude-cfg-mcp'),
+  ].filter((d, i, a) => a.indexOf(d) === i)
+}
+
+function credFileName() {
+  // The CLI may name it .credentials.json (Linux/macOS file store). Discover the
+  // actual ".cred*" filename from whichever dir already has one.
+  for (const dir of authConfigDirs()) {
+    try {
+      const name = readdirSync(dir).find((f) => f.startsWith('.cred'))
+      if (name) return name
+    } catch {}
+  }
+  return '.credentials.json'
+}
+
+// Copy the newest credentials file to every other existing config dir, skipping
+// dirs whose copy is already byte-identical (prevents watch ping-pong loops).
+function reconcileAuthAllDirs() {
+  try {
+    const name = credFileName()
+    const entries = []
+    for (const dir of authConfigDirs()) {
+      const p = join(dir, name)
+      if (existsSync(p)) entries.push({ dir, p, m: statSync(p).mtimeMs })
+    }
+    if (entries.length < 2) return
+    entries.sort((a, b) => b.m - a.m)
+    const newest = entries[0]
+    const src = readFileSync(newest.p)
+    for (const e of entries.slice(1)) {
+      try {
+        if (Buffer.compare(src, readFileSync(e.p)) === 0) continue
+        copyFileSync(newest.p, e.p)
+      } catch {}
+    }
+  } catch {}
+}
+
+let authWatchStarted = false
+function startAuthSync() {
+  if (authWatchStarted) return
+  authWatchStarted = true
+  reconcileAuthAllDirs()
+  const name = credFileName()
+  let timer = null
+  const onChange = () => {
+    if (timer) clearTimeout(timer)
+    // Debounce: the CLI writes via temp+rename, firing several events per update.
+    timer = setTimeout(reconcileAuthAllDirs, 300)
+  }
+  for (const dir of authConfigDirs()) {
+    try {
+      mkdirSync(dir, { recursive: true })
+      // Watch the DIRECTORY (not the file): atomic temp+rename replaces the inode,
+      // so a file-level watch would go deaf after the first refresh.
+      watch(dir, (_event, fn) => { if (fn === name) onChange() })
+    } catch {}
+  }
+}
+
 // The jarvis MCP server definition, shared by the .mcp.json writer below.
 // process.execPath is Electron's binary in production; with ELECTRON_RUN_AS_NODE=1
 // it behaves as a plain Node runtime so the MCP stdio server runs correctly.
@@ -218,6 +295,7 @@ function buildLeanConfigDir({ withMcp, dirSuffix }) {
 function ensureLeanConfigDir() {
   if (leanConfigDir !== null) return leanConfigDir || undefined
   try {
+    startAuthSync()
     leanConfigDir = buildLeanConfigDir({ withMcp: false, dirSuffix: '.jarvis-claude-cfg' })
     return leanConfigDir || undefined
   } catch {
@@ -232,6 +310,7 @@ function ensureLeanConfigDir() {
 function ensureLeanConfigDirWithMcp() {
   if (leanConfigDirMcp !== null) return leanConfigDirMcp || undefined
   try {
+    startAuthSync()
     leanConfigDirMcp = buildLeanConfigDir({ withMcp: true, dirSuffix: '.jarvis-claude-cfg-mcp' })
     return leanConfigDirMcp || undefined
   } catch {

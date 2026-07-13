@@ -38,6 +38,18 @@ export async function handleUiState(req, res) {
   }
 }
 
+export async function handleGestureStatus(req, res) {
+  if (!hasClient()) {
+    return json(res, 503, { ok: false, error: 'renderer_not_connected' })
+  }
+  try {
+    const result = await requestClient('gesture_status', {})
+    return json(res, 200, { ok: true, ...result })
+  } catch (e) {
+    return json(res, 500, { ok: false, error: 'skill_bus_failed', detail: e.message })
+  }
+}
+
 export async function handleGestureToggle(req, res) {
   let body
   try {

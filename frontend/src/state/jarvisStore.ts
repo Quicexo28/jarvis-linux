@@ -2,6 +2,16 @@ import { create } from 'zustand'
 import type { Mode, SceneEntity, SavedPlan, Viewpoint } from '../types'
 
 export type RingLevel = 'main' | 'house-sub' | 'utils-sub'
+export type VoiceMode = 'off' | 'continuous' | 'wake_word' | 'ptt'
+
+const VOICE_MODE_KEY = 'jarvis.voiceMode.v1'
+function loadVoiceMode(): VoiceMode {
+  try {
+    const v = localStorage.getItem(VOICE_MODE_KEY)
+    if (v === 'off' || v === 'continuous' || v === 'wake_word' || v === 'ptt') return v
+  } catch {}
+  return 'continuous'
+}
 
 const MAIN_RING: Mode[] = ['home', 'house', 'system', 'cloud', 'utils']
 const SUB_RING: Mode[] = ['plan3d', 'space', 'plan2d']
@@ -9,11 +19,19 @@ const SUB_RING_UTILS: Mode[] = ['timer', 'chrono']
 
 const SPEAKER_NAME_KEY = 'jarvis.speaker.name.v1'
 
+// Decoy/non-owner speaker names that must never be used as the active user.
+// 'jarvis_tts' was an anti-echo decoy that the speaker list could auto-select.
+const INVALID_SPEAKER_NAMES = new Set(['default', 'jarvis_tts'])
+
 function loadSpeakerName(): string {
   try {
     const v = localStorage.getItem(SPEAKER_NAME_KEY) || ''
-    // Legacy: 'default' is no longer a real speaker — treat as unset.
-    return v === 'default' ? '' : v
+    // Drop legacy/decoy names so a stale value never attributes turns wrongly.
+    if (INVALID_SPEAKER_NAMES.has(v)) {
+      try { localStorage.removeItem(SPEAKER_NAME_KEY) } catch {}
+      return ''
+    }
+    return v
   } catch {
     return ''
   }
@@ -22,6 +40,7 @@ function loadSpeakerName(): string {
 interface JarvisState {
   mode: Mode
   zoomedMode: Mode | null
+  voiceMode: VoiceMode
   voiceEnabled: boolean
   wakeListening: boolean
   wakePhrase: string
@@ -39,6 +58,9 @@ interface JarvisState {
 
   speakerName: string
 
+  /** True while the PTT key (F9) is held — activates STT when window is out of focus. */
+  pttActive: boolean
+
   ringLevel: RingLevel
   activeRingMode: Mode
   /** Continuous ring angle in slot units. Integer = at a slot. Updated while dragging. */
@@ -47,6 +69,7 @@ interface JarvisState {
 
   setMode: (mode: Mode) => void
   setZoomedMode: (mode: Mode | null) => void
+  setVoiceMode: (mode: VoiceMode) => void
   setVoiceEnabled: (enabled: boolean) => void
   setWakeListening: (listening: boolean) => void
   setWakePhrase: (phrase: string) => void
@@ -63,6 +86,8 @@ interface JarvisState {
 
   setSpeakerName: (name: string) => void
 
+  setPttActive: (active: boolean) => void
+
   setRingLevel: (level: RingLevel) => void
   rotateRing: (direction: -1 | 1) => void
   setActiveRingMode: (mode: Mode) => void
@@ -71,6 +96,7 @@ interface JarvisState {
 export const useJarvisStore = create<JarvisState>((set, get) => ({
   mode: 'home',
   zoomedMode: null,
+  voiceMode: loadVoiceMode(),
   voiceEnabled: true,
   wakeListening: false,
   wakePhrase: 'jarvis',
@@ -87,12 +113,18 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
 
   speakerName: loadSpeakerName(),
 
+  pttActive: false,
+
   ringLevel: 'main',
   activeRingMode: 'home',
   ringAngle: 0,
 
   setMode: (mode) => set({ mode }),
   setZoomedMode: (zoomedMode) => set({ zoomedMode, ...(zoomedMode ? { mode: zoomedMode } : {}) }),
+  setVoiceMode: (voiceMode) => {
+    try { localStorage.setItem(VOICE_MODE_KEY, voiceMode) } catch {}
+    set({ voiceMode, voiceEnabled: voiceMode !== 'off' })
+  },
   setVoiceEnabled: (voiceEnabled) => set({ voiceEnabled }),
   setWakeListening: (wakeListening) => set({ wakeListening }),
   setWakePhrase: (wakePhrase) => set({ wakePhrase }),
@@ -107,7 +139,11 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
 
   setPinchZoomProgress: (pinchZoomProgress) => set({ pinchZoomProgress }),
 
+  setPttActive: (pttActive) => set({ pttActive }),
+
   setSpeakerName: (speakerName) => {
+    // Never adopt a decoy/legacy name as the active user.
+    if (INVALID_SPEAKER_NAMES.has(speakerName)) speakerName = ''
     try { localStorage.setItem(SPEAKER_NAME_KEY, speakerName) } catch {}
     set({ speakerName })
   },

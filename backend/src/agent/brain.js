@@ -20,6 +20,7 @@
 //                    only when distributing Jarvis to other users (policy).
 
 import { env } from 'node:process'
+import { getCurrentState, getDevices, summarizeDay } from '../lib/mobileContext.js'
 
 export function createBrain() {
   const kind = env.JARVIS_BRAIN || 'heuristic'
@@ -100,7 +101,37 @@ export function buildSystemPrompt(snapshot) {
     '',
     'Estado actual de la app (snapshot):',
     JSON.stringify(snapshot ?? {}, null, 0),
+    buildMobileContext(),
   ].join('\n')
+}
+
+// Ambient routine context fed by the user's iPhone (web foreground + Apple
+// Shortcuts). Read synchronously from the file store; never throw — if there's
+// no data yet, return '' so the prompt is unchanged.
+function buildMobileContext() {
+  try {
+    const c = getCurrentState()
+    if (!c || (!c.location && !c.battery && !c.focus && !c.sleep)) return ''
+    const parts = []
+    if (c.location) parts.push(`Ubicación: ${c.location.place || `${c.location.lat?.toFixed?.(4)}, ${c.location.lon?.toFixed?.(4)}`}`)
+    // Battery per device when several report (phone + tablet); merged otherwise.
+    const devs = Object.entries(getDevices()).filter(([, d]) => d.battery?.level != null)
+    if (devs.length > 1) {
+      for (const [name, d] of devs) parts.push(`Batería ${name}: ${Math.round(d.battery.level * 100)}%${d.battery.charging ? ' (cargando)' : ''}`)
+    } else if (c.battery && c.battery.level != null) {
+      parts.push(`Batería: ${Math.round(c.battery.level * 100)}%${c.battery.charging ? ' (cargando)' : ''}`)
+    }
+    if (c.focus?.mode) parts.push(`Concentración: ${c.focus.mode}`)
+    if (c.sleep?.state) parts.push(`Estado: ${c.sleep.state === 'asleep' ? 'durmiendo' : 'despierto'}`)
+    return [
+      '',
+      'CONTEXTO MÓVIL (rutina del usuario):',
+      parts.join(' · '),
+      `Rutina hoy: ${summarizeDay()}`,
+    ].join('\n')
+  } catch {
+    return ''
+  }
 }
 
 // ---------------------------------------------------------------------------

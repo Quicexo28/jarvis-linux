@@ -74,9 +74,55 @@ interface SpeakerProfile {
   name: string
   samples: number
   threshold: number
+  active_refs?: number
+  rejected?: number
 }
 
-const DEFAULT_THRESHOLD = 0.70
+interface SpeakerSystemStatus {
+  ready: boolean
+  owner_ready?: boolean
+  encoder?: string
+  default_threshold?: number
+  match_margin?: number
+  cohort_size?: number
+  wake_templates?: number
+  trust_active?: boolean
+  voice_learning?: boolean
+  learn_threshold?: number
+  denoise_mode?: string
+  whisper_model?: string
+  whisper_device?: string
+}
+
+const DEFAULT_THRESHOLD = 0.55
+const THRESHOLD_MIN = 0.30
+const THRESHOLD_MAX = 0.95
+
+// Guided enrollment: one sample per acoustic condition, mirroring
+// scripts/record-voice-sample.sh --session. Multi-condition references make
+// identification robust to distance/volume/noise changes.
+const SESSION_CONDITIONS = [
+  {
+    title: 'Voz normal · cerca',
+    desc: 'Habla a tu distancia habitual del micrófono (30–50 cm), con tono natural.',
+  },
+  {
+    title: 'Lejos · 2–3 metros',
+    desc: 'Aléjate 2–3 metros del micrófono y habla con volumen normal.',
+  },
+  {
+    title: 'Voz baja',
+    desc: 'Habla suave, casi susurrando, como hablando de noche.',
+  },
+  {
+    title: 'Voz alta',
+    desc: 'Habla fuerte y con energía, como llamando desde otra habitación.',
+  },
+  {
+    title: 'Con ruido de fondo',
+    desc: 'Pon música o TV a volumen moderado y habla con tono normal.',
+  },
+]
 
 export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
   const speakerName = useJarvisStore(s => s.speakerName)
@@ -89,12 +135,16 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
   )
   const [newSpeakerDraft, setNewSpeakerDraft] = useState('')
   const [samples, setSamples] = useState<SampleInfo[]>([])
+  const [rejected, setRejected] = useState<SampleInfo[]>([])
+  const [sysStatus, setSysStatus] = useState<SpeakerSystemStatus | null>(null)
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD)
   const [recording, setRecording] = useState(false)
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [message, setMessage] = useState('')
   const [remaining, setRemaining] = useState(RECORD_DURATION_S)
   const [phrase, setPhrase] = useState(() => pickPhrase(speakerName))
+  const [sessionStep, setSessionStep] = useState<number | null>(null)
+  const sessionStepRef = useRef<number | null>(null)
 
   const audioCtxRef = useRef<AudioContext | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
@@ -110,9 +160,17 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
     try {
       const res = await fetch(`${getApiBase()}/api/speaker-id/speakers`)
       const data = await res.json()
-      if (data.ok && data.speakers) setSpeakers(data.speakers)
+      if (data.ok && data.speakers) {
+        setSpeakers(data.speakers)
+        // No visible profiles → drop any stale selection (e.g. a persisted
+        // name that now maps to the hidden owner voiceprint).
+        if (data.speakers.length === 0) {
+          setActiveSpeaker('')
+          setSpeakerName('')
+        }
+      }
     } catch {}
-  }, [])
+  }, [setSpeakerName])
 
   const fetchSamples = useCallback(async () => {
     try {
@@ -122,11 +180,29 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
     } catch {}
   }, [activeSpeaker])
 
+  const fetchRejected = useCallback(async () => {
+    if (!activeSpeaker) { setRejected([]); return }
+    try {
+      const res = await fetch(`${getApiBase()}/api/speaker-id/rejected?speaker=${encodeURIComponent(activeSpeaker)}`)
+      const data = await res.json()
+      if (data.ok) setRejected(data.samples ?? [])
+    } catch {}
+  }, [activeSpeaker])
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${getApiBase()}/api/speaker-id/status`)
+      const data = await res.json()
+      if (data.ok) setSysStatus(data as SpeakerSystemStatus)
+    } catch {}
+  }, [])
+
   useEffect(() => {
     fetchSpeakers()
-  }, [fetchSpeakers])
+    fetchStatus()
+  }, [fetchSpeakers, fetchStatus])
 
-  useEffect(() => { fetchSamples() }, [fetchSamples])
+  useEffect(() => { fetchSamples(); fetchRejected() }, [fetchSamples, fetchRejected])
 
   // Keep a valid active speaker selected and sync the threshold slider to it.
   // Per-speaker thresholds arrive already persisted from the backend.
@@ -163,8 +239,14 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
   }
 
   const deleteSpeaker = async (name: string) => {
+    const ok = window.confirm(`Eliminar perfil "${name}" y TODAS sus muestras. ¿Continuar?`)
+    if (!ok) return
     try {
-      await fetch(`${getApiBase()}/api/speaker-id/speakers?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
+      const res = await fetch(`${getApiBase()}/api/speaker-id/speakers?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
+      if (res.status === 403) {
+        setMessage('Ese nombre corresponde a la huella owner protegida — no se puede eliminar desde aquí.')
+        return
+      }
       // Clear local selection immediately; the sync effect picks a new one.
       if (activeSpeaker === name) {
         setActiveSpeaker('')
@@ -208,9 +290,31 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
       })
       const data = await res.json()
       if (data.ok) {
-        setMessage(`Muestra guardada: ${data.filename}`)
         fetchSamples()
         fetchSpeakers()
+        const step = sessionStepRef.current
+        if (step != null) {
+          const next = step + 1
+          if (next >= SESSION_CONDITIONS.length) {
+            sessionStepRef.current = null
+            setSessionStep(null)
+            setMessage('Sesión completa: 5/5 condiciones grabadas. Re-calibrando Speaker ID...')
+            try {
+              await fetch(`${getApiBase()}/api/speaker-id/reload`, { method: 'POST' })
+              setMessage('Sesión completa (5/5) y Speaker ID re-calibrado. Pide asignar estas muestras como huella base (owner) cuando quieras fijarlas.')
+              fetchSpeakers()
+            } catch {
+              setMessage('Sesión completa (5/5), pero falló la re-calibración. Pulsa "Re-calibrar Speaker ID".')
+            }
+          } else {
+            sessionStepRef.current = next
+            setSessionStep(next)
+            setPhrase(p => pickPhrase(activeSpeaker, p))
+            setMessage(`Paso ${step + 1}/5 guardado. Siguiente: ${SESSION_CONDITIONS[next].title}`)
+          }
+        } else {
+          setMessage(`Muestra guardada: ${data.filename}`)
+        }
       } else {
         setMessage('Error al guardar muestra')
       }
@@ -218,7 +322,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
       setMessage('Error de conexión')
     }
     setStatus('idle')
-  }, [fetchSamples, fetchSpeakers, activeSpeaker])
+  }, [fetchSamples, fetchSpeakers, fetchStatus, activeSpeaker])
 
   const stopRecording = useCallback((reason: 'auto' | 'manual') => {
     if (stopGuardRef.current) return
@@ -258,8 +362,11 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
       return
     }
     try {
+      // Enrollment capture: keep browser noise suppression ON so the reference
+      // voiceprint is built from clean near-field voice (live STT uses the AEC
+      // source instead). echoCancellation off — no TTS playing during enroll.
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: false }
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: false, noiseSuppression: true }
       })
       const ctx = new AudioContext({ sampleRate: 16000 })
       const source = ctx.createMediaStreamSource(stream)
@@ -299,10 +406,72 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
     }
   }, [stopRecording, activeSpeaker])
 
+  const startSession = () => {
+    if (!activeSpeaker) {
+      setMessage('Crea o selecciona un perfil antes de grabar.')
+      return
+    }
+    sessionStepRef.current = 0
+    setSessionStep(0)
+    setPhrase(p => pickPhrase(activeSpeaker, p))
+    setMessage('Sesión guiada iniciada: 5 condiciones, una muestra por cada una.')
+  }
+
+  const skipSessionStep = () => {
+    const step = sessionStepRef.current
+    if (step == null) return
+    const next = step + 1
+    if (next >= SESSION_CONDITIONS.length) {
+      sessionStepRef.current = null
+      setSessionStep(null)
+      setMessage('Sesión terminada. Pulsa "Re-calibrar Speaker ID" si grabaste muestras.')
+    } else {
+      sessionStepRef.current = next
+      setSessionStep(next)
+      setPhrase(p => pickPhrase(activeSpeaker, p))
+      setMessage(`Paso saltado. Siguiente: ${SESSION_CONDITIONS[next].title}`)
+    }
+  }
+
+  const cancelSession = () => {
+    sessionStepRef.current = null
+    setSessionStep(null)
+    setMessage('Sesión guiada cancelada. Las muestras ya grabadas se conservan.')
+  }
+
   const deleteSample = async (filename: string) => {
     try {
       await fetch(`${getApiBase()}/api/speaker-id/samples?file=${encodeURIComponent(filename)}&speaker=${encodeURIComponent(activeSpeaker)}`, { method: 'DELETE' })
       fetchSamples()
+      fetchSpeakers()
+    } catch {}
+  }
+
+  const restoreRejected = async (filename: string) => {
+    try {
+      const res = await fetch(
+        `${getApiBase()}/api/speaker-id/rejected/restore?file=${encodeURIComponent(filename)}&speaker=${encodeURIComponent(activeSpeaker)}`,
+        { method: 'POST' }
+      )
+      const data = await res.json()
+      setMessage(data.ok
+        ? `Muestra restaurada: ${filename}. El filtro puede re-rechazarla si sigue inconsistente.`
+        : `Error: ${data.error ?? 'restore_failed'}`)
+      fetchSamples()
+      fetchRejected()
+      fetchSpeakers()
+    } catch {
+      setMessage('Error de conexión')
+    }
+  }
+
+  const deleteRejected = async (filename: string) => {
+    try {
+      await fetch(
+        `${getApiBase()}/api/speaker-id/rejected?file=${encodeURIComponent(filename)}&speaker=${encodeURIComponent(activeSpeaker)}`,
+        { method: 'DELETE' }
+      )
+      fetchRejected()
       fetchSpeakers()
     } catch {}
   }
@@ -316,6 +485,43 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
       setMessage(data.ok ? 'Speaker ID recalibrado' : `Error: ${data.error}`)
       // Thresholds are preserved by the backend; refresh to reflect any changes.
       fetchSpeakers()
+      fetchStatus()
+      fetchRejected()
+    } catch {
+      setMessage('Error de conexión')
+    }
+    setStatus('idle')
+  }
+
+  const resetEnrollment = async () => {
+    if (!activeSpeaker) return
+    const ok = window.confirm(
+      `Re-enrolar "${activeSpeaker}" desde cero.\n\n` +
+      'Borra TODAS las muestras grabadas de este perfil. La huella owner ' +
+      'cifrada NO se toca (se gestiona aparte). Después graba muestras ' +
+      'nuevas y pulsa "Re-calibrar Speaker ID".\n\n¿Continuar?'
+    )
+    if (!ok) return
+    setStatus('loading')
+    setMessage('Borrando huella vieja...')
+    try {
+      const res = await fetch(
+        `${getApiBase()}/api/speaker-id/reset?speaker=${encodeURIComponent(activeSpeaker)}`,
+        { method: 'POST' }
+      )
+      const data = await res.json()
+      if (data.ok) {
+        setMessage(
+          `Listo: ${data.samplesRemoved} muestra(s) borradas (huella owner intacta). ` +
+          'Graba muestras nuevas y pulsa "Re-calibrar Speaker ID".'
+        )
+        fetchSamples()
+        fetchSpeakers()
+        fetchStatus()
+        fetchRejected()
+      } else {
+        setMessage(`Error: ${data.error ?? 'reset_failed'}`)
+      }
     } catch {
       setMessage('Error de conexión')
     }
@@ -463,6 +669,42 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
           </Section>
 
           <Section title={`GRABAR MUESTRA · ${activeSpeaker}`}>
+            {sessionStep != null && (
+              <div
+                style={{
+                  background: 'rgba(255,215,0,0.05)',
+                  border: '1px solid #ffd70044',
+                  borderRadius: 6,
+                  padding: '10px 12px',
+                  marginBottom: 10,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 10, letterSpacing: '2px', color: '#ffd700' }}>
+                    SESIÓN GUIADA · PASO {sessionStep + 1}/{SESSION_CONDITIONS.length}
+                  </span>
+                  <div style={{ display: 'flex', gap: 3 }}>
+                    {SESSION_CONDITIONS.map((_, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          width: 14,
+                          height: 4,
+                          borderRadius: 2,
+                          background: i < sessionStep ? '#00e5ff' : i === sessionStep ? '#ffd700' : '#ffffff22',
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, color: '#ffe082', marginBottom: 3 }}>
+                  {SESSION_CONDITIONS[sessionStep].title}
+                </div>
+                <div style={{ fontSize: 10, opacity: 0.7, lineHeight: 1.4 }}>
+                  {SESSION_CONDITIONS[sessionStep].desc}
+                </div>
+              </div>
+            )}
             <div
               style={{
                 background: 'rgba(0, 229, 255, 0.06)',
@@ -535,20 +777,32 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
 
             {/* Acciones */}
             <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              {!recording ? (
+              {recording ? (
+                <HudBtn active onClick={() => stopRecording('manual')}>Detener</HudBtn>
+              ) : sessionStep != null ? (
                 <>
-                  <HudBtn onClick={startRecording}>Iniciar grabación (6 s)</HudBtn>
+                  <HudBtn onClick={() => startRecording()}>
+                    Grabar paso {sessionStep + 1} (6 s)
+                  </HudBtn>
                   <HudBtn onClick={() => setPhrase(p => pickPhrase(activeSpeaker, p))}>Otra frase</HudBtn>
+                  <HudBtn onClick={skipSessionStep}>Saltar paso</HudBtn>
+                  <HudBtn onClick={cancelSession}>Cancelar sesión</HudBtn>
                 </>
               ) : (
-                <HudBtn active onClick={() => stopRecording('manual')}>Detener</HudBtn>
+                <>
+                  <HudBtn onClick={startSession}>Sesión guiada (5 condiciones)</HudBtn>
+                  <HudBtn onClick={() => startRecording()}>Grabación suelta (6 s)</HudBtn>
+                  <HudBtn onClick={() => setPhrase(p => pickPhrase(activeSpeaker, p))}>Otra frase</HudBtn>
+                </>
               )}
             </div>
 
             <div style={{ fontSize: 9, opacity: 0.45, marginTop: 8 }}>
               Mínimo 3 s para guardar. Por debajo se descarta. Duración total: 6 s.
+              {sessionStep == null && ' La sesión guiada graba una muestra por condición acústica (recomendado para enrolar).'}
             </div>
           </Section>
+
         </div>
 
         {/* Columna der: Muestras + calibración */}
@@ -593,15 +847,84 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                 ))}
               </div>
             )}
+            {(() => {
+              const sp = speakers.find(s => s.name === activeSpeaker)
+              if (!sp || sp.active_refs == null) return null
+              return (
+                <div style={{ fontSize: 9, opacity: 0.5, marginTop: 8 }}>
+                  Referencias activas en memoria: {sp.active_refs}
+                  {sp.active_refs !== sp.samples ? ' (incluye huella base / excluye filtradas)' : ''}
+                </div>
+              )
+            })()}
           </Section>
+
+          {rejected.length > 0 && (
+            <Section title={`RECHAZADAS (FILTRO DE CONSISTENCIA) · ${rejected.length}`}>
+              <div style={{ fontSize: 9, opacity: 0.5, marginBottom: 8 }}>
+                Muestras en cuarentena: sonaban a eco/ruido, no a la voz del perfil.
+                Restaurar las devuelve al set activo (el filtro puede volver a rechazarlas).
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {rejected.map(s => (
+                  <div
+                    key={s.filename}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 8px',
+                      background: 'rgba(255,82,82,0.04)',
+                      border: '1px solid #ff525222',
+                      borderRadius: 3,
+                    }}
+                  >
+                    <span style={{ fontSize: 11, flex: 1, opacity: 0.75, wordBreak: 'break-all' }}>{s.filename}</span>
+                    <span style={{ fontSize: 9, opacity: 0.5, minWidth: 40, textAlign: 'right' }}>
+                      {(s.size / 1024).toFixed(0)}KB
+                    </span>
+                    <button
+                      onClick={() => restoreRejected(s.filename)}
+                      style={{
+                        background: 'none',
+                        border: '1px solid #00e5ff66',
+                        color: '#00e5ff',
+                        fontSize: 9,
+                        padding: '2px 7px',
+                        borderRadius: 3,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Restaurar
+                    </button>
+                    <button
+                      onClick={() => deleteRejected(s.filename)}
+                      style={{
+                        background: 'none',
+                        border: '1px solid #ff5252',
+                        color: '#ff5252',
+                        fontSize: 10,
+                        padding: '2px 7px',
+                        borderRadius: 3,
+                        cursor: 'pointer',
+                      }}
+                      aria-label={`Borrar ${s.filename}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
 
           <Section title={`CALIBRACIÓN · ${activeSpeaker || '—'}`}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
               <span style={{ fontSize: 10, opacity: 0.6, minWidth: 50 }}>Umbral</span>
               <input
                 type="range"
-                min={0.50}
-                max={0.95}
+                min={THRESHOLD_MIN}
+                max={THRESHOLD_MAX}
                 step={0.01}
                 value={threshold}
                 disabled={!activeSpeaker}
@@ -616,6 +939,73 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
               Umbral por perfil · menor = más permisivo · mayor = más estricto.
             </div>
             <HudBtn onClick={reload} active={status === 'loading'}>Re-calibrar Speaker ID</HudBtn>
+            {activeSpeaker && (
+              <button
+                onClick={resetEnrollment}
+                style={{
+                  marginTop: 10,
+                  width: '100%',
+                  background: 'rgba(255,82,82,0.06)',
+                  border: '1px solid #ff525266',
+                  color: '#ff8a80',
+                  fontSize: 10,
+                  letterSpacing: '1px',
+                  padding: '6px 8px',
+                  borderRadius: 3,
+                  cursor: 'pointer',
+                }}
+              >
+                Re-enrolar desde cero (borra huella vieja)
+              </button>
+            )}
+            <div style={{ fontSize: 9, opacity: 0.45, marginTop: 8 }}>
+              Re-enrolar borra las muestras del perfil; la huella owner cifrada no se toca.
+              Para fijar muestras nuevas como huella owner, pide a Jarvis regenerar el
+              voiceprint (scripts/create-voiceprint.sh).
+            </div>
+          </Section>
+
+          <Section title="MOTOR DE RECONOCIMIENTO">
+            {sysStatus ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '5px 12px', fontSize: 10 }}>
+                <StatusRow
+                  label="Huella owner"
+                  value={sysStatus.owner_ready ? 'activa (oculta)' : 'NO CARGADA'}
+                  highlight={!!sysStatus.owner_ready}
+                  warn={!sysStatus.owner_ready}
+                />
+                <StatusRow label="Encoder" value={sysStatus.encoder ?? '—'} highlight />
+                <StatusRow label="Denoise (solo Whisper)" value={sysStatus.denoise_mode ?? '—'} />
+                <StatusRow
+                  label="Cohort anti-ruido"
+                  value={sysStatus.cohort_size ? `activo · ${sysStatus.cohort_size} anclas` : 'INACTIVO'}
+                  warn={!sysStatus.cohort_size}
+                />
+                <StatusRow
+                  label="Ancla de voz"
+                  value={sysStatus.wake_templates ? 'activa (oculta)' : 'inactiva'}
+                  highlight={!!sysStatus.wake_templates}
+                />
+                <StatusRow
+                  label="Aprendizaje online"
+                  value={sysStatus.voice_learning
+                    ? `activo · confianza ≥ ${sysStatus.learn_threshold?.toFixed(2) ?? '—'}`
+                    : 'desactivado'}
+                />
+                <StatusRow label="Umbral por defecto" value={sysStatus.default_threshold?.toFixed(2) ?? '—'} />
+                <StatusRow label="Margen anti-confusión" value={sysStatus.match_margin?.toFixed(2) ?? '—'} />
+                <StatusRow
+                  label="Whisper"
+                  value={`${sysStatus.whisper_model ?? '—'} · ${sysStatus.whisper_device ?? '—'}`}
+                />
+              </div>
+            ) : (
+              <div style={{ fontSize: 10, opacity: 0.5 }}>Servicio STT no disponible.</div>
+            )}
+            <div style={{ fontSize: 9, opacity: 0.45, marginTop: 10 }}>
+              Speaker-ID usa audio crudo; el denoise solo alimenta la transcripción.
+              El cohort rechaza ruido puro que imita el canal del micrófono.
+            </div>
           </Section>
 
           {message && (
@@ -636,6 +1026,17 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+  )
+}
+
+function StatusRow({ label, value, highlight, warn }: {
+  label: string; value: string; highlight?: boolean; warn?: boolean
+}) {
+  return (
+    <>
+      <span style={{ opacity: 0.55 }}>{label}</span>
+      <span style={{ color: warn ? '#ff8a80' : highlight ? '#00f0ff' : '#c8f4ff' }}>{value}</span>
+    </>
   )
 }
 

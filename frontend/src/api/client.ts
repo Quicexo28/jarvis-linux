@@ -1,10 +1,23 @@
+import { isTauri } from '../platform/tauri'
+
 const STORAGE_KEY      = 'jarvis.api.base'
 const MOBILE_TOKEN_KEY = 'jarvis.mobile.token'
 const DEFAULT_BASE     = 'http://127.0.0.1:8788'
 
+// En Tauri (origin tauri://localhost) y en dev de Vite (:5173) el backend vive
+// en 127.0.0.1:8788. Servido por el backend mismo (web remoto vía Tailscale o
+// Chromium app-mode) es el mismo origen de la página.
+function defaultBase(): string {
+  if (isTauri() || import.meta.env.DEV) return DEFAULT_BASE
+  if (typeof window !== 'undefined' && /^https?:/.test(window.location.origin)) {
+    return window.location.origin
+  }
+  return DEFAULT_BASE
+}
+
 export function getApiBase(): string {
   const stored = localStorage.getItem(STORAGE_KEY)
-  return (stored ?? DEFAULT_BASE).replace(/\/$/, '')
+  return (stored ?? defaultBase()).replace(/\/$/, '')
 }
 
 export function setApiBase(url: string): void {

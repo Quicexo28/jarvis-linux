@@ -6,7 +6,7 @@
  * Python STT service which handles the actual embedding computation.
  */
 
-import { readdir, stat, unlink, writeFile, mkdir, rm } from 'fs/promises'
+import { readdir, stat, unlink, writeFile, mkdir, rm, rename } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join, extname } from 'path'
 import { json, readBody } from '../lib/http.js'
@@ -49,7 +49,13 @@ export async function handleSpeakerIdList(req, res) {
   const speaker = url.searchParams.get('speaker')
 
   if (speaker) {
-    const dir = await ensureSpeakerDir(speaker)
+    // Read-only: never create the dir here — a stale UI selection polling a
+    // deleted profile would otherwise resurrect it as an empty ghost.
+    const safe = safeName(speaker)
+    const dir = safe ? join(SPEAKER_DIR, safe) : SPEAKER_DIR
+    if (!existsSync(dir)) {
+      return json(res, 200, { ok: true, samples: [], speaker: safe, directory: dir })
+    }
     const files = await readdir(dir)
     const samples = []
     for (const f of files) {
@@ -137,6 +143,42 @@ export async function handleSpeakerIdDelete(req, res) {
 }
 
 /**
+ * POST /api/speaker-id/reset?speaker=<name>
+ *
+ * From-scratch re-enrollment of a VISIBLE profile: wipe its WAV samples and
+ * reload. The encrypted owner voiceprint (owner_voiceprint.enc) is NOT touched:
+ * it is a hidden system identity managed via scripts/create-voiceprint.sh, and
+ * deleting it from the UI twice killed recognition for hours. Regenerate or
+ * remove it deliberately, never as a side effect of a profile reset.
+ */
+export async function handleSpeakerIdReset(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`)
+  const speaker = safeName(url.searchParams.get('speaker'))
+  if (!speaker) return json(res, 400, { ok: false, error: 'missing_speaker' })
+
+  // 1. Wipe all audio samples in the speaker dir (keep the dir + _config.json).
+  let removed = 0
+  const dir = join(SPEAKER_DIR, speaker)
+  if (existsSync(dir)) {
+    for (const f of await readdir(dir)) {
+      if (f.startsWith('_')) continue
+      if (!AUDIO_EXTS.has(extname(f).toLowerCase())) continue
+      try { await unlink(join(dir, f)); removed++ } catch {}
+    }
+  }
+  await ensureSpeakerDir(speaker)
+
+  // 2. Full reload so the in-memory speaker set drops the old embeddings.
+  let reload = null
+  try {
+    const upstream = await fetch(`${STT_URL}/speaker-id/reload`, { method: 'POST' })
+    reload = await upstream.json().catch(() => null)
+  } catch {}
+
+  return json(res, 200, { ok: true, speaker, samplesRemoved: removed, seedRemoved: false, reload })
+}
+
+/**
  * POST /api/speaker-id/reload
  */
 export async function handleSpeakerIdReload(_req, res) {
@@ -179,8 +221,9 @@ export async function handleSpeakerIdThreshold(req, res) {
     if (!name) {
       return json(res, 400, { ok: false, error: 'missing_speaker' })
     }
-    if (isNaN(threshold) || threshold < 0.5 || threshold > 0.95) {
-      return json(res, 400, { ok: false, error: 'threshold must be 0.50-0.95' })
+    // ECAPA cosine scores run lower than resemblyzer's — floor matches Python.
+    if (isNaN(threshold) || threshold < 0.30 || threshold > 0.95) {
+      return json(res, 400, { ok: false, error: 'threshold must be 0.30-0.95' })
     }
 
     const upstream = await fetch(`${STT_URL}/speaker-id/threshold`, {
@@ -190,6 +233,92 @@ export async function handleSpeakerIdThreshold(req, res) {
     })
     if (!upstream.ok) {
       return json(res, 502, { ok: false, error: 'stt_threshold_failed' })
+    }
+    const data = await upstream.json()
+    return json(res, 200, { ok: true, ...data })
+  } catch (err) {
+    return json(res, 502, { ok: false, error: 'stt_unreachable', detail: err.message })
+  }
+}
+
+// --- Rejected samples (_rejected/ quarantine from the consistency filter) ---
+
+function rejectedDir(speaker) {
+  return join(SPEAKER_DIR, speaker, '_rejected')
+}
+
+function validFilename(filename) {
+  return filename && !filename.includes('/') && !filename.includes('\\') && !filename.includes('..')
+}
+
+/**
+ * GET /api/speaker-id/rejected?speaker=<name>
+ * Lists quarantined samples (echo/noise refs excluded by the consistency filter).
+ */
+export async function handleRejectedList(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`)
+  const speaker = safeName(url.searchParams.get('speaker'))
+  if (!speaker) return json(res, 400, { ok: false, error: 'missing_speaker' })
+
+  const dir = rejectedDir(speaker)
+  const samples = []
+  if (existsSync(dir)) {
+    for (const f of await readdir(dir)) {
+      const ext = extname(f).toLowerCase()
+      if (!AUDIO_EXTS.has(ext)) continue
+      const info = await stat(join(dir, f))
+      samples.push({ filename: f, size: info.size, createdAt: info.birthtime.toISOString() })
+    }
+  }
+  return json(res, 200, { ok: true, speaker, samples })
+}
+
+/**
+ * POST /api/speaker-id/rejected/restore?speaker=<name>&file=<filename>
+ * Moves a quarantined sample back into the active set and reloads the speaker.
+ * The consistency filter may re-reject it at load if it's still inconsistent.
+ */
+export async function handleRejectedRestore(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`)
+  const speaker = safeName(url.searchParams.get('speaker'))
+  const filename = url.searchParams.get('file')
+  if (!speaker) return json(res, 400, { ok: false, error: 'missing_speaker' })
+  if (!validFilename(filename)) return json(res, 400, { ok: false, error: 'invalid_filename' })
+
+  const src = join(rejectedDir(speaker), filename)
+  if (!existsSync(src)) return json(res, 404, { ok: false, error: 'file_not_found' })
+
+  await rename(src, join(SPEAKER_DIR, speaker, filename))
+  await notifyReloadSpeaker(speaker)
+  return json(res, 200, { ok: true, restored: filename, speaker })
+}
+
+/**
+ * DELETE /api/speaker-id/rejected?speaker=<name>&file=<filename>
+ */
+export async function handleRejectedDelete(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`)
+  const speaker = safeName(url.searchParams.get('speaker'))
+  const filename = url.searchParams.get('file')
+  if (!speaker) return json(res, 400, { ok: false, error: 'missing_speaker' })
+  if (!validFilename(filename)) return json(res, 400, { ok: false, error: 'invalid_filename' })
+
+  const filepath = join(rejectedDir(speaker), filename)
+  if (!existsSync(filepath)) return json(res, 404, { ok: false, error: 'file_not_found' })
+
+  await unlink(filepath)
+  return json(res, 200, { ok: true, deleted: filename, speaker })
+}
+
+/**
+ * POST /api/speaker-id/wake/reload
+ * Re-embeds the text-dependent wake-word templates (_wake/) in the STT service.
+ */
+export async function handleWakeReload(_req, res) {
+  try {
+    const upstream = await fetch(`${STT_URL}/speaker-id/speakers/_wake/reload`, { method: 'POST' })
+    if (!upstream.ok) {
+      return json(res, 502, { ok: false, error: 'stt_wake_reload_failed', status: upstream.status })
     }
     const data = await upstream.json()
     return json(res, 200, { ok: true, ...data })
@@ -255,21 +384,24 @@ export async function handleSpeakersDelete(req, res) {
   const safe = safeName(url.searchParams.get('name'))
   if (!safe) return json(res, 400, { ok: false, error: 'missing name param' })
 
+  // Ask STT first: it knows whether this name is the protected hidden owner.
+  let sttData = {}
+  try {
+    const upstream = await fetch(`${STT_URL}/speaker-id/speakers/${encodeURIComponent(safe)}`, {
+      method: 'DELETE',
+    })
+    if (upstream.status === 403) {
+      return json(res, 403, { ok: false, error: 'owner_protected' })
+    }
+    sttData = await upstream.json()
+  } catch {}
+
   // Delete the directory on the Node side so the removal is real even when the
   // STT service is down — otherwise the profile reappears on next open.
   const dir = join(SPEAKER_DIR, safe)
   if (existsSync(dir)) {
     await rm(dir, { recursive: true, force: true })
   }
-
-  // Best-effort: tell STT to drop it from memory and config.
-  let sttData = {}
-  try {
-    const upstream = await fetch(`${STT_URL}/speaker-id/speakers/${encodeURIComponent(safe)}`, {
-      method: 'DELETE',
-    })
-    sttData = await upstream.json()
-  } catch {}
 
   return json(res, 200, { ok: true, name: safe, ...sttData })
 }

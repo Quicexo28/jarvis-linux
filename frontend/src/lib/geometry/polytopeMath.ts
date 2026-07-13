@@ -62,6 +62,37 @@ export function buildCross(n: number): PolytopeGeometry {
 }
 
 /**
+ * Square (2-face) quads of an N-dimensional hypercube, as vertex-index quads
+ * in cyclic order. For each pair of free axes (a,b) the remaining n-2 axes are
+ * fixed at ±1, giving C(n,2) * 2^(n-2) quads (tesseract: 6 * 4 = 24).
+ * Indices match buildHypercube (bit d of the index = sign of axis d).
+ */
+export function buildHypercubeFaces(n: number): [number, number, number, number][] {
+  if (n < 2 || n > 7) throw new Error(`Hypercube dimension must be 2–7, got ${n}`)
+  const faces: [number, number, number, number][] = []
+  const rest: number[] = []
+  for (let a = 0; a < n; a++) {
+    for (let b = a + 1; b < n; b++) {
+      rest.length = 0
+      for (let d = 0; d < n; d++) if (d !== a && d !== b) rest.push(d)
+      const combos = 1 << rest.length
+      for (let m = 0; m < combos; m++) {
+        let base = 0
+        rest.forEach((d, k) => { if ((m >> k) & 1) base |= 1 << d })
+        // cyclic corner order: (0,0) → (1,0) → (1,1) → (0,1) over bits (a,b)
+        faces.push([
+          base,
+          base | (1 << a),
+          base | (1 << a) | (1 << b),
+          base | (1 << b),
+        ])
+      }
+    }
+  }
+  return faces
+}
+
+/**
  * Rotate vertices in the plane spanned by axes a and b by angle theta.
  * Returns new vertices — does NOT mutate input.
  */

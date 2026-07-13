@@ -13,8 +13,11 @@ export type SystemTelemetry = {
 }
 export type MobileTokenInfo = {
   token: string
+  permanent?: boolean
   lanUrl: string
   tailscaleUrl: string | null
+  tailscaleServeUrl?: string | null
+  tunnelUrl: string | null
   qrUrl: string
   expiresAt: number
   activated: boolean

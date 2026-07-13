@@ -14,15 +14,6 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'all', label: 'All' },
 ]
 
-const SERVICE_COLORS: Record<string, string> = {
-  xtts: '\x1b[36m',
-  stt: '\x1b[32m',
-  backend: '\x1b[33m',
-  claude: '\x1b[35m',
-}
-const RESET = '\x1b[0m'
-const RED = '\x1b[31m'
-
 const THEME = {
   background: '#0a0e14',
   foreground: '#c8f4ff',

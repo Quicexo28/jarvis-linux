@@ -5,6 +5,7 @@ import { Float, Html, useGLTF } from '@react-three/drei'
 import * as THREE from 'three'
 import { useJarvisStore } from '../state/jarvisStore'
 import { useSystemStore } from '../state/systemStore'
+import { getTtsLevel, isTtsSpeaking, isTtsThinking, isHoloAwake } from '../audio/ttsLevelBus'
 import { PINCH_SCALE_MULTIPLIER, PINCH_APPROACH_DISTANCE, PINCH_DISSOLVE_START } from '../gestures/config'
 import { modeMeta } from '../constants'
 import type { Mode } from '../types'
@@ -96,11 +97,15 @@ function CosmicBackground() {
 ───────────────────────────────────────────────────────────── */
 const N_NODES = 48
 
-function NeuralFireGeo({ active }: { active: boolean }) {
+export function NeuralFireGeo({ active }: { active: boolean }) {
   const groupRef = useRef<THREE.Group>(null)
   const instRef  = useRef<THREE.InstancedMesh>(null)
+  const glowRef  = useRef<THREE.Mesh>(null)
   const dummy    = useMemo(() => new THREE.Object3D(), [])
   const color    = useMemo(() => new THREE.Color(), [])
+  // Voice-reactive breathing: compact while idle, inflating with the real TTS
+  // envelope while Jarvis speaks (level comes from ttsLevelBus, not state).
+  const breath   = useRef(0.10)
 
   const tokensWindow5h = useSystemStore(s => s.tokensWindow5h)
   const activeModel    = useSystemStore(s => s.activeModel)
@@ -166,6 +171,29 @@ function NeuralFireGeo({ active }: { active: boolean }) {
 
     groupRef.current.rotation.y += 0.003 * delta * 60
 
+    // Voice reactivity, four states: boot (Jarvis has never acted since app
+    // launch) = hologram hidden, only a bare point of light; idle = compact
+    // sphere; thinking (turn in flight, no reply yet) = grown, slightly
+    // smaller than speaking; speaking = inflated with the live TTS envelope.
+    // Smoothed lerp so transitions read as an organic swell, not a snap.
+    const lvl      = getTtsLevel()
+    const speaking = isTtsSpeaking()
+    const awake    = isHoloAwake()
+    const targetScale = speaking ? 0.78 + lvl * 0.35 : isTtsThinking() ? 0.55 : awake ? 0.42 : 0.10
+    breath.current += (targetScale - breath.current) * Math.min(1, delta * (speaking ? 9 : 5))
+    groupRef.current.scale.setScalar(breath.current)
+    instRef.current.visible = awake
+    edgeLinesObj.visible = awake
+    if (glowRef.current) {
+      const gmat = glowRef.current.material as THREE.MeshBasicMaterial
+      // Boot: the glow IS the point — bigger relative scale + steadier opacity
+      // so a dim dot reads at the tiny group scale.
+      // 4.2 × the 0.10 group scale ≈ the glow's world size at idle (0.42),
+      // i.e. the same solid center dot the full hologram shows.
+      gmat.opacity = awake ? 0.18 + lvl * 0.42 : 0.85
+      glowRef.current.scale.setScalar(awake ? 1 + lvl * 0.65 : 4.2)
+    }
+
     const t    = state.clock.elapsedTime
     const rotY = groupRef.current.rotation.y
     const cosR = Math.cos(rotY)
@@ -185,7 +213,9 @@ function NeuralFireGeo({ active }: { active: boolean }) {
           pendingFires.current.push({ idx: neighbor, at: t + 0.08 + Math.random() * 0.14 })
         }
       })
-      nextFireAt.current = t + (active ? fireInterval * 0.55 : fireInterval)
+      // Speaking multiplies the firing rate — the network "thinks out loud".
+      const speakBoost = speaking ? 0.35 : 1
+      nextFireAt.current = t + (active ? fireInterval * 0.55 : fireInterval) * speakBoost
     }
 
     for (let i = 0; i < N_NODES; i++) {
@@ -222,7 +252,7 @@ function NeuralFireGeo({ active }: { active: boolean }) {
         <sphereGeometry args={[0.055, 8, 8]} />
         <meshStandardMaterial color="#ffffff" emissive="#00f0ff" emissiveIntensity={1.4} toneMapped={false} />
       </instancedMesh>
-      <mesh>
+      <mesh ref={glowRef}>
         <sphereGeometry args={[0.15, 16, 16]} />
         <meshBasicMaterial color="#00f0ff" transparent opacity={0.18} />
       </mesh>

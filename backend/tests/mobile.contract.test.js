@@ -29,7 +29,10 @@ test('GET /api/mobile/token returns token info shape', async () => {
   const res = await fetch(`${BASE}/api/mobile/token`)
   expect(res.status).toBe(200)
   const body = await res.json()
-  expect(body.token).toMatch(/^[0-9a-f]{32}$/)
+  // Token is hex; length varies by mode — 32 for the rotating session token,
+  // longer for the permanent JARVIS_WEB_TOKEN when configured.
+  expect(body.token).toMatch(/^[0-9a-f]{32,}$/)
+  expect(typeof body.permanent).toBe('boolean')
   expect(body.lanUrl).toMatch(/^http:\/\/\d+\.\d+\.\d+\.\d+:8788$/)
   expect(typeof body.expiresAt).toBe('number')
   expect(body.activated).toBe(false)
@@ -83,10 +86,16 @@ test('GET /api/mobile/status returns connected:true after auth', async () => {
   expect(typeof body.lastSeen).toBe('number')
 })
 
-test('POST /api/mobile/token/refresh generates a new token', async () => {
+test('POST /api/mobile/token/refresh rotates the session token (permanent stays fixed)', async () => {
   const first = await (await fetch(`${BASE}/api/mobile/token`)).json()
   await fetch(`${BASE}/api/mobile/token/refresh`, { method: 'POST' })
   const second = await (await fetch(`${BASE}/api/mobile/token`)).json()
-  expect(second.token).not.toBe(first.token)
+  if (first.permanent) {
+    // The permanent web token is stable by design — refresh rotates only the
+    // underlying session, not the QR token.
+    expect(second.token).toBe(first.token)
+  } else {
+    expect(second.token).not.toBe(first.token)
+  }
   expect(second.activated).toBe(false)
 })

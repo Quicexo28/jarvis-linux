@@ -16,11 +16,16 @@ const ACTION_WORDS = [
   'recuerda', 'olvidalo', 'repite', 'conecta', 'desconecta',
 ]
 
-const DIRECT_ADDRESS_RE = /^(dime|hazme|ponme|ayudame|muestrame|pon|apaga|enciende|abre|cierra|jarvis)/i
+// Phonetic homophones of "jarvis" that the STT commonly mishears (javier, ya
+// ves, jarbis, harvis, yarvis, charvis...). Matched anywhere so a misheard name
+// still wakes/engages Jarvis. Kept as one shared source of truth.
+export const JARVIS_HOMO_RE = /\b(j[ae]rv(is|i|iz|es|e)|jarbis|h[ae]rvis|yarvis|charvis|jarv|javier|ja vier|ya ?ves)\b/i
+
+const DIRECT_ADDRESS_RE = /^(dime|hazme|ponme|ayudame|muestrame|pon|apaga|enciende|abre|cierra|jarvis|javier|ya ?ves)/i
 // Explicit wake phrase anywhere in the utterance. In wake-word mode, naming
 // Jarvis must always engage, even from PASSIVE — so this overrides the score
-// threshold entirely.
-const WAKE_RE = /\b(jarvis|desp[ie]ert|oye jarvis|hola jarvis)\b/i
+// threshold entirely. Includes phonetic homophones (JARVIS_HOMO_RE).
+export const WAKE_RE = new RegExp(`\\b(jarvis|desp[ie]ert|oye jarvis|hola jarvis)\\b|${JARVIS_HOMO_RE.source}`, 'i')
 const QUESTION_RE = /\?$/
 const SLEEP_COMMANDS = /\b(descansa|duerme|silencio|callate|no molestes)\b/i
 
@@ -28,6 +33,7 @@ const SELF_BUILD_RE = /\b(no\s+puedes|aprende\s+a\s+hacer|conf[ií]g[uú]rate\s+
 const ACTIVATE_SKILL_RE = /\b(activa\s+(la?\s+)?habilidad|activa\s+(el?\s+)?skill|habilita\s+(la?\s+)?funci[oó]n|enciende\s+(la?\s+)?habilidad)\b/i
 const TOGGLE_GESTURES_RE = /\b(activa|desactiva|enciende|apaga)\s+(los?\s+)?gestos\b/i
 const VOICE_MUTED_RE = /\b(no\s+escuches|ign[oó]ra(me)?|modo\s+silencio|silencio\s+de\s+voz)\b/i
+const SET_VOICE_MODE_RE = /\b(modo\s+(siempre\s+activ[ao]|continuo|wake\s*word|palabra\s+de\s+activaci[oó]n|ptt|push\s+to\s+talk|empujar\s+para\s+hablar|apagado\s+de\s+voz|voz\s+apagada|desactiva\s+voz|apaga\s+(el\s+)?micr[oó]fono)|cambia\s+(el\s+)?modo\s+de\s+(voz|escucha)|pon\s+(te\s+en\s+modo|el\s+modo)\s+(siempre|wake|ptt|silencio|continuo))\b/i
 
 // Delicate / irreversible work → routed to opus (modelRouter). A destructive
 // file verb NEAR a file/code noun, OR editing Jarvis's own code. The noun gate
@@ -50,8 +56,9 @@ function detectIntentTag(text) {
   if (ACTIVATE_SKILL_RE.test(text)) { console.log('[intent] -> activate_skill:', text); return 'activate_skill' }
   if (FILE_DELICATE_RE.test(text))  { console.log('[intent] -> file_delicate:', text);  return 'file_delicate' }
   if (COMPLEX_TASK_RE.test(text))   { console.log('[intent] -> complex_task:', text);   return 'complex_task' }
-  if (TOGGLE_GESTURES_RE.test(text)) { console.log('[intent] -> toggle_gestures:', text); return 'toggle_gestures' }
-  if (VOICE_MUTED_RE.test(text))    { console.log('[intent] -> voice_muted:', text);    return 'voice_muted' }
+  if (TOGGLE_GESTURES_RE.test(text))  { console.log('[intent] -> toggle_gestures:', text);  return 'toggle_gestures' }
+  if (SET_VOICE_MODE_RE.test(text))   { console.log('[intent] -> set_voice_mode:', text);   return 'set_voice_mode' }
+  if (VOICE_MUTED_RE.test(text))      { console.log('[intent] -> voice_muted:', text);      return 'voice_muted' }
   return 'chat'
 }
 
@@ -105,8 +112,9 @@ export function classifyIntent(transcript, context) {
   else if (words.length >= 3) score += 0.05
   else if (words.length <= 2 && state !== 'ENGAGED') score -= 0.15
 
-  // Explicit "jarvis" mention always boosts
-  if (norm.includes('jarvis')) score += 0.3
+  // Explicit "jarvis" mention always boosts — including phonetic homophones
+  // the STT mishears (javier, ya ves, jarbis...).
+  if (norm.includes('jarvis') || JARVIS_HOMO_RE.test(norm)) score += 0.3
 
   score = Math.min(Math.max(score, 0), 1.0)
 
