@@ -1,0 +1,7 @@
+/target
+# Local agent config carries the per-agent token — never commit.
+agent.toml
+agent-tokens.json
+*-audit.log
+# Hub runtime cache of agent MACs (written on handshake, for Wake-on-LAN).
+agent-macs.json

@@ -1,0 +1,26 @@
+# Jarvis distributed agents — Cargo workspace.
+#
+# The "cerebro" (Node backend on the Linux laptop) talks to the `hub` sidecar
+# over a localhost control API; agents (Windows first, Linux trivially after)
+# connect INBOUND to the hub over Tailscale via a persistent WebSocket. The
+# `protocol` crate is the single shared source of truth so hub and agent can
+# never drift — versioned from day 1.
+[workspace]
+resolver = "2"
+members = ["protocol", "hub", "agent"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "0.8"
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "process", "signal"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

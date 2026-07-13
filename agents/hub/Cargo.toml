@@ -1,0 +1,23 @@
+[package]
+name = "jarvis-agent-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "jarvis-agent-hub"
+path = "src/main.rs"
+
+[dependencies]
+protocol = { package = "jarvis-agent-protocol", path = "../protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+axum = { version = "0.7", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+uuid = { version = "1", features = ["v4"] }

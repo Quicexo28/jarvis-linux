@@ -1,0 +1,21 @@
+[Unit]
+Description=Jarvis Agent Hub (Rust sidecar — WS for remote agents + control API)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-linux/agents
+ExecStart=%h/jarvis-linux/agents/target/release/jarvis-agent-hub
+Restart=on-failure
+RestartSec=3
+# Per-agent tokens (JSON {agent_name: token}); revoke by removing an entry.
+Environment=JARVIS_AGENT_TOKENS_FILE=%h/jarvis-linux/backend/data/agent-tokens.json
+# Agents connect here over Tailscale; control API is localhost-only for Node.
+Environment=HUB_WS_ADDR=0.0.0.0:8794
+Environment=HUB_CONTROL_ADDR=127.0.0.1:8795
+# Proactive events land in the Node backend, which forwards to Telegram.
+Environment=HUB_NOTIFY_URL=http://127.0.0.1:8788/api/agents/event
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,28 @@
+# Jarvis agent config. Copy to agent.toml next to the binary (or point
+# JARVIS_AGENT_CONFIG at it). The token must match the hub's tokens file entry
+# for this agent_name.
+
+hub_url    = "ws://laptop-tailscale-name:8791"
+agent_name = "main"
+token      = "REEMPLAZAR_CON_TOKEN_POR_AGENTE"
+
+# Local audit trail — every op recorded with timestamp + allow/deny.
+audit_log  = "jarvis-agent-audit.log"
+
+# The agent's own veto. Even if the hub asks, an op runs only if enabled here.
+# exec + write_file are OFF by default — turn on deliberately.
+[allowlist]
+search     = true
+exec       = false
+read_file  = true
+write_file = false
+sys_info   = true
+processes  = true
+
+# Proactive watchers — the agent pushes alerts to the brain (→ Telegram) on its
+# own. Disk fullness, watched-process exit, and a one-shot "booted" notice.
+[watchers]
+enabled      = true
+disk_percent = 90          # alert when any filesystem is this full or more
+poll_secs    = 300         # sampling interval (min 10)
+processes    = []          # e.g. ["obs64.exe", "backup.exe"] — alert if one exits
