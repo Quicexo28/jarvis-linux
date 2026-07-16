@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { spawn } from 'child_process'
 
 const CLOUD_ROOT = process.env.CLOUD_ROOT
   ?? path.join(os.homedir(), 'SyncthingCloud', 'TelegramCloud', 'Santi')
@@ -101,10 +102,31 @@ export async function notifySanti(text, filePath) {
   return sendTelegram(process.env.TELEGRAM_BOT_TOKEN, SANTI_CHAT_ID, text, filePath)
 }
 
+// Surface a message on the local desktop (mako/notify-send) when Telegram is
+// not configured. The backend runs as a systemd --user service inside the
+// graphical session, so it inherits DBUS_SESSION_BUS_ADDRESS/WAYLAND_DISPLAY
+// and can reach the notification daemon.
+function notifyDesktop(text) {
+  try {
+    const p = spawn('notify-send', ['-a', 'Jarvis', 'Jarvis', text], {
+      stdio: 'ignore',
+      detached: true,
+    })
+    p.on('error', () => {})
+    p.unref()
+  } catch {}
+  return false
+}
+
 export async function notifyJarvis(text, filePath) {
   const env = process.env
   const token = env.TELEGRAM_BOT_TOKEN_JARVIS || env.TELEGRAM_BOT_TOKEN
   const chatId = env.TELEGRAM_CHAT_ID_JARVIS || SANTI_CHAT_ID
+  if (!token) {
+    // No Telegram bot configured — surface proactive agent events locally so
+    // the cerebro laptop still sees them. Telegram is an optional upgrade.
+    return notifyDesktop(text)
+  }
   if (!env.TELEGRAM_BOT_TOKEN_JARVIS) {
     console.warn('[telegram] TELEGRAM_BOT_TOKEN_JARVIS not set — falling back to cloud bot')
   }
