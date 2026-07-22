@@ -14,9 +14,16 @@ import {
   DISCRETE_MIN_HOLD_MS, DISCRETE_COOLDOWN_MS,
   POINTER_EXPAND,
   EURO_POINTER, EURO_WRIST, EURO_APERTURE, EURO_ANGLE, EURO_ROT,
+  ROT_INCREMENT_DEADZONE,
 } from './config'
 
 type V3 = { x: number; y: number; z: number }
+
+/** Zona muerta soft: |v|≤dz → 0; fuera resta el umbral (sin escalón). */
+function softDeadzone(v: number, dz: number): number {
+  const a = Math.abs(v)
+  return a <= dz ? 0 : v - Math.sign(v) * dz
+}
 
 interface PalmBasis { u: V3; v: V3; w: V3 }
 
@@ -53,10 +60,22 @@ function relativeYawPitch(b: PalmBasis, b0: PalmBasis): { yaw: number; pitch: nu
 }
 
 /**
- * Grab (puño izquierdo): deltas de arrastre + roll de palma, relativos al
- * punto de enganche. Muñeca filtrada con One-Euro; deltas normalizados por el
- * tamaño de palma en imagen (misma sensibilidad cerca o lejos de la cámara).
- * Convención de pantalla: deltaX>0 = mano a la derecha, deltaY>0 = mano abajo.
+ * Grab (puño izquierdo): deltas de arrastre (traslación, anclados al enganche) +
+ * rotación de palma (roll/yaw/pitch, INCREMENTAL frame-a-frame). Muñeca filtrada
+ * con One-Euro; deltas normalizados por el tamaño de palma en imagen (misma
+ * sensibilidad cerca o lejos de la cámara). Convención de pantalla: deltaX>0 =
+ * mano a la derecha, deltaY>0 = mano abajo.
+ *
+ * RATCHET / re-agarre: rotYaw/rotPitch/deltaAngle ACUMULAN el giro desde el
+ * enganche sumando el delta entre frames CONSECUTIVOS (no un ángulo absoluto
+ * contra un onset fijo). Consecuencias, todas pedidas por el usuario:
+ *  - Re-agarrar (active false→true) resetea el acumulado a 0 → la posición
+ *    actual pasa a ser el "cero" (el consumer ancla la figura ahí y suma desde
+ *    0). Girar-soltar-reagarrar-seguir compone sin drift ni saltos.
+ *  - Un dropout breve (mano perdida en la gracia) ROMPE la cadena de deltas
+ *    (prevBasis/prevRawAngle→null): al reaparecer NO suma el salto de reposición
+ *    (antes el modelo anclado saltaba: rotYaw = relative(nuevaMano, onsetViejo)).
+ *    El acumulado queda CONGELADO durante el hueco y continúa suave.
  */
 export class GrabTracker {
   active = false
@@ -67,16 +86,19 @@ export class GrabTracker {
   rotPitch = 0
 
   private onset: { x: number; y: number } | null = null
-  private onsetAngleAccum = 0
-  private onsetBasis: PalmBasis | null = null
   private scale = 1
   private fx = new OneEuro(EURO_WRIST)
   private fy = new OneEuro(EURO_WRIST)
   private fa = new OneEuro(EURO_ANGLE)
   private fYaw = new OneEuro(EURO_ROT)
   private fPitch = new OneEuro(EURO_ROT)
-  // Ángulo desenvuelto (acumulado): filtrar el atan2 crudo saltaría en ±π.
-  private angleAccum = 0
+  // Acumuladores crudos (pre-filtro) del giro desde el enganche.
+  private rollAccum = 0
+  private yawAccum = 0
+  private pitchAccum = 0
+  // Referencias del frame ANTERIOR para el delta incremental. null = cadena rota
+  // (enganche o reaparición tras dropout) → el próximo frame no suma, solo re-ancla.
+  private prevBasis: PalmBasis | null = null
   private prevRawAngle: number | null = null
   private lastSeenT = -Infinity
 
@@ -86,27 +108,23 @@ export class GrabTracker {
     if (posed && feat) {
       const x = this.fx.filter(feat.wristImage.x, t)
       const y = this.fy.filter(feat.wristImage.y, t)
-
-      if (this.prevRawAngle === null) {
-        this.angleAccum = feat.palmAngle
-      } else {
-        this.angleAccum += wrapAngle(feat.palmAngle - this.prevRawAngle)
-      }
-      this.prevRawAngle = feat.palmAngle
-      const ang = this.fa.filter(this.angleAccum, t)
-
       const basis = palmBasis(feat.palmAxisWorld, feat.palmNormalWorld)
 
       if (!this.active) {
+        // Enganche (o re-enganche = ratchet): la mano actual es el cero.
         this.active = true
         this.onset = { x, y }
-        this.onsetAngleAccum = ang
-        this.onsetBasis = basis
         this.deltaX = 0
         this.deltaY = 0
+        this.rollAccum = 0
+        this.yawAccum = 0
+        this.pitchAccum = 0
         this.deltaAngle = 0
         this.rotYaw = 0
         this.rotPitch = 0
+        this.prevRawAngle = feat.palmAngle
+        this.prevBasis = basis
+        this.fa.reset()
         this.fYaw.reset()
         this.fPitch.reset()
         this.scale = clamp(GRAB_PALM_REF / Math.max(feat.palmImageSize, 1e-3), GRAB_SCALE_MIN, GRAB_SCALE_MAX)
@@ -117,24 +135,36 @@ export class GrabTracker {
         // Imagen sin espejar: mano físicamente a la derecha → x de imagen BAJA.
         this.deltaX = (this.onset.x - x) * this.scale
         this.deltaY = (y - this.onset.y) * this.scale
-        // El roll percibido por el usuario es el opuesto al de la imagen (espejo).
-        this.deltaAngle = -wrapAngle(ang - this.onsetAngleAccum)
-        // Frame degenerado (basis null): congela yaw/pitch, el resto sigue.
-        if (basis && this.onsetBasis) {
-          const { yaw, pitch } = relativeYawPitch(basis, this.onsetBasis)
-          // Signos validados A MANO (2026-07-05): el usuario reportó la primera
-          // convención como invertida en ambos ejes. Cambiar solo con re-prueba.
-          this.rotYaw = this.fYaw.filter(yaw, t)
-          this.rotPitch = this.fPitch.filter(pitch, t)
-        } else if (basis && !this.onsetBasis) {
-          this.onsetBasis = basis
+        // Roll incremental. El roll percibido por el usuario es el opuesto al de
+        // la imagen (espejo). Zona muerta anti-temblor sobre el incremento.
+        // prevRawAngle null (post-dropout) → solo re-ancla.
+        if (this.prevRawAngle !== null) {
+          this.rollAccum += softDeadzone(-wrapAngle(feat.palmAngle - this.prevRawAngle), ROT_INCREMENT_DEADZONE)
         }
+        this.prevRawAngle = feat.palmAngle
+        this.deltaAngle = this.fa.filter(this.rollAccum, t)
+        // Yaw/pitch incrementales entre frames consecutivos, con zona muerta anti-
+        // temblor. Frame degenerado o post-dropout (prevBasis null) → no suma;
+        // solo actualiza la referencia.
+        if (basis && this.prevBasis) {
+          const { yaw, pitch } = relativeYawPitch(basis, this.prevBasis)
+          this.yawAccum += softDeadzone(yaw, ROT_INCREMENT_DEADZONE)
+          this.pitchAccum += softDeadzone(pitch, ROT_INCREMENT_DEADZONE)
+          this.rotYaw = this.fYaw.filter(this.yawAccum, t)
+          this.rotPitch = this.fPitch.filter(this.pitchAccum, t)
+        }
+        if (basis) this.prevBasis = basis
       }
       return
     }
 
-    // Mano perdida (feat null) dentro de la gracia: congelar valores, seguir activo.
-    if (this.active && !feat && t - this.lastSeenT <= LOST_GRACE_MS) return
+    // Mano perdida (feat null) dentro de la gracia: congelar valores y ROMPER la
+    // cadena de deltas (la reposición durante el hueco NO debe sumarse al giro).
+    if (this.active && !feat && t - this.lastSeenT <= LOST_GRACE_MS) {
+      this.prevBasis = null
+      this.prevRawAngle = null
+      return
+    }
 
     this.release()
   }
@@ -147,9 +177,11 @@ export class GrabTracker {
     this.rotYaw = 0
     this.rotPitch = 0
     this.onset = null
-    this.onsetBasis = null
+    this.prevBasis = null
     this.prevRawAngle = null
-    this.angleAccum = 0
+    this.rollAccum = 0
+    this.yawAccum = 0
+    this.pitchAccum = 0
     this.fx.reset()
     this.fy.reset()
     this.fa.reset()

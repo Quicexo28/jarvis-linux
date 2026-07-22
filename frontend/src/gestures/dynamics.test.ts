@@ -105,6 +105,30 @@ test('grab: misma orientación de mano → misma rotación (anclado, ida y vuelt
   expect(Math.abs(grab.rotYaw - first)).toBeLessThan(0.03)
 })
 
+test('grab: dropout no salta el giro (ratchet); re-agarre resetea el cero', () => {
+  let t = 0
+  const s = Math.sin(0.6), c = Math.cos(0.6)
+  const turned = () => feat({ palmNormalWorld: { x: s, y: 0, z: -c } })
+  // Engancha y gira a una posición asentada.
+  for (let i = 0; i < 3; i++) { grab.update(true, feat(), t); t += DT }
+  for (let i = 0; i < 15; i++) { grab.update(true, turned(), t); t += DT }
+  const settled = grab.rotYaw
+  expect(settled).toBeLessThan(-0.3)
+  // Dropout breve (mano perdida) dentro de la gracia → giro CONGELADO, sigue activo.
+  grab.update(true, null, t + 30); t += 30
+  expect(grab.active).toBe(true)
+  // Reaparece en orientación MUY distinta (mano repuesta): NO debe sumar el hueco
+  // (el modelo anclado saltaba a relative(nuevaMano, onsetViejo)).
+  grab.update(true, feat({ palmNormalWorld: { x: -s, y: 0, z: -c } }), t); t += DT
+  expect(Math.abs(grab.rotYaw - settled)).toBeLessThan(0.05)
+  // Soltar la pose y re-enganchar: la nueva posición pasa a ser el cero.
+  grab.update(false, feat(), t); t += DT
+  expect(grab.active).toBe(false)
+  for (let i = 0; i < 3; i++) { grab.update(true, feat(), t); t += DT }
+  expect(grab.active).toBe(true)
+  expect(Math.abs(grab.rotYaw)).toBeLessThan(0.05)
+})
+
 test('grab: soltar la pose limpia los deltas', () => {
   let t = 0
   for (let i = 0; i < 5; i++) { grab.update(true, feat({ wristImage: { x: 0.4, y: 0.5 } }), t); t += DT }

@@ -36,15 +36,23 @@ import {
 
 const mathImplicit = create(all)
 
-// Rotación por ORIENTACIÓN del puño, 1:1: la cantidad de giro de la figura
-// corresponde al giro real de la mano ("se asemeja"). Para más de ±60-80°
-// (límite de muñeca): soltar, re-agarrar y seguir (ratchet).
+// Rotación por ORIENTACIÓN del puño, 1:1: el giro de la figura corresponde al
+// giro real de la mano ("como si la cogieras y la giraras con la mano"). Para
+// más de ±60-80° (límite de muñeca): soltar, re-agarrar y seguir (ratchet).
 const ROT_GAIN = 1.0
-// EMA smoothing factor for rotation deltas. Lower = smoother but more lag.
-// 0.18 ≈ 93ms time-constant at 60fps — removes MediaPipe landmark jitter.
-// 0.18 sumaba ~90 ms de lag encima del One-Euro del engine (doble suavizado);
-// 0.4 deja ~25 ms — la rotación sigue la mano sin sentirse "tarde".
-const EMA_ROT = 0.4
+// Sentido de giro por eje. Pedido del usuario: INVERTIR el giro — la figura
+// giraba al revés de la mano (yaw/pitch salen del frame world con y-hacia-abajo
+// de imagen y se aplican en Three con y-hacia-arriba → sentido opuesto; el roll
+// ya venía negado por espejo). Cada eje es un flip de una línea si alguno queda
+// al revés al probar con la mano.
+const ROT_SIGN_YAW = -1   // girar la palma izq/der
+const ROT_SIGN_PITCH = 1  // inclinar los nudillos arriba/abajo (invertido a petición)
+const ROT_SIGN_ROLL = -1  // roll de la muñeca (como un volante)
+// EMA de las deltas de rotación. Más alto = seguimiento más CEÑIDO al ángulo de
+// la mano (menos lag). El engine ya filtra yaw/pitch con One-Euro, así que este
+// segundo paso en serie sumaba lag; 0.8 (τ ~37 ms @33fps) lo minimiza sin
+// reintroducir jitter perceptible (0.4 dejaba ~90 ms, 0.6 ~50 ms).
+const EMA_ROT = 0.8
 
 /** Distinct colors auto-assigned to objects without an explicit color.
  *  HUD family — matches the app's dominant #00f0ff cyan aesthetic. */
@@ -95,11 +103,11 @@ function GestureRig({ enabled, children }: { enabled: boolean; children: ReactNo
     // Rotación por ORIENTACIÓN del puño (no por desplazamiento): la figura gira
     // como si la tuvieras agarrada. Base capturada al enganchar; al soltar se
     // queda (sin snap-back).
-    //   Z (roll)  ← roll de la palma (deltaAngle), 20° de mano → 20° de figura
-    //   Y (yaw)   ← girar la palma izq/der (rotYaw · ganancia)
-    //   X (pitch) ← inclinar los nudillos (rotPitch · ganancia)
-    // La muñeca da ±40-80° cómodos; ROT_GAIN amplifica para vueltas completas
-    // (ratchet: soltar, re-agarrar y seguir girando también funciona).
+    //   Z (roll)  ← roll de la palma (deltaAngle), 1:1 · ROT_SIGN_ROLL
+    //   Y (yaw)   ← girar la palma izq/der (rotYaw), 1:1 · ROT_SIGN_YAW
+    //   X (pitch) ← inclinar los nudillos (rotPitch), 1:1 · ROT_SIGN_PITCH
+    // 1:1 real (ROT_GAIN=1.0): 20° de mano = 20° de figura. La muñeca da ±60-80°
+    // cómodos; para vueltas completas, soltar, re-agarrar y seguir (ratchet).
     const grab = gestureOutput.grab
     if (grab.active) {
       if (!grabbing.current) {
@@ -112,9 +120,9 @@ function GestureRig({ enabled, children }: { enabled: boolean; children: ReactNo
       smoothDX.current += (grab.rotYaw - smoothDX.current) * EMA_ROT
       smoothDY.current += (grab.rotPitch - smoothDY.current) * EMA_ROT
       smoothDA.current += (grab.deltaAngle - smoothDA.current) * EMA_ROT
-      g.rotation.z = baseRot.current.z + smoothDA.current
-      g.rotation.y = baseRot.current.y + smoothDX.current * ROT_GAIN
-      g.rotation.x = baseRot.current.x + smoothDY.current * ROT_GAIN
+      g.rotation.z = baseRot.current.z + ROT_SIGN_ROLL * smoothDA.current
+      g.rotation.y = baseRot.current.y + ROT_SIGN_YAW * smoothDX.current * ROT_GAIN
+      g.rotation.x = baseRot.current.x + ROT_SIGN_PITCH * smoothDY.current * ROT_GAIN
     } else {
       grabbing.current = false
     }

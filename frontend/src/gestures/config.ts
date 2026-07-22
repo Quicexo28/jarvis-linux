@@ -74,10 +74,17 @@ export const POINTER_EXPAND = 1.45
 export const EURO_POINTER = { minCutoff: 1.6, beta: 0.06, dCutoff: 1.0 }
 export const EURO_WRIST = { minCutoff: 1.5, beta: 0.9, dCutoff: 1.0 }
 export const EURO_APERTURE = { minCutoff: 1.2, beta: 0.6, dCutoff: 1.0 }
-export const EURO_ANGLE = { minCutoff: 1.2, beta: 0.4, dCutoff: 1.0 }
+// Roll 2D (limpio): beta alto → sigue la muñeca sin lag perceptible al girar.
+export const EURO_ANGLE = { minCutoff: 2.0, beta: 0.8, dCutoff: 1.0 }
 /** Yaw/pitch del puño salen del depth INFERIDO por el modelo (más ruidosos que
- * el roll 2D) — filtro más agresivo en reposo, catch-up moderado. */
-export const EURO_ROT = { minCutoff: 1.0, beta: 0.4, dCutoff: 1.0 }
+ * el roll 2D) — minCutoff moderado controla el jitter en reposo; beta alto
+ * recorta el lag en movimiento (el usuario notaba retardo gesto→pantalla). */
+export const EURO_ROT = { minCutoff: 1.5, beta: 0.8, dCutoff: 1.0 }
+/** Zona muerta (rad) sobre el INCREMENTO de giro por-frame en el GrabTracker:
+ * con la rotación acumulativa, el ruido de landmarks (~0.003-0.006 rad/frame con
+ * la mano quieta) se integraría y la figura "temblaría". Soft (resta el umbral)
+ * → mata el temblor en reposo sin escalón y sin lag; el movimiento real lo cruza. */
+export const ROT_INCREMENT_DEADZONE = 0.006
 
 // --- Inferencia (main thread — ver gestures/landmarker.ts) ---
 /** Piso del intervalo entre inferencias — 30 ms = cadencia de la cámara

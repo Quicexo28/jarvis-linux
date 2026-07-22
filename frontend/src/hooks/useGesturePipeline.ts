@@ -187,6 +187,14 @@ export function useGesturePipeline(): void {
       if (!alive) { closeCamera(); return }
       console.log(`[gestures] cámara activa ${width}x${height}`)
 
+      // Preferir GPU: XNNPACK/CPU hace la inferencia SÍNCRONA en el main thread
+      // (~90 ms/frame), lo que hambrea el rAF de R3F y CONGELA el visor 3D
+      // (Model3DViewer useFrame) mientras los gestos están activos. El delegate
+      // GPU descarga la inferencia a shaders GL → main thread libre → THREE fluido
+      // y gestos a ~13-15 fps (verificado 2026-07-05). El cuelgue de GPU que
+      // motivó forzar CPU era un WebKitGTK degradado pre-reboot; con WebGL sano
+      // GPU asienta, y el withTimeout de landmarker.ts (GPU 4s → CPU 12s → error
+      // visible) acota el downside al comportamiento CPU actual si vuelve a colgar.
       const handle = await createHandLandmarker(2)
       if (!alive) { handle.landmarker.close(); return }
       landmarker = handle.landmarker
