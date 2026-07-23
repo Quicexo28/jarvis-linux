@@ -12,6 +12,10 @@ export interface SttTranscript {
   text: string
   isFinal: boolean
   speakerConfidence: number
+  // RAW cosine (pre-calibration). speakerConfidence is floored to 0.80 on any
+  // gate-surviving match; the backend authorizes command execution on this raw
+  // value so a marginal match can't read as full-confidence owner.
+  speakerConfidenceRaw?: number
   speakerName?: string
   // Doubt signals from Whisper (final transcripts only). Low values mean the
   // model was unsure — the backend uses them to gate an LLM correction pass.
@@ -20,6 +24,7 @@ export interface SttTranscript {
 }
 
 export interface SttFinalMeta {
+  speakerConfidenceRaw?: number
   avgLogprob?: number
   confidence?: number
 }

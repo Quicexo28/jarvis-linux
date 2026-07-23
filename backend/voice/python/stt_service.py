@@ -73,15 +73,18 @@ STT_HOTWORDS = os.environ.get(
 # Override with STT_INITIAL_PROMPT; set empty to disable.
 STT_INITIAL_PROMPT = os.environ.get(
     "STT_INITIAL_PROMPT",
-    # NO narrative self-description ("Jarvis, el asistente personal de Santiago"):
-    # Whisper regurgitates that sentence verbatim on silence/noise (the decoder was
-    # primed with those tokens, so the echo passes the no_speech/logprob gates as
-    # "confident" text). A neutral register hint + command examples still bias
-    # orthography/style without giving the model a self-describing sentence to echo.
-    # The _is_prompt_echo() guard below catches any residual paraphrase.
-    "Transcripción en español de Colombia. "
-    "Abre el plano, pon un temporizador, navega a la casa, "
-    "sube el volumen, muéstrame el sistema.",
+    # NEVER put example COMMANDS (imperatives) here. Whisper regurgitates the
+    # initial_prompt VERBATIM on silence/noise — the decoder is primed with these
+    # tokens, so the echo passes the no_speech/logprob gates as "confident" text.
+    # With command examples ("Abre el plano, pon un temporizador, navega a la
+    # casa…") the echo came back as a VALID command at high confidence: with nobody
+    # speaking the pipeline was effectively INJECTING its own example commands. That
+    # echo can't be blocklisted either — it's indistinguishable from the user really
+    # saying "abre el plano". The only correct fix is to not feed the model anything
+    # actionable to echo: a neutral, NON-imperative register hint biases Colombian-
+    # Spanish orthography/style with no sentence to regurgitate. Domain vocabulary is
+    # primed via STT_HOTWORDS (token-level bias, not a context sentence to echo).
+    "Transcripción en español de Colombia.",
 )
 
 
@@ -109,11 +112,119 @@ _ECHO_ANCHORS = tuple(
 )
 
 
+# Belt-and-suspenders: treat every clause of the ACTIVE initial_prompt as an echo
+# anchor too. Whatever primes the decoder can be regurgitated verbatim on silence,
+# so deriving anchors from the prompt itself means the guard auto-covers any future
+# prompt edit — a dangerous example can never come back as an executable command.
+# Only clauses with >=3 words: a real utterance won't collide with a 3+ word prompt
+# fragment, whereas a 1-2 word fragment ("plano") could match real speech.
+def _prompt_clauses(prompt: str):
+    for clause in re.split(r"[.,;:]", _strip_accents(prompt or "").lower()):
+        words = clause.split()
+        if len(words) >= 3:
+            yield " ".join(words)
+
+
+_ECHO_ANCHORS = tuple(dict.fromkeys((*_ECHO_ANCHORS, *_prompt_clauses(STT_INITIAL_PROMPT))))
+
+
 def _is_prompt_echo(text: str) -> bool:
     if not text:
         return False
     norm = _strip_accents(text).lower()
     return any(a in norm for a in _ECHO_ANCHORS)
+
+
+# Known Whisper training-data hallucinations. Whisper was trained on massive
+# YouTube-caption corpora, so on silence / room noise / TTS echo that slips past
+# VAD it emits FLUENT phantom captions ("Gracias por ver el video", "¡Suscríbete!",
+# "Subtítulos por la comunidad de Amara.org") plus generic sign-offs ("adiós").
+# These pass every existing gate — they are confident (high avg_logprob, low
+# no_speech_prob) because they are real, fluent phrases; the RMS/logprob gates only
+# catch true silence, and _is_prompt_echo only catches paraphrases of OUR prompt.
+# Fix = a whole-transcript blocklist: drop only when the ENTIRE utterance (accents
+# stripped, punctuation dropped, whitespace collapsed) IS one of these phrases, or
+# is that phrase looped back-to-back. Whole-transcript match keeps real commands
+# safe — "adiós Jarvis, apaga las luces" is not a bare "adios" so it survives.
+# Extend with STT_HALLUCINATION_PHRASES (comma-separated, accents optional).
+def _norm_phrase(text: str) -> str:
+    s = _strip_accents(text or "").lower()
+    s = re.sub(r"[^\w\s]", " ", s)     # drop punctuation (video. == video)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+_HALLUCINATION_PHRASES = tuple(
+    dict.fromkeys(  # dedupe, keep order
+        _norm_phrase(p)
+        for p in (
+            "gracias por ver el video",
+            "gracias por ver",
+            "gracias por ver el vídeo",
+            "gracias por su atención",
+            "gracias por vernos",
+            "muchas gracias por ver el video",
+            "gracias",
+            "muchas gracias",
+            "adiós",
+            "hasta la próxima",
+            "hasta luego",
+            "nos vemos",
+            "nos vemos en el próximo video",
+            "suscríbete",
+            "suscríbete al canal",
+            "no olvides suscribirte",
+            "dale like y suscríbete",
+            "subtítulos realizados por la comunidad de amara.org",
+            "subtítulos por la comunidad de amara.org",
+            "subtitulado por la comunidad de amara.org",
+            "más información en",
+            *os.environ.get("STT_HALLUCINATION_PHRASES", "").split(","),
+        )
+        if _norm_phrase(p)
+    )
+)
+
+
+def _only_repeats_of(norm: str, phrase: str) -> bool:
+    """True if `norm` is exactly `phrase`, or `phrase` looped back-to-back
+    (Whisper loops the caption: 'gracias por ver el video gracias por ver...')."""
+    if not phrase:
+        return False
+    words, pw = norm.split(), phrase.split()
+    if not pw or len(words) % len(pw) != 0:
+        return False
+    return all(words[i:i + len(pw)] == pw for i in range(0, len(words), len(pw)))
+
+
+def _is_degenerate(norm: str) -> bool:
+    """Whisper repetition-loop failure: a single token spammed ('no no no no')
+    or a 2-token loop over a long span. Real commands don't degenerate this way."""
+    words = norm.split()
+    if len(words) < 3:
+        return False
+    unique = set(words)
+    if len(unique) == 1:
+        return True                    # "no no no no"
+    return len(words) >= 6 and len(unique) <= 2
+
+
+def _hallucination_reason(text: str):
+    """Return WHY a transcript is a hallucination (for the log), or None if it is
+    real speech. Covers prompt-echo, known caption hallucinations, and repetition
+    loops. Whole-utterance match only — never drops a phrase inside a real command."""
+    if not text or not text.strip():
+        return None
+    if _is_prompt_echo(text):
+        return "prompt-echo"
+    norm = _norm_phrase(text)
+    if not norm:
+        return None
+    if _is_degenerate(norm):
+        return "degenerate-repetition"
+    if any(_only_repeats_of(norm, p) for p in _HALLUCINATION_PHRASES):
+        return "known-hallucination"
+    return None
 
 # Noise suppression mode (STT_DENOISE_MODE):
 #   highpass  (default) — gentle 90 Hz high-pass only. Kills rumble/HVAC without
@@ -411,12 +522,60 @@ def _resolve_learn_threshold():
         )
 
 
+def _load_owner_voiceprint_with_retry(si) -> None:
+    """Load the encrypted owner voiceprint, retrying in the background if the
+    machine key isn't available yet.
+
+    On a `--user` systemd boot the Secret Service (gnome-keyring) is frequently
+    not unlocked when this service starts, so the first decrypt fails with
+    "Machine key not found" and the owner would run with ONLY the on-disk WAV
+    samples — a weaker profile that lets other speakers in the room and short
+    stray phrases slip through the gate as if they were the owner. Rather than
+    lose owner discrimination until the next manual restart, keep retrying until
+    the keyring answers, then inject the embeddings live (the SpeakerIdentifier
+    object is already the live one, so a later inject is picked up)."""
+    if _load_owner_voiceprint(si):
+        return
+    if not OWNER_VOICEPRINT_ENC.exists():
+        return  # nothing to retry — no encrypted voiceprint on disk
+
+    def _retry():
+        # ~4 min of retries at 5 s: the keyring/D-Bus session almost always
+        # comes up within a minute of login; give generous margin either way.
+        for attempt in range(1, 49):
+            time.sleep(5)
+            try:
+                if _load_owner_voiceprint(si):
+                    print(
+                        f"[stt] owner voiceprint loaded on retry #{attempt} "
+                        "(keyring became available)",
+                        flush=True,
+                    )
+                    _resolve_learn_threshold()
+                    return
+            except Exception:
+                pass
+        print(
+            "[stt] owner voiceprint still unavailable after retries — "
+            "running with WAV samples only (owner discrimination degraded)",
+            flush=True,
+        )
+
+    threading.Thread(target=_retry, name="voiceprint-retry", daemon=True).start()
+    print(
+        "[stt] owner voiceprint not available yet (keyring not ready?) — "
+        "retrying in background",
+        flush=True,
+    )
+
+
 def _init_speaker_id():
     global speaker_id
     from speaker_id import SpeakerIdentifier
     si = SpeakerIdentifier(SPEAKER_SAMPLES_DIR)
-    # Always inject the encrypted owner voiceprint (merges with WAV samples if any).
-    _load_owner_voiceprint(si)
+    # Always inject the encrypted owner voiceprint (merges with WAV samples if
+    # any). Retries in the background if the machine key isn't ready at boot.
+    _load_owner_voiceprint_with_retry(si)
     # An empty speaker set is valid (e.g. right after a from-scratch re-enroll):
     # identification just returns None until samples are recorded, while the
     # management endpoints stay alive so the UI can enroll without a restart.
@@ -641,10 +800,12 @@ async def transcribe(
             })
             full_text += seg.text
 
-        # Prompt-echo hallucination (see _is_prompt_echo): drop entirely so a
-        # silence/noise upload returns empty instead of the primed prompt text.
-        if _is_prompt_echo(full_text):
-            print(f"[stt] dropped prompt-echo hallucination: '{full_text.strip()}'", flush=True)
+        # Hallucination guard (see _hallucination_reason): prompt-echo, known
+        # caption phrases, or a repetition loop — drop entirely so a
+        # silence/noise upload returns empty instead of phantom text.
+        reason = _hallucination_reason(full_text)
+        if reason:
+            print(f"[stt] dropped {reason}: '{full_text.strip()}'", flush=True)
             full_text = ""
             segments = []
 
@@ -652,6 +813,7 @@ async def transcribe(
         # continuity) as the streaming path, so short "Jarvis" uploads match.
         spk_name = None
         spk_confidence = 0.0
+        spk_confidence_raw = 0.0
         if speaker_id is not None:
             try:
                 import soundfile as _sf
@@ -669,6 +831,9 @@ async def transcribe(
                     pass
             # Same calibrated emission as the streaming path (see
             # VERIFIED_CONF_FLOOR): gate-surviving matches report ≥ the floor.
+            # Keep the RAW cosine too — the backend authorizes command execution
+            # on raw, not on the floored value (see the WS /stream comment).
+            spk_confidence_raw = spk_confidence
             spk_confidence = _calibrate_conf(spk_name, spk_confidence)
 
         return {
@@ -678,6 +843,7 @@ async def transcribe(
             "segments": segments,
             "speaker_name": spk_name,
             "speaker_confidence": spk_confidence,
+            "speaker_confidence_raw": spk_confidence_raw,
         }
     finally:
         os.unlink(tmp_path)
@@ -978,6 +1144,12 @@ async def stream_stt(ws: WebSocket):
                     "isFinal": True,
                     "speakerName": spk_name,
                     "speakerConfidence": spk_conf,
+                    # RAW cosine (pre-calibration). The backend authorizes command
+                    # EXECUTION on this, not on speakerConfidence: the latter is
+                    # floored to VERIFIED_CONF_FLOOR (0.80) on any gate-surviving
+                    # match, which masks a marginal match (e.g. a hallucination on
+                    # noise that grazed the speaker gate) as full-confidence owner.
+                    "speakerConfidenceRaw": result.get("spk_conf_raw", spk_conf),
                     "avgLogprob": avg_logprob,
                     "confidence": word_conf,
                 })
@@ -1308,6 +1480,13 @@ def _transcribe_segment(audio: np.ndarray, spk_context: Optional[np.ndarray] = N
         no_speech_threshold=NO_SPEECH_THRESHOLD,
         compression_ratio_threshold=2.4,
         log_prob_threshold=AVG_LOGPROB_MIN,
+        # faster-whisper's own hallucination filter: with word timestamps it
+        # detects words emitted across a silent gap longer than this (seconds)
+        # and drops them. Complements the whole-transcript blocklist that runs
+        # over the decoded text below. STT_HALLUC_SILENCE=0 disables.
+        hallucination_silence_threshold=(
+            float(os.environ.get("STT_HALLUC_SILENCE", "2.0")) or None
+        ),
         vad_filter=True,
         # Bias decoding toward Jarvis-specific vocabulary so names/commands
         # (Jarvis, Brave, etc.) aren't castellanized or misheard.
@@ -1331,11 +1510,13 @@ def _transcribe_segment(audio: np.ndarray, spk_context: Optional[np.ndarray] = N
                 word_probs.append(float(p))
     text = " ".join(t for t in kept if t)
 
-    # Prompt-echo hallucination: drop it so it never reaches the client. Whisper
-    # emits it with high confidence during silence/noise; the logprob gates can't
-    # catch it (it was primed), but the narrative anchors give it away.
-    if _is_prompt_echo(text):
-        print(f"[stt] dropped prompt-echo hallucination: '{text}'", flush=True)
+    # Hallucination guard: prompt-echo, known YouTube-caption phrases, or a
+    # repetition loop. Whisper emits these with high confidence during
+    # silence/noise/TTS-echo; the logprob/no_speech gates can't catch a fluent
+    # phantom phrase, so a whole-transcript blocklist drops it before the client.
+    reason = _hallucination_reason(text)
+    if reason:
+        print(f"[stt] dropped {reason}: '{text}'", flush=True)
         text = ""
         kept = []
         logprobs = []

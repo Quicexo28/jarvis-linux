@@ -308,6 +308,16 @@ function makeSentencer(onSentence) {
 const OWNER_SPEAKER = process.env.JARVIS_OWNER_SPEAKER ?? null
 const OWNER_CONFIDENCE_THRESHOLD = 0.65
 const KNOWN_CONFIDENCE_THRESHOLD = 0.60
+// RAW-score floor to AUTHORIZE command execution. speakerConfidence is calibrated
+// (floored to 0.80 on any gate-surviving match), so the OWNER_CONFIDENCE_THRESHOLD
+// above is effectively always cleared once the STT set a name — authorization then
+// reduces to "name === owner", which a Whisper hallucination on noise that grazed
+// the Python speaker gate can satisfy. The RAW cosine is the real signal: an owner
+// match whose raw falls below this is downgraded to LOW_CONF ("¿puede repetir?"),
+// never executed. Encoder-scaled (ecapa default_threshold 0.55); conservative
+// default so real (incl. short/far) owner speech still passes. Raise toward
+// 0.55–0.60 via JARVIS_OWNER_RAW_MIN as you observe your raw scores in the logs.
+const OWNER_RAW_MIN = Number(process.env.JARVIS_OWNER_RAW_MIN ?? 0.5)
 
 const UNKNOWN_OPENERS = [
   'Usuario no reconocido. Sistema limitado activado.',
@@ -383,7 +393,7 @@ function preActionAck(intentTag, text) {
   return pool[Math.floor(Math.random() * pool.length)]
 }
 
-function _resolveSpeakerMode(speakerName, speakerConfidence) {
+function _resolveSpeakerMode(speakerName, speakerConfidence, speakerConfidenceRaw) {
   // If no speaker info provided at all (legacy path / tests), treat as OWNER
   // so existing behavior is unchanged. Real production turns always include
   // speakerName from the STT service.
@@ -398,6 +408,16 @@ function _resolveSpeakerMode(speakerName, speakerConfidence) {
   // Case-insensitive: la UI (SpeakerConfigWindow) puede guardar "Santiago"
   // mientras el perfil enrolado y JARVIS_OWNER_SPEAKER usan "santiago".
   if (OWNER_SPEAKER && speakerName.toLowerCase() === OWNER_SPEAKER.toLowerCase() && speakerConfidence >= OWNER_CONFIDENCE_THRESHOLD) {
+    // RAW-score gate (see OWNER_RAW_MIN): the calibrated speakerConfidence always
+    // clears the check above once the STT set a name, so authorize OWNER only when
+    // the raw cosine shows a genuine match. A marginal/hallucinated match is
+    // downgraded to LOW_CONF (asks to repeat) rather than executing a command that
+    // nobody actually spoke.
+    if (speakerConfidenceRaw < OWNER_RAW_MIN) {
+      console.log(`[speaker] owner match below raw floor (raw=${Number(speakerConfidenceRaw).toFixed(3)} < ${OWNER_RAW_MIN}) → LOW_CONF, not executing`)
+      setSpeakerMode('LOW_CONF', null)
+      return 'LOW_CONF'
+    }
     setSpeakerMode('OWNER', speakerName)
     return 'OWNER'
   }
@@ -440,6 +460,10 @@ async function runSpeechTurn(body, { onSentence: onSentenceRaw = () => {} } = {}
 async function _runSpeechTurnInner(body, onSentence) {
   let text = String(body.text ?? '').trim()
   const speakerConfidence = Number(body.speakerConfidence ?? 0)
+  // RAW cosine for the execution-authorization gate. Falls back to the calibrated
+  // value for callers that don't send it yet (telegram/mobile), preserving their
+  // current behavior; the voice path (localStt) always sends the real raw.
+  const speakerConfidenceRaw = Number(body.speakerConfidenceRaw ?? body.speakerConfidence ?? 0)
   const alwaysOn = Boolean(body.alwaysOn)
 
   if (!text) return { action: 'ignore', reason: 'empty' }
@@ -493,7 +517,7 @@ async function _runSpeechTurnInner(body, onSentence) {
   const speakerName = body.speakerName ?? null
 
   // ── Speaker mode gate ────────────────────────────────────────────────────
-  const currentMode = _resolveSpeakerMode(speakerName, speakerConfidence)
+  const currentMode = _resolveSpeakerMode(speakerName, speakerConfidence, speakerConfidenceRaw)
 
   if (currentMode === 'LOW_CONF') {
     const reply = 'No pude identificar quién habla. ¿Puede repetir, por favor?'
@@ -673,23 +697,41 @@ async function _runSpeechTurnInner(body, onSentence) {
   return { action: 'respond', reply, intentTag, score: classification.score, state }
 }
 
-// The model sometimes SAYS "queda en pantalla" / "ahí tiene los enlaces" without
-// having called show_display (hallucinated compliance — the prompt alone doesn't
-// stop it, especially haiku deep into a long session). When the spoken reply
-// claims something is on screen but NO UI verb (display card, view, 3D, ...)
-// reached the backend during this turn, fire one corrective follow-up into the
-// SAME session (it still has the context) ordering the actual tool call.
-// Fire-and-forget: the card pops a couple of seconds after the voice.
-// Gating on getLastUiActionAt keeps navigation replies ("Sistema en pantalla"
-// after open_view) from triggering it — those turns DID run a UI verb.
+// After a reply, Jarvis must SHOW (not speak) any URL, source or named tool.
+// The prompt orders this ("URLS Y FUENTES" + "HERRAMIENTAS MENCIONADAS"), but
+// haiku often skips it — either CLAIMING something is on screen without calling
+// show_display (hallucinated compliance), or just NAMING a tool/link in voice
+// with no card at all. When the reply trips any of these AND no UI verb (display
+// card, view, 3D, ...) reached the backend this turn, fire ONE corrective turn
+// into the SAME session (it still has the context) ordering the real
+// show_display call. Fire-and-forget: the card pops a couple seconds after the
+// voice. Gating on getLastUiActionAt keeps navigation replies ("Sistema en
+// pantalla" after open_view) from re-triggering — those turns DID run a UI verb.
+// Disable the whole net with JARVIS_ENFORCE_DISPLAY=0.
+const ENFORCE_DISPLAY = process['env']['JARVIS_ENFORCE_DISPLAY'] !== '0'
+
+// (1) Verbal claim that something is already on screen.
 const DISPLAY_CLAIM_RE = /\bpantalla\b|\b(?:ah[íi]\s+(?:tienes?|est[áa]n?)|te\s+dejo|le\s+dejo|te\s+muestro|le\s+muestro)\b[\s\S]{0,60}?\b(?:enlaces?|links?|referencias?|fuentes?|url(?:es)?|f[óo]rmulas?)\b/i
+// (2) A URL or bare domain spoken in the reply — links are NEVER read aloud.
+// Bare domains require a real TLD after a letter-led label, so decimals ("3.14")
+// and abbreviations don't match.
+const URL_IN_REPLY_RE = /\bhttps?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|so|app|ai|co|es|gg|md|sh|xyz|info|tech|cloud|design|page)\b(?:\/\S*)?/i
+// (3) A named tool/app/product/service the "HERRAMIENTAS MENCIONADAS" rule
+// requires a card for. Curated for precision (real product names, word-bounded)
+// so ordinary Spanish words don't false-fire.
+const NAMED_TOOL_RE = /\b(obsidian|notion|firefox|brave|chromium|chrome|spotify|telegram|whatsapp|discord|kitty|hyprland|vs\s?code|visual studio code|github|gitlab|figma|canva|photoshop|blender|davinci resolve|excel|powerpoint|google\s+(?:docs|drive|sheets|calendar|maps|keep)|gmail|outlook|slack|zoom|trello|todoist|anki|zotero|wolfram|perplexity|chatgpt|openai|gemini|copilot|tailscale|react|next\.?js|svelte|vue|tailwind|ffmpeg)\b/i
 
 function enforceDisplayClaim(reply, model, sinceTs) {
-  if (!reply || !DISPLAY_CLAIM_RE.test(reply)) return
+  if (!ENFORCE_DISPLAY || !reply) return
+  const claim = DISPLAY_CLAIM_RE.test(reply)
+  const url = URL_IN_REPLY_RE.test(reply)
+  const tool = !claim && !url && NAMED_TOOL_RE.test(reply)
+  if (!claim && !url && !tool) return
   if (getLastUiActionAt() >= sinceTs || getLastDisplayShowAt() >= sinceTs) return
-  console.warn('[display] claim without UI action — firing corrective turn')
+  const trigger = claim ? 'claim' : url ? 'url' : 'tool'
+  console.warn(`[display] ${trigger} without UI action — firing corrective turn`)
   sessionAsk(
-    '[SISTEMA — no es el señor] Acabas de decir que mostrabas algo en pantalla, pero NO llamaste ninguna herramienta: la pantalla está vacía. Llama show_display AHORA MISMO con el contenido prometido — kind=formula con LaTeX para fórmulas y resultados, kind=url para un enlace, kind=markdown con "Nombre — URL" por línea para varias fuentes o listas. Después de llamarla responde únicamente "listo", sin ninguna otra palabra.',
+    '[SISTEMA — no es el señor] Tu última respuesta nombró una herramienta, un enlace o una fuente (o dijo que algo estaba en pantalla) SIN llamar a ninguna herramienta: la pantalla está vacía. Llama show_display AHORA MISMO con ese contenido — kind=url para un único enlace o herramienta (incluye su URL oficial), kind=markdown con una línea "Nombre — URL" por cada herramienta o fuente si son varias, kind=formula con LaTeX para fórmulas o resultados. Después de llamarla responde únicamente "listo", sin ninguna otra palabra.',
     {
       systemPromptText: SPEECH_SYSTEM_PROMPT,
       timeoutMs: 30000,

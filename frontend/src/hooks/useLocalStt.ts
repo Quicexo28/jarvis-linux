@@ -47,6 +47,7 @@ export function useLocalStt({
 
     if (t.isFinal) {
       onFinalRef.current?.(t.text, t.speakerConfidence, t.speakerName, {
+        speakerConfidenceRaw: t.speakerConfidenceRaw,
         avgLogprob: t.avgLogprob,
         confidence: t.confidence,
       })
