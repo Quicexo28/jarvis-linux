@@ -1077,23 +1077,32 @@ async def stream_stt(ws: WebSocket):
     await ws.accept()
     state = StreamState()
     spec_task: Optional[asyncio.Task] = None
+    spec_cancel: Optional[CancelToken] = None
 
-    def _abandon(task: Optional[asyncio.Task]):
-        # Drop a stale speculative task without raising "exception never
-        # retrieved". The underlying thread can't be interrupted, but its result
-        # is simply ignored.
-        if task is None:
-            return
-        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+    def _abandon():
+        # Drop a stale speculative task: signal its CancelToken so the worker
+        # thread bails at its next stage boundary instead of burning a full
+        # denoise + decode + speaker-id pass whose result nobody will read, and
+        # swallow the resulting exception so asyncio doesn't log "exception
+        # never retrieved".
+        nonlocal spec_task, spec_cancel
+        if spec_cancel is not None:
+            spec_cancel.cancel()
+        spec_cancel = None
+        if spec_task is not None:
+            spec_task.add_done_callback(
+                lambda t: t.exception() if not t.cancelled() else None
+            )
+        spec_task = None
 
     async def _finalize(audio: np.ndarray, *, reuse_spec: bool, precomputed: Optional[dict] = None,
                         path: str = "final"):
         """Transcribe a finalized segment and send the result to the client."""
-        nonlocal spec_task
+        nonlocal spec_task, spec_cancel
         t_final = time.time()
         result = precomputed
         if result is not None:
-            _abandon(spec_task)
+            _abandon()
         # Reuse the speculative result iff it's still valid (no speech resumed
         # after the snapshot — tracked by state.spec_fired). Flush never reuses.
         elif reuse_spec and spec_task is not None and state.spec_fired:
@@ -1102,9 +1111,20 @@ async def stream_stt(ws: WebSocket):
                 path = "spec-reuse"
             except Exception:
                 result = None
+            spec_task = None
+            spec_cancel = None
         else:
-            _abandon(spec_task)
-        spec_task = None
+            # Not reusing: cancel first, THEN await the doomed task so its
+            # thread has released _SEG_LOCK before the real transcription asks
+            # for it. Without the await the finalize would simply block on the
+            # lock instead — same result, but this way the log order stays sane.
+            doomed = spec_task
+            _abandon()
+            if doomed is not None:
+                try:
+                    await doomed
+                except Exception:
+                    pass
 
         if result is None:
             try:
@@ -1176,9 +1196,13 @@ async def stream_stt(ws: WebSocket):
                     if audio is not None and len(audio) > SAMPLE_RATE * 0.3:
                         # Kick off transcription during the silence tail so it's
                         # likely done by the time we finalize.
-                        _abandon(spec_task)
+                        _abandon()
+                        spec_cancel = CancelToken()
                         spec_task = asyncio.create_task(
-                            asyncio.to_thread(_transcribe_segment, audio, state.spk_context())
+                            asyncio.to_thread(
+                                _transcribe_segment, audio, state.spk_context(),
+                                spec_cancel,
+                            )
                         )
                     continue
 
@@ -1186,8 +1210,7 @@ async def stream_stt(ws: WebSocket):
                     await _finalize(audio, reuse_spec=True)
                 elif event == "final":
                     # Segment too short to transcribe — drop any pending snapshot.
-                    _abandon(spec_task)
-                    spec_task = None
+                    _abandon()
 
                 # Silence tail housekeeping: once the speculative transcription
                 # is done we can (a) warm the backend's LLM prefix and (b) fire
@@ -1249,8 +1272,7 @@ async def stream_stt(ws: WebSocket):
                     if audio is not None and len(audio) > SAMPLE_RATE * 0.3:
                         await _finalize(audio, reuse_spec=False)
                     else:
-                        _abandon(spec_task)
-                        spec_task = None
+                        _abandon()
 
     except WebSocketDisconnect:
         pass
@@ -1262,7 +1284,7 @@ async def stream_stt(ws: WebSocket):
         except Exception:
             pass
     finally:
-        _abandon(spec_task)
+        _abandon()
 
 
 # ── Trust continuity (owner-presence prior) ────────────────────────────────
@@ -1316,6 +1338,55 @@ VERIFIED_CONF_FLOOR = float(os.environ.get("SPEAKER_VERIFIED_CONF_FLOOR", "0.80"
 # Speaker-id runs on CPU while Whisper decodes on GPU — a small executor lets
 # _transcribe_segment overlap the two instead of paying them serially.
 _SPK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="spkid")
+
+
+# Only ONE segment transcription may run at a time, and an abandoned one bails
+# at the next stage boundary.
+#
+# The speculative snapshot (fired ~0.38s into the silence tail) and the real
+# finalize (~1.0s) are BOTH dispatched with asyncio.to_thread. When speech
+# resumed after the snapshot the speculative result is unusable, so _finalize
+# used to just drop the reference and start a second _transcribe_segment — but
+# `asyncio.to_thread` work cannot be interrupted, so the discarded thread kept
+# running a full denoise + whisper decode + speaker-id gate stack alongside the
+# real one. Measured cost: every `path=final` turn showed den_ms 3.2-9.9s
+# against an intrinsic DeepFilter cost of ~0.16s for the same clip, while the
+# one `path=spec-reuse` turn (no overlap) was the fastest of the batch. It
+# bought nothing either: ctranslate2 runs with num_workers=1, so the two decodes
+# serialized inside the model anyway.
+#
+# Two mechanisms, both needed:
+#   * CancelToken — checked at each stage boundary, so an abandoned snapshot
+#     stops before the next expensive stage instead of running to completion.
+#     The stage it is already inside still finishes (whisper/DeepFilter are
+#     opaque C++ calls), which is why the lock below is not redundant.
+#   * _SEG_LOCK — serializes whatever survives, so the survivor never contends
+#     for the shared torch OpenMP pool / GIL with a doomed thread.
+_SEG_LOCK = threading.Semaphore(1)
+
+
+class _Cancelled(Exception):
+    """Raised inside a transcription thread whose result is no longer wanted."""
+
+
+class CancelToken:
+    """One-shot cancel flag handed to a speculative transcription."""
+
+    __slots__ = ("_cancelled",)
+
+    def __init__(self) -> None:
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled
+
+    def check(self) -> None:
+        if self._cancelled:
+            raise _Cancelled()
 
 
 def _calibrate_conf(spk_name: Optional[str], raw_conf: float) -> float:
@@ -1407,15 +1478,36 @@ def _identify_speaker(audio: np.ndarray, spk_context: Optional[np.ndarray],
     return spk_name, spk_conf
 
 
-def _transcribe_segment(audio: np.ndarray, spk_context: Optional[np.ndarray] = None) -> dict:
-    """Transcribe a numpy audio segment.
+def _transcribe_segment(audio: np.ndarray, spk_context: Optional[np.ndarray] = None,
+                        cancel: Optional[CancelToken] = None) -> dict:
+    """Transcribe a numpy audio segment, one at a time (see _SEG_LOCK).
+
+    Waits for any in-flight segment to finish or bail before doing real work, so
+    an abandoned speculative snapshot can never contend with the finalize that
+    replaced it. Raises _Cancelled if `cancel` fires; the caller discards the
+    task, so nothing downstream sees the exception.
 
     Returns a dict: { text, spk_conf, spk_name, avg_logprob, word_conf, ms }.
     avg_logprob/word_conf are the doubt signals consumed by the backend LLM
-    correction layer (#11). ms = wall time of this call (latency tracer);
-    den_ms/wh_ms/spk_ms break it down (denoise / whisper decode / speaker-id
-    wait beyond whisper — spk runs concurrently, so spk_ms is usually ~0).
+    correction layer (#11). ms = wall time of the WORK (lock wait excluded, so
+    den_ms/wh_ms/spk_ms stay comparable across turns); the caller's
+    finalize_wait_ms still covers the full user-visible latency.
     """
+    if cancel is not None:
+        cancel.check()
+    with _SEG_LOCK:
+        if cancel is not None:
+            cancel.check()
+        return _transcribe_segment_locked(audio, spk_context, cancel)
+
+
+def _transcribe_segment_locked(audio: np.ndarray,
+                               spk_context: Optional[np.ndarray],
+                               cancel: Optional[CancelToken]) -> dict:
+    def _checkpoint() -> None:
+        if cancel is not None:
+            cancel.check()
+
     t_start = time.time()
 
     # Bifurcated audio paths: whisper gets the denoised signal (ASR likes clean
@@ -1449,6 +1541,15 @@ def _transcribe_segment(audio: np.ndarray, spk_context: Optional[np.ndarray] = N
 
     audio = _denoise(audio)
     den_ms = int((time.time() - t_start) * 1000)
+
+    # Bail before the GPU decode — the single most expensive stage — if this
+    # snapshot was superseded while denoise ran.
+    try:
+        _checkpoint()
+    except _Cancelled:
+        if spk_future is not None:
+            spk_future.cancel()
+        raise
 
     t_wh = time.time()
     # faster-whisper takes the float32 16k mono array directly — the old
@@ -1527,6 +1628,15 @@ def _transcribe_segment(audio: np.ndarray, spk_context: Optional[np.ndarray] = N
     avg_logprob = (sum(logprobs) / len(logprobs)) if logprobs else 0.0
     word_conf = (sum(word_probs) / len(word_probs)) if word_probs else 0.0
     wh_ms = int((time.time() - t_wh) * 1000)
+
+    # Bail before the speaker-id gate stack (windowed voting + wake templates +
+    # denoised-domain retry — measured up to 9.3s on a bad turn).
+    try:
+        _checkpoint()
+    except _Cancelled:
+        if spk_future is not None:
+            spk_future.cancel()
+        raise
 
     t_spk = time.time()
     spk_name = None
