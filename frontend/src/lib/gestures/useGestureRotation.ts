@@ -27,34 +27,27 @@ export interface UseGestureRotationOptions {
   nonLinearExp?: number
   /** Whether to process gestures at all. Default true. */
   enabled?: boolean
+  /** Se llama tras procesar cada muestra de gesto, con el frame ya calculado. */
+  onFrame?: (frame: GestureRotationFrame) => void
 }
 
 /**
  * Returns a stable mutable ref updated on each gesture change.
- * Read deltaYaw/deltaPitch inside useFrame (R3F) or useEffect (ring).
+ * Read deltaYaw/deltaPitch inside useFrame (R3F) or dentro de `onFrame`.
  *
  * Clutch model: puño cerrado (grab.active) = engaged; abrir = released.
  * On engage: captures base position so deltaX/Y are relative to engagement point.
  * On release: sets justReleased=true for one cycle, then false.
+ *
+ * La suscripción al store es IMPERATIVA (`useGestureStore.subscribe`), no por
+ * selector: el engine publica una muestra nueva ~20 veces/s y, con selectores,
+ * el host (AwakeApp entero) se re-renderizaba en cada una aunque el gesto no
+ * hiciera nada — el coste dominante cuando hay una escena 3D encima. Ahora solo
+ * hay render si el consumidor decide cambiar estado dentro de `onFrame`.
  */
 export function useGestureRotation(
   opts: UseGestureRotationOptions = {}
 ): React.MutableRefObject<GestureRotationFrame> {
-  const {
-    sensitivity = 2.0,
-    emaAlpha = 0.25,
-    deadZone = 0.018,
-    nonLinearExp = 1.5,
-    enabled = true,
-  } = opts
-
-  // Selectores PRIMITIVOS, no `s.output`: el engine publica un objeto nuevo por
-  // frame (~25/s) — suscribirse al objeto re-renderizaba el host (AwakeApp
-  // entero) en cada frame aunque nada hubiera cambiado.
-  const grabActive = useGestureStore(s => s.output.grab.active)
-  const grabDeltaX = useGestureStore(s => s.output.grab.deltaX)
-  const grabDeltaY = useGestureStore(s => s.output.grab.deltaY)
-
   const frameRef = useRef<GestureRotationFrame>({
     deltaYaw: 0, deltaPitch: 0, grabActive: false, justReleased: false,
   })
@@ -63,51 +56,79 @@ export function useGestureRotation(
   const smoothedRef = useRef({ x: 0, y: 0 })
   const prevSmoothedRef = useRef({ x: 0, y: 0 })
 
+  // Opciones vivas en un ref: el listener se registra UNA vez y no debe
+  // re-suscribirse porque el host re-renderice.
+  const optsRef = useRef(opts)
+  optsRef.current = opts
+
   useEffect(() => {
-    if (!enabled) {
-      frameRef.current = { deltaYaw: 0, deltaPitch: 0, grabActive: false, justReleased: false }
-      return
+    const process = (grabActive: boolean, grabDeltaX: number, grabDeltaY: number) => {
+      const {
+        sensitivity = 2.0,
+        emaAlpha = 0.25,
+        deadZone = 0.018,
+        nonLinearExp = 1.5,
+        enabled = true,
+        onFrame,
+      } = optsRef.current
+
+      if (!enabled) {
+        frameRef.current = { deltaYaw: 0, deltaPitch: 0, grabActive: false, justReleased: false }
+        return
+      }
+
+      const wasGrabbing = prevGrabRef.current
+      const isGrabbing = grabActive
+
+      // Clutch engage: capture base position, reset smoothing state
+      if (isGrabbing && !wasGrabbing) {
+        baseRef.current = { x: grabDeltaX, y: grabDeltaY }
+        smoothedRef.current = { x: 0, y: 0 }
+        prevSmoothedRef.current = { x: 0, y: 0 }
+      }
+
+      const justReleased = wasGrabbing && !isGrabbing
+      prevGrabRef.current = isGrabbing
+
+      if (!isGrabbing) {
+        frameRef.current = { deltaYaw: 0, deltaPitch: 0, grabActive: false, justReleased }
+        onFrame?.(frameRef.current)
+        return
+      }
+
+      // Delta from clutch base
+      const rawX = grabDeltaX - baseRef.current.x
+      const rawY = grabDeltaY - baseRef.current.y
+
+      // EMA smoothing (reduces jitter from MediaPipe tracking noise)
+      const newSX = applyEMA(smoothedRef.current.x, rawX, emaAlpha)
+      const newSY = applyEMA(smoothedRef.current.y, rawY, emaAlpha)
+
+      // Delta since last cycle (additive rotation signal)
+      const dX = newSX - prevSmoothedRef.current.x
+      const dY = newSY - prevSmoothedRef.current.y
+
+      smoothedRef.current = { x: newSX, y: newSY }
+      prevSmoothedRef.current = { x: newSX, y: newSY }
+
+      // Dead zone + non-linear + sensitivity
+      const finalX = applyNonLinear(applyDeadZone(dX, deadZone), nonLinearExp) * sensitivity
+      const finalY = applyNonLinear(applyDeadZone(dY, deadZone), nonLinearExp) * sensitivity
+
+      frameRef.current = { deltaYaw: finalX, deltaPitch: finalY, grabActive: true, justReleased: false }
+      onFrame?.(frameRef.current)
     }
 
-    const wasGrabbing = prevGrabRef.current
-    const isGrabbing = grabActive
+    const g0 = useGestureStore.getState().output.grab
+    process(g0.active, g0.deltaX, g0.deltaY)
 
-    // Clutch engage: capture base position, reset smoothing state
-    if (isGrabbing && !wasGrabbing) {
-      baseRef.current = { x: grabDeltaX, y: grabDeltaY }
-      smoothedRef.current = { x: 0, y: 0 }
-      prevSmoothedRef.current = { x: 0, y: 0 }
-    }
-
-    const justReleased = wasGrabbing && !isGrabbing
-    prevGrabRef.current = isGrabbing
-
-    if (!isGrabbing) {
-      frameRef.current = { deltaYaw: 0, deltaPitch: 0, grabActive: false, justReleased }
-      return
-    }
-
-    // Delta from clutch base
-    const rawX = grabDeltaX - baseRef.current.x
-    const rawY = grabDeltaY - baseRef.current.y
-
-    // EMA smoothing (reduces jitter from MediaPipe tracking noise)
-    const newSX = applyEMA(smoothedRef.current.x, rawX, emaAlpha)
-    const newSY = applyEMA(smoothedRef.current.y, rawY, emaAlpha)
-
-    // Delta since last cycle (additive rotation signal)
-    const dX = newSX - prevSmoothedRef.current.x
-    const dY = newSY - prevSmoothedRef.current.y
-
-    smoothedRef.current = { x: newSX, y: newSY }
-    prevSmoothedRef.current = { x: newSX, y: newSY }
-
-    // Dead zone + non-linear + sensitivity
-    const finalX = applyNonLinear(applyDeadZone(dX, deadZone), nonLinearExp) * sensitivity
-    const finalY = applyNonLinear(applyDeadZone(dY, deadZone), nonLinearExp) * sensitivity
-
-    frameRef.current = { deltaYaw: finalX, deltaPitch: finalY, grabActive: true, justReleased: false }
-  }, [grabActive, grabDeltaX, grabDeltaY, enabled, sensitivity, emaAlpha, deadZone, nonLinearExp])
+    return useGestureStore.subscribe((s, prev) => {
+      const g = s.output.grab
+      const p = prev.output.grab
+      if (g.active === p.active && g.deltaX === p.deltaX && g.deltaY === p.deltaY) return
+      process(g.active, g.deltaX, g.deltaY)
+    })
+  }, [])
 
   return frameRef
 }

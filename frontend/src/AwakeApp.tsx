@@ -134,26 +134,53 @@ export function AwakeApp() {
 
   const gestureEnabled    = useGestureStore(s => s.enabled)
   const setGestureEnabled = useGestureStore(s => s.setEnabled)
-  // Selectores primitivos, NUNCA `s.output` entero: el engine publica un objeto
-  // nuevo ~25 veces/s y suscribirse al objeto re-renderizaba toda la app AWAKE
-  // en cada frame de gesto (lag de cursor + jank). El puntero vive en
-  // <GesturePointer/> con su propia suscripción.
-  const gestureClick      = useGestureStore(s => s.output.click)
-  const gestureBack       = useGestureStore(s => s.output.back)
-  const pinchActive       = useGestureStore(s => s.output.pinch.active)
-  const pinchZoom         = useGestureStore(s => s.output.pinch.zoom)
-  const grabActive        = useGestureStore(s => s.output.grab.active)
-  const grabDeltaX        = useGestureStore(s => s.output.grab.deltaX)
-  const grabDeltaY        = useGestureStore(s => s.output.grab.deltaY)
+  // NADA del `output` de gestos se suscribe con selectores de React aquí. El
+  // engine publica una muestra nueva ~20 veces/s; incluso con selectores
+  // primitivos (deltaX/zoom cambian cada muestra) AwakeApp entero se
+  // re-renderizaba a esa cadencia mientras hubiera una mano a la vista —
+  // el coste dominante con el visor 3D encima. Todo el consumo va por
+  // suscripción IMPERATIVA (abajo) y solo cambia estado cuando toca actuar.
+  // El puntero vive en <GesturePointer/> con su propia suscripción.
   const model3dOpen       = useModel3dStore(s => s.open)
+  const model3dHide       = useModel3dStore(s => s.hide)
 
   useGesturePipeline()
 
-  const ringRotRef = useGestureRotation({
+  /** Handler de eventos de gesto; se reasigna en cada render (ver más abajo). */
+  const gestureEventsRef = useRef<Parameters<typeof useGestureStore.subscribe>[0]>(() => {})
+
+  const MAIN_RING_SLOTS = 5  // MAIN_RING has 5 modes: home, house, system, cloud, utils
+
+  // Gesture: grab → arrastra el ring; al soltar, snap al slot más cercano.
+  // useGestureRotation aporta clutch + EMA + zona muerta y llama a onFrame en
+  // cada muestra (sin re-render). El visor 3D (overlay z-index 5000) CAPTURA
+  // los gestos: mientras esté abierto, el ring de debajo no se mueve.
+  useGestureRotation({
     sensitivity: RING_DRAG_SENSITIVITY,
     emaAlpha: 0.20,
     deadZone: 0.015,
     nonLinearExp: 1.4,
+    onFrame: ({ deltaYaw, grabActive: dragging, justReleased }) => {
+      if (zoomedMode != null || model3dOpen) return
+      if (useGestureStore.getState().output.pinch.active) return
+
+      if (dragging) {
+        // ringAngle se lee con getState() y NO es dependencia: leerlo de una
+        // suscripción y volver a escribirlo en cadena fue el loop infinito de
+        // setState (React #185) que tumbaba la app al primer arrastre.
+        if (ringLevel === 'main' && deltaYaw !== 0) {
+          setRingAngle(useJarvisStore.getState().ringAngle + deltaYaw)
+        }
+        return
+      }
+
+      if (justReleased && ringLevel === 'main') {
+        const MAIN_RING: Mode[] = ['home', 'house', 'system', 'cloud', 'utils']
+        const slot = snapToNearestSlot(useJarvisStore.getState().ringAngle, MAIN_RING_SLOTS)
+        setRingAngle(slot)
+        setActiveRingMode(MAIN_RING[slot])
+      }
+    },
   })
 
   const [housePlanKey, setHousePlanKey]     = useState<string>('')
@@ -221,72 +248,56 @@ export function AwakeApp() {
     return () => window.removeEventListener('keydown', handler)
   }, [zoomedMode, handleBack, ringLevel, activeRingMode, setRingLevel, rotateRing, enterMode])
 
-  // Gesture: click → enter zoomed mode
-  useEffect(() => {
-    if (!gestureClick || zoomedMode) return
-    enterMode(activeRingMode)
-  }, [gestureClick])
-
-  // Gesture: back → handle back
-  useEffect(() => {
-    if (gestureBack) {
-      if (zoomedMode != null) handleBack()
-      else if (ringLevel === 'house-sub' || ringLevel === 'utils-sub') setRingLevel('main')
-    }
-  }, [gestureBack])
-
   // Start ticker singletons globally (idempotent). They keep counting even when
   // the panel is closed so opening it again shows the up-to-date state.
   useEffect(() => { startTimerTicker(); startChronoTicker() }, [])
 
-  // Gesture: grab → drag ring continuously; snap to nearest slot on release.
-  // Uses useGestureRotation (clutch + EMA + dead zone) for smooth, precise control.
-  const MAIN_RING_SLOTS = 5  // MAIN_RING has 5 modes: home, house, system, cloud, utils
+  // Eventos discretos + pinch, por suscripción imperativa (ver nota de arriba).
+  // El handler se guarda en un ref y se reescribe en cada render, así ve estado
+  // fresco sin re-suscribir ni volver a montar el listener.
+  gestureEventsRef.current = (s, before) => {
+    const out = s.output
+    const prev = before.output
+    if (out === prev) return
 
-  // OJO: ringAngle NO va en las deps y se lee con getState(). Con ringAngle en
-  // deps, setRingAngle re-disparaba el efecto, que releía el MISMO deltaYaw del
-  // ref y volvía a sumar → loop infinito de setState (React #185, tumbaba toda
-  // la app al primer arrastre). El efecto debe correr solo cuando el pipeline
-  // publica un frame nuevo (deltas/flags de grab en deps).
-  useEffect(() => {
-    if (pinchActive || zoomedMode != null || model3dOpen) return
+    // click (flanco) → entrar al modo enfocado del ring
+    if (out.click && !prev.click && !zoomedMode && !model3dOpen) enterMode(activeRingMode)
 
-    const { deltaYaw, grabActive: dragging, justReleased } = ringRotRef.current
+    // back (flanco) → cerrar lo que se está viendo. Con el visor 3D abierto
+    // cierra el visor: es el "atrás" de lo visible, no del ring de debajo.
+    if (out.back && !prev.back) {
+      if (model3dOpen) model3dHide()
+      else if (zoomedMode != null) handleBack()
+      else if (ringLevel === 'house-sub' || ringLevel === 'utils-sub') setRingLevel('main')
+    }
 
-    if (dragging) {
-      // Drag: update continuous ringAngle. Only affect main ring while at main level.
-      if (ringLevel === 'main' && deltaYaw !== 0) {
-        setRingAngle(useJarvisStore.getState().ringAngle + deltaYaw)
-      }
+    // pinch → progreso de zoom sobre el holograma (solo en el ring)
+    const pinch = out.pinch
+    if (zoomedMode !== null || model3dOpen || !pinch.active) {
+      if (useJarvisStore.getState().pinchZoomProgress !== 0) setPinchZoomProgress(0)
       return
     }
-
-    if (justReleased && ringLevel === 'main') {
-      // Snap to nearest slot and update activeRingMode
-      const MAIN_RING: Mode[] = ['home', 'house', 'system', 'cloud', 'utils']
-      const slot = snapToNearestSlot(useJarvisStore.getState().ringAngle, MAIN_RING_SLOTS)
-      setRingAngle(slot)
-      setActiveRingMode(MAIN_RING[slot])
-    }
-  }, [grabActive, grabDeltaX, grabDeltaY,
-      pinchActive, zoomedMode, ringLevel,
-      setRingAngle, setActiveRingMode])
-
-  // Gesture: pinch → zoom into hologram (ring only)
-  useEffect(() => {
-    if (zoomedMode !== null || !pinchActive) {
-      setPinchZoomProgress(0)
-      return
-    }
-    const raw = (pinchZoom - 1.0) / (PINCH_ENTER_THRESHOLD - 1.0)
+    const raw = (pinch.zoom - 1.0) / (PINCH_ENTER_THRESHOLD - 1.0)
     const progress = Math.max(0, Math.min(1, raw))
-    setPinchZoomProgress(progress)
-
     if (progress >= 1.0) {
       setPinchZoomProgress(0)
       enterMode(activeRingMode)
+      return
     }
-  }, [pinchZoom, pinchActive, zoomedMode, activeRingMode])
+    // Umbral de escritura: sin él, el ruido del pinch re-renderizaba la app por
+    // cambios invisibles del progreso.
+    if (Math.abs(progress - useJarvisStore.getState().pinchZoomProgress) > 0.002) {
+      setPinchZoomProgress(progress)
+    }
+  }
+
+  useEffect(() => useGestureStore.subscribe((s, prev) => gestureEventsRef.current(s, prev)), [])
+
+  // El progreso de pinch también debe limpiarse cuando cambia lo que hay en
+  // pantalla, no solo cuando llega una muestra de gesto.
+  useEffect(() => {
+    if (zoomedMode !== null || model3dOpen) setPinchZoomProgress(0)
+  }, [zoomedMode, model3dOpen, setPinchZoomProgress])
 
   useEffect(() => {
     let cancelled = false
@@ -463,7 +474,7 @@ export function AwakeApp() {
 
   // Local STT (faster-whisper) — always-on when voice enabled.
   // Each final transcript is sent to the backend for intent classification + response.
-  const handleSttFinal = useCallback((text: string, speakerConfidence: number, sttSpeakerName?: string, meta?: { avgLogprob?: number; confidence?: number }) => {
+  const handleSttFinal = useCallback((text: string, speakerConfidence: number, sttSpeakerName?: string, meta?: { speakerConfidenceRaw?: number; avgLogprob?: number; confidence?: number }) => {
     if (!text.trim()) return
 
     // Minimum confidence required even outside of barge-in. TTS echo through
@@ -563,7 +574,7 @@ export function AwakeApp() {
       }
     }
 
-    const payload = { text, speakerConfidence, speakerName: nameForTurn, alwaysOn: true, context: { mode }, avgLogprob: meta?.avgLogprob, confidence: meta?.confidence }
+    const payload = { text, speakerConfidence, speakerConfidenceRaw: meta?.speakerConfidenceRaw, speakerName: nameForTurn, alwaysOn: true, context: { mode }, avgLogprob: meta?.avgLogprob, confidence: meta?.confidence }
     console.log(`[speech] -> converse text="${text}" conf=${speakerConfidence?.toFixed?.(2) ?? speakerConfidence} name=${nameForTurn}`)
 
     // One AbortController for the whole turn: aborting it (barge-in / newer turn)

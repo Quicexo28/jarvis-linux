@@ -40,19 +40,30 @@ const mathImplicit = create(all)
 // giro real de la mano ("como si la cogieras y la giraras con la mano"). Para
 // más de ±60-80° (límite de muñeca): soltar, re-agarrar y seguir (ratchet).
 const ROT_GAIN = 1.0
-// Sentido de giro por eje. Pedido del usuario: INVERTIR el giro — la figura
-// giraba al revés de la mano (yaw/pitch salen del frame world con y-hacia-abajo
-// de imagen y se aplican en Three con y-hacia-arriba → sentido opuesto; el roll
-// ya venía negado por espejo). Cada eje es un flip de una línea si alguno queda
-// al revés al probar con la mano.
-const ROT_SIGN_YAW = -1   // girar la palma izq/der
-const ROT_SIGN_PITCH = 1  // inclinar los nudillos arriba/abajo (invertido a petición)
-const ROT_SIGN_ROLL = -1  // roll de la muñeca (como un volante)
-// EMA de las deltas de rotación. Más alto = seguimiento más CEÑIDO al ángulo de
-// la mano (menos lag). El engine ya filtra yaw/pitch con One-Euro, así que este
-// segundo paso en serie sumaba lag; 0.8 (τ ~37 ms @33fps) lo minimiza sin
-// reintroducir jitter perceptible (0.4 dejaba ~90 ms, 0.6 ~50 ms).
-const EMA_ROT = 0.8
+// Sentido de giro por eje (verificado con la mano, 07-23). Cada uno es un flip
+// de una línea si alguno vuelve a sentirse al revés.
+const ROT_SIGN_YAW = -1    // eje VERTICAL: girar la palma izq/der
+const ROT_SIGN_PITCH = 1   // eje horizontal: subir/bajar la mano (ver abajo)
+const ROT_SIGN_ROLL = 1    // roll de la muñeca (como un volante)
+/** El pitch NO sale del ángulo de la muñeca sino del DESPLAZAMIENTO vertical de
+ * la mano (pedido del usuario: inclinar los nudillos arriba/abajo era incómodo
+ * y el rango útil de la muñeca es pequeño). deltaY viene normalizado por el
+ * tamaño de palma (~±0.3 de recorrido cómodo) → 5.0 rad/unidad ≈ 85° de figura
+ * por recorrido completo. Convención: deltaY>0 = mano ABAJO. */
+const PITCH_DRAG_GAIN = 5.0
+/** Suavizado exponencial POR TIEMPO (no por frame): alpha = 1 − e^(−dt/τ). Con
+ * la inferencia a ~20 fps y el render a 60, esto interpola entre muestras — el
+ * movimiento se ve continuo sin añadir el lag de un EMA por-frame fijo (que
+ * además cambiaba de comportamiento según los fps). τ pequeño = más ceñido. */
+const SMOOTH_TAU_MS = 45
+/** El zoom tolera más suavizado que el giro (gesto lento) y así no tiembla. */
+const ZOOM_TAU_MS = 110
+const BASE_CAM_DIST = 12
+
+/** Coeficiente de EMA independiente del framerate. */
+function tauAlpha(dtSec: number, tauMs: number): number {
+  return 1 - Math.exp(-(dtSec * 1000) / tauMs)
+}
 
 /** Distinct colors auto-assigned to objects without an explicit color.
  *  HUD family — matches the app's dominant #00f0ff cyan aesthetic. */
@@ -85,30 +96,36 @@ function kindLabel(spec: Model3DSpec): string {
 /* ---- Gesture rig: one grab/pinch controller for the whole scene ---- */
 
 function GestureRig({ enabled, children }: { enabled: boolean; children: ReactNode }) {
-  const gestureOutput = useGestureStore(s => s.output)
+  // getState() dentro de useFrame, NUNCA una suscripción: el engine publica un
+  // objeto `output` nuevo ~20 veces/s y suscribirse re-renderizaba TODA la
+  // escena (este componente envuelve los children) en cada frame de gesto —
+  // era la mayor parte de la sensación de "pesado" del visor con gestos.
   const groupRef = useRef<THREE.Group>(null)
   const grabbing = useRef(false)
   const baseRot = useRef({ x: 0, y: 0, z: 0 })
   const smoothDX = useRef(0)
   const smoothDY = useRef(0)
   const smoothDA = useRef(0)
+  const smoothDist = useRef(BASE_CAM_DIST)
 
-  useFrame((state) => {
+  useFrame((state, delta) => {
     const g = groupRef.current
     if (!g) return
+    const gestureOutput = useGestureStore.getState().output
     // Gesture pipeline off → hands off. gestureStore.output is NOT reset when
     // the pipeline is disabled, so a stale grab/pinch 'active' flag would
     // otherwise hijack the scene rotation and fight OrbitControls' zoom.
     if (!enabled) { grabbing.current = false; return }
-    // Rotación por ORIENTACIÓN del puño (no por desplazamiento): la figura gira
-    // como si la tuvieras agarrada. Base capturada al enganchar; al soltar se
-    // queda (sin snap-back).
+    // Control del puño, base capturada al enganchar (al soltar se queda, sin
+    // snap-back). Mezcla deliberada de orientación y desplazamiento:
     //   Z (roll)  ← roll de la palma (deltaAngle), 1:1 · ROT_SIGN_ROLL
     //   Y (yaw)   ← girar la palma izq/der (rotYaw), 1:1 · ROT_SIGN_YAW
-    //   X (pitch) ← inclinar los nudillos (rotPitch), 1:1 · ROT_SIGN_PITCH
-    // 1:1 real (ROT_GAIN=1.0): 20° de mano = 20° de figura. La muñeca da ±60-80°
-    // cómodos; para vueltas completas, soltar, re-agarrar y seguir (ratchet).
+    //   X (pitch) ← SUBIR/BAJAR la mano (deltaY · PITCH_DRAG_GAIN)
+    // Roll y yaw son 1:1 (ROT_GAIN=1.0): 20° de mano = 20° de figura; para
+    // vueltas completas, soltar, re-agarrar y seguir (ratchet). El pitch va por
+    // desplazamiento porque inclinar la muñeca es incómodo y da poco rango.
     const grab = gestureOutput.grab
+    const aRot = tauAlpha(delta, SMOOTH_TAU_MS)
     if (grab.active) {
       if (!grabbing.current) {
         grabbing.current = true
@@ -117,18 +134,24 @@ function GestureRig({ enabled, children }: { enabled: boolean; children: ReactNo
         smoothDY.current = 0
         smoothDA.current = 0
       }
-      smoothDX.current += (grab.rotYaw - smoothDX.current) * EMA_ROT
-      smoothDY.current += (grab.rotPitch - smoothDY.current) * EMA_ROT
-      smoothDA.current += (grab.deltaAngle - smoothDA.current) * EMA_ROT
+      smoothDX.current += (grab.rotYaw - smoothDX.current) * aRot
+      smoothDY.current += (grab.deltaY * PITCH_DRAG_GAIN - smoothDY.current) * aRot
+      smoothDA.current += (grab.deltaAngle - smoothDA.current) * aRot
       g.rotation.z = baseRot.current.z + ROT_SIGN_ROLL * smoothDA.current
       g.rotation.y = baseRot.current.y + ROT_SIGN_YAW * smoothDX.current * ROT_GAIN
-      g.rotation.x = baseRot.current.x + ROT_SIGN_PITCH * smoothDY.current * ROT_GAIN
+      g.rotation.x = baseRot.current.x + ROT_SIGN_PITCH * smoothDY.current
     } else {
       grabbing.current = false
     }
+    // Zoom: la distancia se interpola hacia el objetivo en vez de saltar al
+    // valor crudo de cada muestra — sin esto el temblor del pulgar (a 20 Hz)
+    // se veía como vibración de la cámara.
     if (gestureOutput.pinch.active) {
-      const dist = THREE.MathUtils.clamp(12 / gestureOutput.pinch.zoom, 2, 35)
-      state.camera.position.setLength(dist)
+      const target = THREE.MathUtils.clamp(BASE_CAM_DIST / gestureOutput.pinch.zoom, 2, 35)
+      smoothDist.current += (target - smoothDist.current) * tauAlpha(delta, ZOOM_TAU_MS)
+      state.camera.position.setLength(smoothDist.current)
+    } else {
+      smoothDist.current = state.camera.position.length()
     }
   })
 

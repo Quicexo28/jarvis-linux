@@ -7,9 +7,13 @@
 // WebKitGTK (SIGSEGV en libpipewire-module-protocol-native) — una sola apertura
 // por sesión de gestos; los reintentos del landmarker NO tocan la cámara.
 
+import { INFER_MAX_WIDTH } from './config'
+
 let video: HTMLVideoElement | null = null
 let stream: MediaStream | null = null
 let lastVideoTime = -1
+let scaleCanvas: HTMLCanvasElement | null = null
+let scaleCtx: CanvasRenderingContext2D | null = null
 
 /** El <video> vivo del pipeline (para GestureDebugView y capture_photo). */
 export function getGestureVideo(): HTMLVideoElement | null {
@@ -22,10 +26,21 @@ export async function openCamera(): Promise<{ width: number; height: number }> {
   }
   closeCamera()
 
-  // WebKitGTK ignora los constraints `ideal` (negocia 720p@30 vía portal
-  // PipeWire) — se piden igual por si algún día los respeta.
+  // SOLO `ideal`: WebKitGTK ignora los constraints (negocia vía portal
+  // PipeWire), pero un constraint DURO (`max`/`exact`) que no puede satisfacer
+  // lo hace fallar con OverconstrainedError y deja el pipeline sin cámara.
+  // frameRate bajo a propósito: la inferencia corre en el main thread, así que
+  // cada frame de cámara de más es contención contra el render; 20 fps de gesto
+  // ya se sienten continuos porque los consumers interpolan entre muestras. Si
+  // el portal lo ignora, el pacing de useGesturePipeline limita igual el ritmo.
   stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+    video: {
+      // 640x480 empíricamente negocia 640x360; pedir 480x270 hacía que el
+      // portal saltara a 1280x720 (más decodificación por frame para nada).
+      width: { ideal: 640 }, height: { ideal: 480 },
+      frameRate: { ideal: 20 },
+      facingMode: 'user',
+    },
   })
 
   video = document.createElement('video')
@@ -53,6 +68,30 @@ export function nextFrame(): HTMLVideoElement | null {
   return video
 }
 
+/**
+ * Fuente que se le pasa a `detectForVideo`: el propio <video> si ya es pequeño,
+ * o un canvas reescalado a INFER_MAX_WIDTH. El reescalado se paga una vez por
+ * frame (drawImage acelerado) y ahorra subida de textura en cada inferencia.
+ * Los landmarks salen normalizados, así que reescalar no cambia nada aguas abajo.
+ */
+export function inferenceSource(v: HTMLVideoElement): HTMLVideoElement | HTMLCanvasElement {
+  if (!INFER_MAX_WIDTH || v.videoWidth <= INFER_MAX_WIDTH) return v
+
+  const w = INFER_MAX_WIDTH
+  const h = Math.round((v.videoHeight / v.videoWidth) * w)
+  if (!scaleCanvas) {
+    scaleCanvas = document.createElement('canvas')
+    scaleCtx = scaleCanvas.getContext('2d', { alpha: false, desynchronized: true })
+  }
+  if (!scaleCtx) return v
+  if (scaleCanvas.width !== w || scaleCanvas.height !== h) {
+    scaleCanvas.width = w
+    scaleCanvas.height = h
+  }
+  scaleCtx.drawImage(v, 0, 0, w, h)
+  return scaleCanvas
+}
+
 export function closeCamera(): void {
   if (video) {
     video.srcObject = null
@@ -63,5 +102,7 @@ export function closeCamera(): void {
     stream.getTracks().forEach(t => t.stop())
     stream = null
   }
+  scaleCanvas = null
+  scaleCtx = null
   lastVideoTime = -1
 }

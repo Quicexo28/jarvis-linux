@@ -192,7 +192,10 @@ test('pinch: abrir sube el zoom, cerrar lo baja (progresivo, sin saltos)', () =>
 
 test('pinch: temblor no mueve el zoom apreciablemente', () => {
   let t = engagePinch()
-  for (let i = 0; i < 8; i++) { pinch.update(pinchFingers(), feat({ aperture: 0.6 }), t); t += DT }
+  // Asentar de verdad antes de medir: EURO_APERTURE es LENTO a propósito
+  // (minCutoff bajo mata el temblor del pulgar), así que con pocos frames lo
+  // que se mediría es la cola de convergencia, no el flutter.
+  for (let i = 0; i < 30; i++) { pinch.update(pinchFingers(), feat({ aperture: 0.6 }), t); t += DT }
   const settled = pinch.zoom
   for (let i = 0; i < 12; i++) {
     pinch.update(pinchFingers(), feat({ aperture: 0.6 + (i % 2 === 0 ? 0.002 : -0.002) }), t)

@@ -17,13 +17,14 @@ import { useEffect } from 'react'
 import type { HandLandmarker } from '@mediapipe/tasks-vision'
 import { GestureEngine } from '../gestures/engine'
 import { createHandLandmarker } from '../gestures/landmarker'
-import { openCamera, nextFrame, closeCamera, getGestureVideo } from '../gestures/cameraFeed'
+import { openCamera, nextFrame, closeCamera, getGestureVideo, inferenceSource } from '../gestures/cameraFeed'
 import { useGestureStore } from '../state/gestureStore'
 import { useUiStore } from '../state/uiStore'
 import { DEFAULT_OUTPUT } from '../gestures/types'
 import type { HandFrame, DetectedHand, Vec3 } from '../gestures/types'
 import {
   FRAME_MIN_INTERVAL_MS, FRAME_MAX_INTERVAL_MS, PACE_FACTOR, LANDMARKER_MAX_RESTARTS,
+  IDLE_AFTER_MS, IDLE_FRAME_INTERVAL_MS,
 } from '../gestures/config'
 
 /**
@@ -71,6 +72,7 @@ export function useGesturePipeline(): void {
     let restarts = 0
     let timer: ReturnType<typeof setTimeout> | null = null
     let fpsWindow = { frames: 0, start: performance.now(), inferSum: 0 }
+    let lastHandAt = performance.now()
     const engine = new GestureEngine()
 
     const schedule = (delayMs: number) => {
@@ -134,7 +136,7 @@ export function useGesturePipeline(): void {
       const t0 = performance.now()
       let result
       try {
-        result = landmarker.detectForVideo(video, t0)
+        result = landmarker.detectForVideo(inferenceSource(video), t0)
       } catch (e) {
         restartLandmarker(e instanceof Error ? e.message : String(e))
         return
@@ -170,14 +172,25 @@ export function useGesturePipeline(): void {
       fpsWindow.frames++
       fpsWindow.inferSum += inferMs
       const now = performance.now()
+
+      // Reposo: nadie gesticulando (o un modal tapando la escena) → no hay nada
+      // que calcular. Ver IDLE_AFTER_MS en config.ts.
+      if (hands.length > 0 && !modalOpen) lastHandAt = now
+      const idle = now - lastHandAt >= IDLE_AFTER_MS
+
       if (now - fpsWindow.start >= 1000) {
         setFps(Math.round((fpsWindow.frames * 1000) / (now - fpsWindow.start)))
-        setStatus('running', `${delegate} · main · ${Math.round(fpsWindow.inferSum / fpsWindow.frames)}ms`)
+        setStatus(
+          'running',
+          `${delegate} · main · ${Math.round(fpsWindow.inferSum / fpsWindow.frames)}ms${idle ? ' · reposo' : ''}`,
+        )
         fpsWindow = { frames: 0, start: now, inferSum: 0 }
       }
 
       // Pacing adaptativo: dejar aire proporcional al costo de la inferencia.
-      const interval = Math.min(FRAME_MAX_INTERVAL_MS, Math.max(FRAME_MIN_INTERVAL_MS, inferMs * PACE_FACTOR))
+      const interval = idle
+        ? IDLE_FRAME_INTERVAL_MS
+        : Math.min(FRAME_MAX_INTERVAL_MS, Math.max(FRAME_MIN_INTERVAL_MS, inferMs * PACE_FACTOR))
       schedule(Math.max(0, interval - (now - t0)))
     }
 

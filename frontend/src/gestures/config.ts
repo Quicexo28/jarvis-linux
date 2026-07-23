@@ -73,7 +73,11 @@ export const POINTER_EXPAND = 1.45
 // mano en movimientos rápidos.
 export const EURO_POINTER = { minCutoff: 1.6, beta: 0.06, dCutoff: 1.0 }
 export const EURO_WRIST = { minCutoff: 1.5, beta: 0.9, dCutoff: 1.0 }
-export const EURO_APERTURE = { minCutoff: 1.2, beta: 0.6, dCutoff: 1.0 }
+// Apertura del pinch: SUAVE a propósito. El zoom es un gesto lento y el temblor
+// del pulgar se amplificaba en la exponencial (zoom "vibrando"); minCutoff bajo
+// mata el jitter en reposo y beta bajo evita que el ruido rápido se cuele. El
+// consumer además interpola la distancia de cámara por frame (ver Model3DViewer).
+export const EURO_APERTURE = { minCutoff: 0.6, beta: 0.25, dCutoff: 1.0 }
 // Roll 2D (limpio): beta alto → sigue la muñeca sin lag perceptible al girar.
 export const EURO_ANGLE = { minCutoff: 2.0, beta: 0.8, dCutoff: 1.0 }
 /** Yaw/pitch del puño salen del depth INFERIDO por el modelo (más ruidosos que
@@ -87,16 +91,30 @@ export const EURO_ROT = { minCutoff: 1.5, beta: 0.8, dCutoff: 1.0 }
 export const ROT_INCREMENT_DEADZONE = 0.006
 
 // --- Inferencia (main thread — ver gestures/landmarker.ts) ---
-/** Piso del intervalo entre inferencias — 30 ms = cadencia de la cámara
- * (640x360@30): procesar CADA frame, no hay más que ganar por debajo. Con
- * delegate GPU (infer ~16 ms) el main thread lo aguanta; la era CPU-inline
- * necesitaba 66 ms (15 fps) para no saturar el WebKitWebProcess. El pacing
- * adaptativo sigue degradando bajo carga — si vuelve el delegate CPU, el
- * intervalo sube solo (inferMs·factor). */
-export const FRAME_MIN_INTERVAL_MS = 30
+/** Piso del intervalo entre inferencias. `detectForVideo` es SÍNCRONA aunque el
+ * delegate sea GPU (bloquea hasta el readback): a 30 ms de piso con inferencias
+ * de ~30 ms el main thread quedaba ~70% ocupado y TODO lo demás (rAF de R3F,
+ * React) se sentía pesado. 50 ms (20 fps) baja la ocupación a ~50% sin latencia
+ * perceptible, porque el consumer interpola entre muestras a 60 fps. El pacing
+ * adaptativo sigue degradando bajo carga (inferMs·factor). */
+export const FRAME_MIN_INTERVAL_MS = 50
+/** Ancho al que se reescala el frame ANTES de la inferencia (0 = sin reescalar).
+ * MediaPipe normaliza internamente a 192x192, así que el resto del ancho solo
+ * paga subida de textura; 320 px conserva la precisión de landmarks y recorta
+ * ese costo. Los landmarks salen normalizados (0..1) → nada aguas abajo cambia. */
+export const INFER_MAX_WIDTH = 320
 /** El intervalo se adapta a inferMs · factor — bajo carga degrada fps en vez de saturar. */
 export const PACE_FACTOR = 1.35
 export const FRAME_MAX_INTERVAL_MS = 200
+/** Reposo: sin ninguna mano a la vista (o con un modal encima) la inferencia
+ * cuesta lo mismo y no produce nada. Sin esto el WebKitWebProcess se comía ~50%
+ * de un núcleo las 24 h, y ese núcleo es el que necesitan DeepFilter (denoise) y
+ * ECAPA (speaker-id) del STT — se medía como latencia de voz, no como gestos
+ * lentos. Tras IDLE_AFTER_MS sin mano se pasa a IDLE_FRAME_INTERVAL_MS; la
+ * primera mano detectada vuelve al pacing normal, así que el único costo es
+ * ≤IDLE_FRAME_INTERVAL_MS de latencia al levantar la mano. */
+export const IDLE_AFTER_MS = 4000
+export const IDLE_FRAME_INTERVAL_MS = 400
 /** detectForVideo lanzando en runtime → recrear el landmarker sin tocar la cámara. */
 export const LANDMARKER_MAX_RESTARTS = 3
 
