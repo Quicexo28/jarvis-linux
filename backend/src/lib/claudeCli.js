@@ -265,15 +265,35 @@ function filesystemMcpServerDef() {
 // `enableAllProjectMcpServers: true` in the config dir's settings.json, the
 // server auto-connects in --print (non-interactive) mode without the
 // "pending approval" gate that would otherwise drop it.
+// Build the { mcpServers } config object: the Jarvis tools server + (when a
+// vault/code dir is configured) direct filesystem access. Shared by the CWD
+// .mcp.json writer and the explicit --mcp-config file below.
+function buildMcpConfig() {
+  const mcpServers = { jarvis: jarvisMcpServerDef() }
+  const fsDef = filesystemMcpServerDef()
+  if (fsDef) mcpServers.filesystem = fsDef
+  return { mcpServers }
+}
+
 function writeMcpProjectJson(cwd) {
   try {
     mkdirSync(cwd, { recursive: true })
-    const mcpServers = { jarvis: jarvisMcpServerDef() }
-    // Add direct filesystem access to the Obsidian vault when configured.
-    const fsDef = filesystemMcpServerDef()
-    if (fsDef) mcpServers.filesystem = fsDef
-    writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers }, null, 2), 'utf-8')
+    writeFileSync(join(cwd, '.mcp.json'), JSON.stringify(buildMcpConfig(), null, 2), 'utf-8')
   } catch {}
+}
+
+// Write the MCP config to a stable absolute path and return it, for passing to
+// the CLI via --mcp-config. This is the RELIABLE way to load MCP servers in
+// non-interactive --print mode: the older CWD-.mcp.json + enableAllProjectMcpServers
+// path stopped connecting on Claude CLI 2.1.216 (persistent voice sessions came
+// up with ZERO MCP tools — verified: no mcp child procs — so the voice brain
+// reported the 3D viewer, timers, nav, etc. all as "no disponible"). An explicit
+// --mcp-config file is honored deterministically, independent of project-trust.
+function writeMcpConfigFile() {
+  const cfgPath = join(tmpdir(), 'jarvis-session', 'mcp-config.json')
+  mkdirSync(dirname(cfgPath), { recursive: true })
+  writeFileSync(cfgPath, JSON.stringify(buildMcpConfig(), null, 2), 'utf-8')
+  return cfgPath
 }
 
 function buildLeanConfigDir({ withMcp, dirSuffix }) {
@@ -463,10 +483,20 @@ class ClaudeSession {
     // Sync credentials on every spawn so a renewed OAuth token (common in
     // long-running EXE processes) is picked up without a full restart.
     if (leanDir) syncAuthToDir(leanDir)
-    // Write the project-scoped .mcp.json into this session's CWD so the CLI
-    // actually loads the jarvis MCP server (it ignores mcpServers in
-    // settings.json). Only for the MCP-enabled session.
-    if (mcpDir) writeMcpProjectJson(this.cwd)
+    // Load the jarvis + filesystem MCP servers EXPLICITLY via --mcp-config +
+    // --strict-mcp-config. The legacy CWD-.mcp.json + enableAllProjectMcpServers
+    // approach silently loaded ZERO servers on CLI 2.1.216 in --print mode, so
+    // the voice brain had no tools ("el visor 3D no está disponible"). --strict
+    // means ONLY these servers load (the lean config dir has no others). Falls
+    // back to the CWD .mcp.json if writing the config file fails.
+    if (mcpDir) {
+      try {
+        const cfgPath = writeMcpConfigFile()
+        args.push('--mcp-config', cfgPath, '--strict-mcp-config')
+      } catch {
+        writeMcpProjectJson(this.cwd)
+      }
+    }
     const childEnv = Object.assign({}, process['env'])
     if (leanDir) childEnv['CLAUDE_CONFIG_DIR'] = leanDir
     // The persistent voice session needs a SMALL thinking budget so haiku

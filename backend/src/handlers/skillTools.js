@@ -36,14 +36,22 @@ let lastUiActionAt = 0
 export function getLastUiActionAt() { return lastUiActionAt }
 
 async function bridgeToBus(verb, payload, res) {
+  // Diagnostic (#T1): one line per tool→renderer verb so a single voice repro
+  // reveals whether Claude actually CALLED the tool (verb reaches here) and
+  // whether a renderer was connected to receive it. Pin "el visor no responde"
+  // to haiku-skipped-the-tool vs renderer-not-connected vs skill-bus-timeout.
   if (!skillBusHasClient()) {
+    console.warn(`[tool] ${verb} -> renderer_not_connected (interfaz no despierta)`)
     return json(res, 503, { ok: false, error: 'renderer_not_connected', detail: 'La interfaz no está despierta.' })
   }
+  const t0 = Date.now()
   try {
     const result = await skillBusRequest(verb, payload || {})
     lastUiActionAt = Date.now()
+    console.log(`[tool] ${verb} -> ok (${Date.now() - t0}ms)`)
     return json(res, 200, { ok: true, result })
   } catch (e) {
+    console.warn(`[tool] ${verb} -> skill_bus_failed after ${Date.now() - t0}ms: ${e.message}`)
     return json(res, 500, { ok: false, error: 'skill_bus_failed', detail: e.message })
   }
 }
