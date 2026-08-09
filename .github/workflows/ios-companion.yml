@@ -76,6 +76,10 @@ jobs:
           SIZE=$(stat -f%z jarvis-companion.ipa)
           DATE=$(date -u +%Y-%m-%d)
           TAG="${GITHUB_REF_NAME}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/jarvis-companion.ipa"
+          DESC="Cliente de Jarvis para iPhone: GUI remota, holograma de voz, widgets y reporte periodico de bateria/ubicacion/presencia."
+          # Both shapes on purpose: AltStore/SideStore 2.x read `versions[]`,
+          # older clients only understand the flat `version`/`downloadURL` pair.
           cat > jarvis-source.json <<JSON
           {
             "name": "Jarvis",
@@ -87,11 +91,21 @@ jobs:
                 "bundleIdentifier": "com.jarvis.companion",
                 "developerName": "Jarvis",
                 "subtitle": "Voz, widgets y reporte de rutina",
+                "localizedDescription": "${DESC}",
+                "versions": [
+                  {
+                    "version": "${VERSION}",
+                    "date": "${DATE}",
+                    "localizedDescription": "Build ${TAG} (${GITHUB_SHA})",
+                    "downloadURL": "${URL}",
+                    "size": ${SIZE},
+                    "minOSVersion": "17.0"
+                  }
+                ],
                 "version": "${VERSION}",
                 "versionDate": "${DATE}",
                 "versionDescription": "Build ${TAG} (${GITHUB_SHA})",
-                "downloadURL": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/jarvis-companion.ipa",
-                "localizedDescription": "Cliente de Jarvis para iPhone: GUI remota, holograma de voz, widgets y reporte periodico de bateria/ubicacion/presencia.",
+                "downloadURL": "${URL}",
                 "size": ${SIZE}
               }
             ]
