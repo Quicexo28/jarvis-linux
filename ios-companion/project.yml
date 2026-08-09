@@ -1,0 +1,126 @@
+# XcodeGen spec — the .xcodeproj is GENERATED, never committed.
+#
+# There is no Mac in this project: the sources live here, and the macOS runner in
+# .github/workflows/ios-companion.yml runs `xcodegen generate` before xcodebuild.
+# Editing the project therefore means editing THIS file, not a pbxproj blob.
+#
+# Two targets, and only two on purpose: a free Apple ID may only register 10 App
+# IDs per week and hold 3 sideloaded apps at a time, and every app extension eats
+# one App ID. So all three home-screen widgets live inside ONE widget extension
+# (see Sources/Widgets/JarvisWidgetBundle.swift).
+name: JarvisCompanion
+
+options:
+  bundleIdPrefix: com.jarvis
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # Swift 5 language mode: UIKit is main-actor annotated and this code touches
+    # it from delegate callbacks that iOS already delivers on the main thread.
+    SWIFT_STRICT_CONCURRENCY: minimal
+    # CI builds unsigned; SideStore re-signs on the phone with the user's own
+    # Apple ID. Never add DEVELOPMENT_TEAM here — it would pin the artifact to a
+    # team the runner does not have.
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGN_STYLE: Manual
+
+# Declared explicitly so `xcodebuild -scheme JarvisCompanion` always exists:
+# XcodeGen only emits schemes it is told about, and CI has no Xcode UI to make one.
+schemes:
+  JarvisCompanion:
+    build:
+      targets:
+        JarvisCompanion: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+
+targets:
+  JarvisCompanion:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/App
+      - path: Sources/Shared
+    dependencies:
+      - target: JarvisWidgets
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jarvis.companion
+        PRODUCT_NAME: Jarvis
+        INFOPLIST_KEY_CFBundleDisplayName: Jarvis
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+    info:
+      path: Sources/App/Info.plist
+      properties:
+        CFBundleDisplayName: Jarvis
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UIBackgroundModes:
+          # `location` is the whole reason the periodic report works at all: iOS
+          # has no foreground service, so staying alive in the background means
+          # holding a location session. `fetch`/`processing` are the opportunistic
+          # backup for when the user denies Always.
+          - location
+          - fetch
+          - processing
+          - audio
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.jarvis.companion.refresh
+        NSLocationWhenInUseUsageDescription: Jarvis usa tu ubicación para saber si estás en casa y adaptar su rutina.
+        NSLocationAlwaysAndWhenInUseUsageDescription: Con "Siempre", Jarvis puede seguir reportando tu llegada a casa con la app cerrada. Sin esto solo reporta mientras la app está abierta.
+        NSMicrophoneUsageDescription: El micrófono se usa para hablarle a Jarvis.
+        NSSpeechRecognitionUsageDescription: El dictado convierte tu voz en texto para enviárselo a Jarvis.
+        NSCameraUsageDescription: La cámara se usa para escanear el QR de emparejamiento.
+        ITSAppUsesNonExemptEncryption: false
+        LSApplicationQueriesSchemes:
+          # Without these, canOpenURL always answers false and the desktop tiles
+          # would think Moonlight is not installed.
+          - moonlight
+          - tailscale
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        CFBundleURLTypes:
+          # How the widgets talk back to the app: a tile has no way to call code
+          # in the container, only to open a URL.
+          - CFBundleURLName: com.jarvis.companion
+            CFBundleURLSchemes:
+              - jarvis
+        NSAppTransportSecurity:
+          # The backend is reached over Tailscale by plain http on :8788 as often
+          # as by https on :8443, and a tailnet IP can carry no public cert.
+          NSAllowsArbitraryLoads: true
+
+  JarvisWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/Widgets
+      - path: Sources/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jarvis.companion.widgets
+        PRODUCT_NAME: JarvisWidgets
+    info:
+      path: Sources/Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: Jarvis
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

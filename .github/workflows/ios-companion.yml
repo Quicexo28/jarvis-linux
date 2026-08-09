@@ -1,0 +1,119 @@
+name: iOS companion (IPA)
+
+# Builds the iPhone companion. There is no Mac in this project — this runner IS
+# the Mac. The repo is public, so macOS minutes are free here; on a private repo
+# the same job would burn the 10x macOS multiplier against the monthly quota.
+#
+# The artifact is UNSIGNED on purpose: SideStore re-signs it on the phone with
+# the user's own Apple ID, which means no certificate, no provisioning profile
+# and no Apple secret ever has to live in this repository.
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "ios-companion/**"
+      - ".github/workflows/ios-companion.yml"
+  pull_request:
+    paths:
+      - "ios-companion/**"
+  # `ios-v*` tags also publish a Release, which is what SideStore can install from.
+  create:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # `create` also fires when a branch is created; only tags are interesting.
+    if: github.event_name != 'create' || startsWith(github.ref, 'refs/tags/ios-v')
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios-companion
+        run: xcodegen generate --spec project.yml
+
+      - name: Build (unsigned)
+        working-directory: ios-companion
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project JarvisCompanion.xcodeproj \
+            -scheme JarvisCompanion \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package .ipa
+        working-directory: ios-companion
+        run: |
+          APP="build/Build/Products/Release-iphoneos/Jarvis.app"
+          test -d "$APP" || { echo "No app at $APP"; ls -R build/Build/Products; exit 1; }
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry jarvis-companion.ipa Payload
+          ls -lh jarvis-companion.ipa
+
+      - name: Write SideStore/AltStore source manifest
+        working-directory: ios-companion
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Payload/Jarvis.app/Info.plist)
+          SIZE=$(stat -f%z jarvis-companion.ipa)
+          DATE=$(date -u +%Y-%m-%d)
+          TAG="${GITHUB_REF_NAME}"
+          cat > jarvis-source.json <<JSON
+          {
+            "name": "Jarvis",
+            "identifier": "com.jarvis.source",
+            "subtitle": "Companion privado de Jarvis",
+            "apps": [
+              {
+                "name": "Jarvis",
+                "bundleIdentifier": "com.jarvis.companion",
+                "developerName": "Jarvis",
+                "subtitle": "Voz, widgets y reporte de rutina",
+                "version": "${VERSION}",
+                "versionDate": "${DATE}",
+                "versionDescription": "Build ${TAG} (${GITHUB_SHA})",
+                "downloadURL": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/jarvis-companion.ipa",
+                "localizedDescription": "Cliente de Jarvis para iPhone: GUI remota, holograma de voz, widgets y reporte periodico de bateria/ubicacion/presencia.",
+                "size": ${SIZE}
+              }
+            ]
+          }
+          JSON
+          cat jarvis-source.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-companion-ipa
+          path: |
+            ios-companion/jarvis-companion.ipa
+            ios-companion/jarvis-source.json
+          if-no-files-found: error
+          retention-days: 30
+
+      # A Release gives the .ipa a stable public URL, which is the only kind
+      # SideStore's source manifest can point at.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/ios-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ios-companion/jarvis-companion.ipa
+            ios-companion/jarvis-source.json
