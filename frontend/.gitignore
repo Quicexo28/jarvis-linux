@@ -27,3 +27,5 @@ dist-ssr
 public/models/*.task
 public/wasm/
 public/jarvis-companion.apk
+public/jarvis-companion.ipa
+public/jarvis-source.json

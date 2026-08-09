@@ -76,9 +76,18 @@ Sin permiso «Siempre» la app degrada sola: reporta solo mientras esté abierta
      `jarvis-source.json`.
 3. **Instalar**: abrir el `.ipa` con SideStore. Para actualizaciones
    automáticas, añadir la URL de `jarvis-source.json` como *fuente* en SideStore.
-   También sirve servirlo desde el propio Jarvis: copiar ambos archivos a
-   `frontend/public/` y apuntar SideStore a
-   `https://main-jarvis.tail361fcb.ts.net:8443/jarvis-source.json`.
+
+   **Ya está servido desde el propio Jarvis** — igual que el APK, los dos
+   archivos viven en `frontend/public/` (gitignored) y salen por:
+
+   ```
+   https://main-jarvis.tail361fcb.ts.net:8443/jarvis-source.json   ← fuente para SideStore
+   https://main-jarvis.tail361fcb.ts.net:8443/jarvis-companion.ipa ← descarga directa
+   ```
+
+   Ojo: el backend sirve `frontend/dist`, no `public/`. Tras reemplazar el
+   `.ipa` hay que correr `npm run build` en `frontend/` o el archivo viejo se
+   sigue sirviendo.
 4. **Emparejar**: abrir la app y pegar el enlace del QR de Jarvis (trae URL y
    token juntos). «Probar conexión» distingue *el portátil no responde* de *el
    token no sirve* — desde el teléfono los dos fallos se parecen.
