@@ -62,15 +62,22 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jarvis.companion
         PRODUCT_NAME: Jarvis
-        INFOPLIST_KEY_CFBundleDisplayName: Jarvis
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     info:
       path: Sources/App/Info.plist
       properties:
         CFBundleDisplayName: Jarvis
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # An empty dict asks iOS for its generated launch screen. It has to live
+        # HERE and not as an INFOPLIST_KEY_ build setting: those only apply when
+        # Xcode synthesises the plist, and this target supplies its own — without
+        # it the app launches letterboxed in compatibility mode on a modern phone.
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UIBackgroundModes:
           # `location` is the whole reason the periodic report works at all: iOS
           # has no foreground service, so staying alive in the background means
