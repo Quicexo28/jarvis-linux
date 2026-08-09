@@ -13,17 +13,19 @@ Código en `ios-companion/`. Nada de Xcode local: el proyecto se describe en
 
 ## 1. Los tres muros de iOS (y qué se hizo con cada uno)
 
-### Firma: cuenta gratuita + SideStore
+### Firma: cuenta gratuita + AltStore (AltServer en `main`)
 
 Un `.ipa` no se instala solo. Con **Apple ID gratuito**:
 
-- El certificado dura **7 días** → SideStore lo refresca en el propio iPhone
-  (túnel WireGuard local, sin PC).
+- El certificado dura **7 días** → AltStore lo refirma solo mientras AltServer
+  corra en `main` y el iPhone esté en la misma WiFi. (SideStore hace lo mismo sin
+  PC, con un túnel WireGuard local; se descartó porque su emparejamiento inicial
+  también exige un ordenador y `main` ya está disponible.)
 - Máximo **3 apps** sideloadeadas y **10 App IDs por semana**. La app + la
-  extensión de widgets consumen **2**.
+  extensión de widgets consumen **2**, y AltStore ocupa otra plaza de app.
 - **No hay App Groups, ni push (APNs), ni iCloud**: son entitlements de pago.
 
-Por eso el binario **no declara ningún entitlement** — así SideStore lo firma sin
+Por eso el binario **no declara ningún entitlement** — así se firma sin
 fallar. Consecuencia concreta y única: la extensión de widgets **no puede leer el
 token de la app**, así que los widgets que necesitan red llevan su propio campo
 «Enlace de emparejamiento» (mantener pulsado el widget → *Editar widget*). El
@@ -68,34 +70,49 @@ Sin permiso «Siempre» la app degrada sola: reporta solo mientras esté abierta
 
 ## 2. Instalación
 
-1. **En el iPhone**: instalar SideStore (o AltStore) y emparejarlo con el Apple
-   ID gratuito. SideStore necesita su archivo de emparejamiento una sola vez.
-2. **Obtener el .ipa**:
-   - Artifact del workflow (`Actions` → *iOS companion (IPA)* → `jarvis-companion-ipa`), o
-   - un tag `ios-v1.0` → el workflow publica un **Release** con el `.ipa` y un
-     `jarvis-source.json`.
-3. **Instalar**: abrir el `.ipa` con SideStore. Para actualizaciones
-   automáticas, añadir la URL de `jarvis-source.json` como *fuente* en SideStore.
+**La firma se hace desde Windows `main`, no desde el portátil Linux.** AltServer
+solo existe para Windows y macOS; en Linux habría que montar `usbmuxd` +
+`AltServer-Linux`/`Sideloader` a mano, y `main` ya está ahí. El portátil solo
+sirve los archivos.
 
-   **Ya está servido desde el propio Jarvis** — igual que el APK, los dos
-   archivos viven en `frontend/public/` (gitignored) y salen por:
+0. **En `main` (una vez)**: instalar **iTunes** e **iCloud** descargados de
+   `apple.com`, **no** de la Microsoft Store — las versiones de la Store están
+   en sandbox y AltServer no alcanza sus DLLs. Después, AltServer desde
+   `altstore.io`.
+1. **Emparejar**: iPhone por USB a `main` → «Confiar en este ordenador» →
+   bandeja de Windows → AltServer → *Install AltStore* → elegir el iPhone →
+   Apple ID + contraseña (el 2FA sale ahí). En el iPhone: *Ajustes → General →
+   VPN y gestión de dispositivos* → confiar en el certificado.
+2. **Instalar Jarvis** (con Tailscale encendido en el iPhone): AltStore →
+   *Sources* → `+` → pegar
 
    ```
-   https://main-jarvis.tail361fcb.ts.net:8443/jarvis-source.json   ← fuente para SideStore
-   https://main-jarvis.tail361fcb.ts.net:8443/jarvis-companion.ipa ← descarga directa
+   https://main-jarvis.tail361fcb.ts.net:8443/jarvis-source.json
    ```
 
-   Ojo: el backend sirve `frontend/dist`, no `public/`. Tras reemplazar el
-   `.ipa` hay que correr `npm run build` en `frontend/` o el archivo viejo se
-   sigue sirviendo.
-4. **Emparejar**: abrir la app y pegar el enlace del QR de Jarvis (trae URL y
+   → *Browse* → Jarvis → **Free**. Alternativa sin fuente: abrir
+   `…:8443/jarvis-companion.ipa` en Safari y compartirlo a AltStore.
+
+   Los archivos salen de `frontend/public/` (gitignored, igual que el APK):
+   `jarvis-companion.ipa`, `jarvis-source.json`, `jarvis-icon.png`. **Ojo: el
+   backend sirve `frontend/dist`, no `public/`** — tras reemplazar el `.ipa`
+   hay que correr `npm run build` en `frontend/` o se sigue sirviendo el viejo.
+
+   El mismo `.ipa` sale como artifact del workflow, y un tag `ios-v1.0` publica
+   además un **Release** de GitHub con su propio `jarvis-source.json`.
+
+   **Refresco de los 7 días**: con AltServer corriendo en `main` y el iPhone en
+   la misma WiFi, AltStore refirma solo. Si caduca, la app no abre hasta
+   refrescarla — los datos no se pierden.
+3. **Emparejar**: abrir la app y pegar el enlace del QR de Jarvis (trae URL y
    token juntos). «Probar conexión» distingue *el portátil no responde* de *el
    token no sirve* — desde el teléfono los dos fallos se parecen.
-5. **Permisos**: Ubicación → **Siempre** (iOS lo pide en dos pasos, primero
+4. **Permisos**: Ubicación → **Siempre** (iOS lo pide en dos pasos, primero
    «Mientras se usa»), micrófono y reconocimiento de voz para el holograma.
-
-> Cada 7 días SideStore vuelve a firmar. Si se pasa el plazo la app deja de
-> abrir; no se pierden datos, se refresca y ya.
+5. **Widgets**: mantener pulsada la pantalla → `+` → Jarvis. En «Jarvis» y
+   «Escritorio», mantener pulsado el widget → *Editar widget* → pegar el mismo
+   enlace del QR (la cuenta gratuita no permite App Groups, ver §1). El de
+   Tailscale funciona sin configurar nada.
 
 ---
 
