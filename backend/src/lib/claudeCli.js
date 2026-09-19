@@ -1,10 +1,21 @@
-import { spawn } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import { mkdirSync, writeFileSync, readdirSync, existsSync, rmSync, linkSync, copyFileSync, statSync, readFileSync, watch } from 'fs'
 import { tmpdir, homedir } from 'os'
+import { randomUUID } from 'crypto'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import { kvGet, kvSet } from './turnStore.js'
+import { voiceDisallowedTools } from './voiceTools.js'
 
-const CLAUDE_CMD = process.platform === 'win32' ? 'claude.cmd' : 'claude'
+// Which `claude` binary to spawn. Overridable because the npm-installed one can
+// be unusable on a given machine while a different build of the SAME version
+// works: 2.1.243's glibc binary segfaults at startup on glibc 2.44 (crash inside
+// free() called from __newlocale — nothing to do with Jarvis, `claude --version`
+// dies too), and the musl build of the same version runs fine. Pointing this at
+// a working binary is how Jarvis stays on a new release instead of pinning an
+// old one.
+const CLAUDE_CMD = process['env']['JARVIS_CLAUDE_BIN']
+  || (process.platform === 'win32' ? 'claude.cmd' : 'claude')
 
 // Test/offline short-circuit: when JARVIS_FAKE_CLAUDE is set, never spawn the
 // real CLI — return a canned reply instantly. Contract tests assert response
@@ -360,6 +371,7 @@ export function runClaude(userMessage, opts = {}) {
     model = 'haiku',
     fallbackReply = 'No tengo respuesta en este momento.',
     namespace = 'jarvis-turn',
+    multiline = false,
   } = opts
 
   if (FAKE_CLAUDE()) return Promise.resolve(FAKE_REPLY)
@@ -412,7 +424,12 @@ export function runClaude(userMessage, opts = {}) {
 
     proc.on('close', (code) => {
       clearTimeout(timer)
-      const text = out.trim().split('\n').pop()?.trim()
+      // Default keeps the historical behavior: take the LAST line, which drops
+      // any CLI noise printed before a one-line answer. Callers whose answer is
+      // itself multi-line (JSON blocks, lists) must pass multiline:true or they
+      // silently receive only the final character line — e.g. a pretty-printed
+      // array arrived as "]".
+      const text = multiline ? out.trim() : out.trim().split('\n').pop()?.trim()
       if (!text) console.warn(`[${namespace}] empty stdout. exit=${code} stderr:`, err.slice(0, 200))
       resolve(text || fallbackReply)
     })
@@ -437,14 +454,90 @@ function hashStr(s) {
   return Math.abs(h)
 }
 
+// Session continuity is opt-out: JARVIS_SESSION_RESUME=0 restores the old
+// behavior (every respawn starts a blank conversation).
+const SESSION_RESUME = () => process['env']['JARVIS_SESSION_RESUME'] !== '0'
+// Auto-compaction window for the long-lived voice sessions. The CLI compacts
+// its own history instead of growing until the context blows up. 'auto' lets
+// the CLI pick; a token count (100k–1M) pins it.
+const SESSION_AUTOCOMPACT = () => process['env']['JARVIS_SESSION_AUTOCOMPACT'] || 'auto'
+
+// Does the `claude` on this machine understand a given flag? The binary is NOT
+// pinned to the code: the service PATH resolves one install (/usr/bin/claude ->
+// /opt, frozen with DISABLE_UPDATES=1) while an interactive shell may resolve a
+// much newer one, and JARVIS_CLAUDE_BIN can point anywhere. Passing a flag the
+// binary never heard of is FATAL: commander aborts before the session starts,
+// the CLI dies ~350 ms in, every turn falls back to "no tengo respuesta", and
+// (worse, silently) the <5 s death trips the resumeBroken path, so the session
+// id rotates and the conversation is lost on each boot. `--autocompact` did
+// exactly that against 2.1.220. One cached `--help` (~230 ms, paid once at
+// warmup) buys immunity in BOTH directions -- older or newer binary.
+const flagSupport = new Map()
+function cliSupportsFlag(flag) {
+  if (flagSupport.has(flag)) return flagSupport.get(flag)
+  let ok = false
+  try {
+    const r = spawnSync(CLAUDE_CMD, ['--help'], { encoding: 'utf-8', timeout: 15000 })
+    const help = `${r.stdout || ''}${r.stderr || ''}`
+    // No output at all means the probe itself failed (missing binary, timeout).
+    // Treat that as "unknown" rather than caching a false negative forever.
+    if (!help.trim()) { console.warn(`[jarvis-session] flag probe got no output from ${CLAUDE_CMD}`); return false }
+    ok = help.includes(flag)
+    if (!ok) console.warn(`[jarvis-session] ${CLAUDE_CMD} does not support ${flag} — omitting it`)
+  } catch (e) {
+    console.warn(`[jarvis-session] flag probe failed for ${flag}: ${e?.message || e}`)
+    return false
+  }
+  flagSupport.set(flag, ok)
+  return ok
+}
+
+/**
+ * Recover a previously used session UUID.
+ * `restored` distinguishes "this transcript already exists on disk, RESUME it"
+ * from "brand new, CLAIM it with --session-id". Getting that backwards is what
+ * made the conversation survive a CLI crash but not a backend restart: a fresh
+ * process would re-claim the saved id as if it were new.
+ * @returns {{id: string, restored: boolean}}
+ */
+function restoreSessionId(sessionKey) {
+  if (!sessionKey || !SESSION_RESUME()) return { id: randomUUID(), restored: false }
+  try {
+    const saved = kvGet(`session:${sessionKey}`)
+    if (saved) return { id: saved, restored: true }
+  } catch {}
+  const fresh = randomUUID()
+  try { kvSet(`session:${sessionKey}`, fresh) } catch {}
+  return { id: fresh, restored: false }
+}
+
+function persistSessionId(sessionKey, id) {
+  if (!sessionKey || !id) return
+  try { kvSet(`session:${sessionKey}`, id) } catch {}
+}
+
 class ClaudeSession {
-  constructor(systemPromptText, model) {
+  constructor(systemPromptText, model, sessionKey = '') {
     this.model = model
     this.queue = []
     this.current = null
     this.buf = ''
     this.proc = null
     this.alive = false
+    // Conversation continuity across process death. The CLI owns the history,
+    // so before this a crashed/killed session respawned EMPTY and silently —
+    // Jarvis just started forgetting mid-conversation with nothing in the log.
+    // We pin a stable UUID with --session-id on first spawn and --resume it
+    // afterwards, so the transcript survives the process. The id is persisted
+    // so it also survives a backend restart.
+    this.sessionKey = sessionKey
+    const restored = restoreSessionId(sessionKey)
+    this.sessionId = restored.id
+    // A restored id already has a transcript on disk, so the very first spawn
+    // must RESUME rather than claim it.
+    this.hasSpawned = restored.restored
+    this.resumeBroken = false
+    this.spawnedAt = 0
     // The filesystem MCP server scopes file access to the MCP "roots" the Claude
     // CLI advertises, which it derives from its CWD (+ any --add-dir) — and roots
     // REPLACE the dirs we pass as argv (server-filesystem
@@ -469,6 +562,29 @@ class ClaudeSession {
       '--dangerously-skip-permissions', '--model', this.model,
       '--system-prompt-file', this.promptPath,
     ]
+    // Pin the conversation to a stable id. FIRST spawn claims it with
+    // --session-id; every later spawn RESUMES it, so a killed/crashed CLI comes
+    // back knowing what was already said instead of silently starting over.
+    // Verified end-to-end: a fact stated in one process is recalled by a fresh
+    // process resuming the same id. If a resume ever fails (corrupt or pruned
+    // transcript), resumeBroken flips and we fall back to a clean session.
+    if (SESSION_RESUME()) {
+      if (this.hasSpawned && !this.resumeBroken) args.push('--resume', this.sessionId)
+      else args.push('--session-id', this.sessionId)
+      // Bound the transcript so a session that lives for days compacts itself
+      // instead of growing until it blows the context window. Only if the
+      // installed CLI knows the flag — an unknown one kills the session outright.
+      if (cliSupportsFlag('--autocompact')) args.push('--autocompact', SESSION_AUTOCOMPACT())
+    }
+    this.hasSpawned = true
+    this.spawnedAt = Date.now()
+    // What the voice session may NOT touch — built-ins that bypass the risk gate
+    // plus MCP tools that belong to Claude Code, not to a spoken turn. The list
+    // and the reason for each entry live in lib/voiceTools.js, next to the drift
+    // guard that keeps it in sync with the system prompt.
+    const disallowed = voiceDisallowedTools()
+    if (disallowed) args.push('--disallowedTools', disallowed)
+
     // Extra filesystem roots beyond the CWD (e.g. Jarvis's own code dir when the
     // vault is the CWD). The Claude CLI advertises CWD + every --add-dir as MCP
     // roots, which the filesystem server uses as its allowed directories.
@@ -515,7 +631,11 @@ class ClaudeSession {
     this.alive = true
     this.buf = ''
     proc.stdout.on('data', (d) => this._onData(String(d)))
-    proc.stderr.on('data', () => {})
+    // Keep the tail of stderr. It used to be dropped entirely, which meant an
+    // exiting session left NO explanation anywhere — the only symptom was Jarvis
+    // quietly losing the conversation.
+    this.errTail = ''
+    proc.stderr.on('data', (d) => { this.errTail = (this.errTail + String(d)).slice(-600) })
     proc.on('exit', () => this._onExit())
     proc.on('error', () => this._onExit())
   }
@@ -523,6 +643,23 @@ class ClaudeSession {
   _onExit() {
     this.alive = false
     this.proc = null
+    // A resume that dies almost immediately means the transcript is unusable
+    // (pruned, corrupt, or written by an incompatible CLI). Retrying it forever
+    // would leave the voice permanently broken, so give up on resuming ONCE and
+    // continue with a fresh session id.
+    const upMs = Date.now() - this.spawnedAt
+    if (SESSION_RESUME() && !this.resumeBroken && upMs < 5000) {
+      this.resumeBroken = true
+      this.sessionId = randomUUID()
+      persistSessionId(this.sessionKey, this.sessionId)
+      console.warn(
+        `[jarvis-session] ${this.model} died ${upMs}ms after spawn — new session id.` +
+        (this.errTail ? ` stderr: ${this.errTail.trim().slice(-300)}` : ' (no stderr)')
+      )
+    } else if (upMs < 60000) {
+      console.warn(`[jarvis-session] ${this.model} exited after ${upMs}ms` +
+        (this.errTail ? ` — stderr: ${this.errTail.trim().slice(-300)}` : ''))
+    }
     if (this.current) {
       const c = this.current
       this.current = null
@@ -554,20 +691,85 @@ class ClaudeSession {
         }
         continue
       }
+      // Which tools the model actually called this turn, and which of them
+      // FAILED. Both were invisible before: the turn only ever surfaced the
+      // spoken text, so "said it did it but didn't" was indistinguishable from
+      // "did it" without reading journald by hand.
+      if (msg.type === 'assistant' && this.current) {
+        const blocks = msg.message?.content
+        if (Array.isArray(blocks)) {
+          for (const b of blocks) {
+            if (b?.type === 'tool_use' && b.name) {
+              this.current.tools.push(b.name)
+              // The INPUT is what makes a postcondition checkable: knowing
+              // open_view ran says nothing, knowing it ran with {view:'plan3d'}
+              // lets us ask the renderer whether plan3d is actually on screen.
+              this.current.toolCalls.push({ name: b.name, input: b.input ?? null })
+              if (b.id) this.current.toolNames.set(b.id, b.name)
+            }
+          }
+        }
+        continue
+      }
+      if (msg.type === 'user' && this.current) {
+        const blocks = msg.message?.content
+        if (Array.isArray(blocks)) {
+          for (const b of blocks) {
+            if (b?.type === 'tool_result' && b.is_error) {
+              const name = this.current.toolNames.get(b.tool_use_id) || 'unknown'
+              const detail = typeof b.content === 'string'
+                ? b.content
+                : JSON.stringify(b.content ?? '')
+              this.current.toolErrors.push(`${name}: ${String(detail).slice(0, 200)}`)
+            }
+          }
+        }
+        continue
+      }
       if (msg.type === 'result' && this.current) {
         const c = this.current
         this.current = null
         clearTimeout(c.timer)
         const resultText = typeof msg.result === 'string' ? msg.result.trim() : ''
+        // The CLI reports the real session id it used (a resume can hand back a
+        // different one after a fork); persist it so the NEXT spawn resumes the
+        // conversation that actually exists.
+        if (msg.session_id && msg.session_id !== this.sessionId) {
+          this.sessionId = msg.session_id
+        }
+        persistSessionId(this.sessionKey, this.sessionId)
+        if (c.onMeta) {
+          const u = msg.usage || {}
+          try {
+            c.onMeta({
+              sessionId: this.sessionId,
+              model: this.model,
+              tools: c.tools,
+              toolCalls: c.toolCalls,
+              toolErrors: c.toolErrors,
+              isError: !!msg.is_error,
+              costUsd: typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : null,
+              durationMs: msg.duration_ms ?? null,
+              ttftMs: msg.ttft_ms ?? null,
+              numTurns: msg.num_turns ?? null,
+              inTokens: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) +
+                        (u.cache_creation_input_tokens ?? 0),
+              outTokens: u.output_tokens ?? 0,
+            })
+          } catch {}
+        }
         c.resolve(resultText || (c.acc || '').trim() || c.fallbackReply)
         this._pump()
       }
     }
   }
 
-  ask(message, timeoutMs, fallbackReply, onText = null) {
+  ask(message, timeoutMs, fallbackReply, onText = null, onMeta = null) {
     return new Promise((resolve) => {
-      this.queue.push({ message, timeoutMs, fallbackReply, resolve, timer: null, onText, acc: '' })
+      this.queue.push({
+        message, timeoutMs, fallbackReply, resolve, timer: null, onText, onMeta,
+        acc: '', tools: [], toolCalls: [], toolErrors: [], toolNames: new Map(),
+      })
       this._pump()
     })
   }
@@ -584,6 +786,14 @@ class ClaudeSession {
       try { this.proc?.kill() } catch {}
       this.alive = false
       console.warn('[jarvis-session] timeout — respawning')
+      if (item.onMeta) {
+        try {
+          item.onMeta({
+            sessionId: this.sessionId, model: this.model, tools: item.tools,
+            toolErrors: item.toolErrors, isError: true, error: `timeout after ${item.timeoutMs}ms`,
+          })
+        } catch {}
+      }
       item.resolve(item.fallbackReply)
       this._pump()
     }, item.timeoutMs)
@@ -625,9 +835,9 @@ export function sessionAsk(userMessage, opts = {}) {
   if (FAKE_CLAUDE()) return Promise.resolve(FAKE_REPLY)
   const key = `${model}::${hashStr(systemPromptText)}`
   let sess = sessions.get(key)
-  if (!sess) { sess = new ClaudeSession(systemPromptText, model); sessions.set(key, sess) }
+  if (!sess) { sess = new ClaudeSession(systemPromptText, model, key); sessions.set(key, sess) }
   const message = extraContext ? `${extraContext}\n\nUsuario: ${userMessage}` : userMessage
-  return sess.ask(message, timeoutMs, fallbackReply)
+  return sess.ask(message, timeoutMs, fallbackReply, null, opts.onMeta ?? null)
 }
 
 /**
@@ -653,9 +863,9 @@ export function sessionAskStream(userMessage, opts = {}, onText = null) {
   if (FAKE_CLAUDE()) { if (onText) { try { onText(FAKE_REPLY) } catch {} } return Promise.resolve(FAKE_REPLY) }
   const key = `${model}::${hashStr(systemPromptText)}`
   let sess = sessions.get(key)
-  if (!sess) { sess = new ClaudeSession(systemPromptText, model); sessions.set(key, sess) }
+  if (!sess) { sess = new ClaudeSession(systemPromptText, model, key); sessions.set(key, sess) }
   const message = extraContext ? `${extraContext}\n\nUsuario: ${userMessage}` : userMessage
-  return sess.ask(message, timeoutMs, fallbackReply, onText)
+  return sess.ask(message, timeoutMs, fallbackReply, onText, opts.onMeta ?? null)
 }
 
 /**
@@ -669,7 +879,7 @@ export function warmSession(systemPromptText, model = 'haiku') {
   if (FAKE_CLAUDE()) return
   const key = `${model}::${hashStr(systemPromptText)}`
   if (sessions.has(key)) return
-  const sess = new ClaudeSession(systemPromptText, model)
+  const sess = new ClaudeSession(systemPromptText, model, key)
   sessions.set(key, sess)
   // Prime: fire one tiny turn so the cold-start completes now, not on turn 1.
   // Discarded; failures are non-fatal.
