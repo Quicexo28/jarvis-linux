@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Static stand-in for the hologram, used only in the widget picker (the real
+     one is a Canvas bitmap and cannot be a drawable resource). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="72dp" android:height="72dp"
+    android:viewportWidth="72" android:viewportHeight="72">
+    <path android:fillColor="#FF080D15"
+        android:pathData="M8,0 L64,0 A8,8 0 0,1 72,8 L72,64 A8,8 0 0,1 64,72 L8,72 A8,8 0 0,1 0,64 L0,8 A8,8 0 0,1 8,0 Z" />
+    <path android:strokeColor="#3300E5FF" android:strokeWidth="1" android:fillColor="#00000000"
+        android:pathData="M36,36 m-27,0 a27,27 0 1,0 54,0 a27,27 0 1,0 -54,0" />
+    <path android:strokeColor="#8000E5FF" android:strokeWidth="1.6" android:fillColor="#00000000"
+        android:pathData="M36,36 m-19,0 a19,19 0 1,0 38,0 a19,19 0 1,0 -38,0" />
+    <path android:strokeColor="#FF00E5FF" android:strokeWidth="2.6" android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M55,36 A19,19 0 0,1 43,53.8" />
+    <path android:fillColor="#4D0059FF"
+        android:pathData="M36,36 m-11,0 a11,11 0 1,0 22,0 a11,11 0 1,0 -22,0" />
+    <path android:fillColor="#FF66FCFF"
+        android:pathData="M36,36 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0" />
+</vector>

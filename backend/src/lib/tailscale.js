@@ -12,6 +12,26 @@ export function getTailscaleIp() {
 }
 
 /**
+ * MagicDNS name of this machine (`main-jarvis.tail361fcb.ts.net`), or null.
+ * Hace falta cuando el destino tiene un certificado de `tailscale cert`: ese
+ * cert solo vale para el nombre, asi que entrar por la IP da aviso de
+ * seguridad aunque la conexion sea la misma.
+ */
+export function getTailscaleHostname() {
+  return new Promise((resolve) => {
+    execFile('tailscale', ['status', '--json'], { timeout: 2000 }, (err, stdout) => {
+      if (err) return resolve(null)
+      try {
+        const dns = JSON.parse(stdout)?.Self?.DNSName
+        resolve(dns ? dns.replace(/\.$/, '') : null)
+      } catch {
+        resolve(null)
+      }
+    })
+  })
+}
+
+/**
  * HTTPS URL published by `tailscale serve` for this backend port, or null.
  * Only trusted when the serve config actually proxies our port — a stale
  * serve entry for another service must not hijack the QR URL.

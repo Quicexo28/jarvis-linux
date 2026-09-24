@@ -124,4 +124,63 @@ export const PINCH_SCALE_MULTIPLIER = 2.0
 export const PINCH_APPROACH_DISTANCE = 3.0
 export const PINCH_DISSOLVE_START = 0.7
 export const PINCH_VIGNETTE_START = 0.5
-export const RING_DRAG_SENSITIVITY = 4.0
+/**
+ * Arrastre del carrusel: SLOTS por unidad de `grab.deltaX` (deltaX 1.0 = mover
+ * la mano de un borde al otro del encuadre, ya normalizado por tamaño de palma).
+ * Con 7, un gesto cómodo de ~1/3 del encuadre mueve ~2,3 de los 6 slots y la
+ * vuelta completa cabe en un solo barrido. Era 4.0 cuando el valor se integraba
+ * a través de EMA + zona muerta + exponente, que se comían la mayor parte del
+ * recorrido; con el arrastre absoluto la ganancia llega entera, así que este
+ * número es ahora literal — subirlo mueve MÁS anillo por el mismo gesto.
+ */
+export const RING_DRAG_SENSITIVITY = 7.0
+
+// --- Tap: clic con la MISMA mano que apunta (pulgar toca el índice) ---
+// El "V abierta soltada" (DiscreteTracker) sigue existiendo, pero como clic de
+// menú tiene tres problemas: cuesta ≥150 ms de hold MÁS la transición de pose,
+// no dice QUÉ se pulsa (siempre entra al slot enfocado) y obliga a cambiar la
+// mano entera de forma. El tap pinza se hace SIN dejar de apuntar: el cursor no
+// se mueve y el objetivo bajo el cursor es el que recibe el evento.
+// Umbrales sobre la MISMA `aperture` del pinch derecho (dist3D pulgar-índice /
+// palma): contacto ≈ 0.3-0.45, pointing normal con el pulgar recogido ≈ 0.7-1.0.
+export const TAP_ENTER_APERTURE = 0.45
+export const TAP_EXIT_APERTURE = 0.62
+/** Frames consecutivos bajo el umbral para bajar el "botón" (anti-blip). */
+export const TAP_STABLE_FRAMES = 1
+/** Presión más corta que esto = ruido de landmarks, no un clic. */
+export const TAP_MIN_PRESS_MS = 50
+/** Separación mínima entre clics — evita el doble disparo al soltar temblando. */
+export const TAP_COOLDOWN_MS = 220
+/** Apertura del tap: el filtro más RÁPIDO del sistema, y a propósito. Un clic
+ * es un escalón corto, no una trayectoria: con los parámetros del pinch
+ * (beta 0.25) el contacto tardaba 3 muestras (~150 ms) en cruzar el umbral y el
+ * botón se sentía pastoso. Con minCutoff/beta altos engancha en la muestra
+ * siguiente al contacto, y el ruido lo para la histéresis 0.45/0.62 — que en
+ * unidades de palma es enorme comparada con el jitter de los landmarks. */
+export const EURO_TAP = { minCutoff: 3.0, beta: 3.0, dCutoff: 1.0 }
+
+// --- Puntero: precisión y latencia ---
+/** Mientras el tap está presionado el puntero se mueve a esta fracción de su
+ * ganancia normal, anclado al punto de presión: permite arrastrar (slider,
+ * ring) sin que el propio gesto de cerrar la pinza desvíe el cursor. */
+export const POINTER_FINE_GAIN = 0.45
+/** Adelanto predictivo (ms) aplicado por el CONSUMIDOR con la velocidad del
+ * puntero. El pipeline corre a ~20 Hz y One-Euro añade su propio retardo; sin
+ * esto el cursor va perceptiblemente "detrás" de la mano. Es extrapolación
+ * lineal: pasarse produce sobreimpulso al frenar, de ahí el tope. */
+export const POINTER_LEAD_MS = 55
+/** Tope del adelanto en fracción de pantalla (evita el overshoot al frenar). */
+export const POINTER_LEAD_MAX = 0.05
+
+// --- Cursor de mano sobre la interfaz (hooks/useGestureCursor) ---
+/** Radio (px) dentro del cual el cursor se IMANTA al objetivo más cercano.
+ * Apuntar con la mano tiene un error de varios píxeles y los botones del HUD
+ * miden ~30 px de alto: sin imán, la ley de Fitts hace el menú inusable. */
+export const CURSOR_MAGNET_RADIUS = 46
+/** Histéresis: el objetivo ya enganchado conserva prioridad hasta este radio.
+ * Sin ella, el cursor entre dos botones contiguos parpadea entre ambos. */
+export const CURSOR_MAGNET_STICKY = 72
+/** Clic por permanencia (fallback si el tap no engancha). 0 = desactivado. */
+export const CURSOR_DWELL_MS = 1100
+/** Movimiento (px) que cancela el dwell en curso. */
+export const CURSOR_DWELL_CANCEL_PX = 38

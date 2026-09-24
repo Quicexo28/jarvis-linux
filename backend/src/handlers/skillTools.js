@@ -16,7 +16,9 @@ import { addReminder, listReminders } from '../lib/reminders.js'
 import { getCurrentState, getDevices, summarizeDay } from '../lib/mobileContext.js'
 import { notifyJarvis, saveToCloud, listCloudFiles } from '../lib/cloudStorage.js'
 import { runCommand, gitCheckpoint, gitRollback, scheduleRestart } from '../lib/selfCode.js'
+import { startDevJob, getDevJob, listDevJobs, getActiveJob, getDevJobLog, cancelDevJob } from '../lib/devAgent.js'
 import { getSpeakerMode } from '../lib/speakerContext.js'
+import { agentRpc } from './agents.js'
 import { requireCodeAuth } from '../lib/codeAuth.js'
 import {
   writeTask,
@@ -223,7 +225,7 @@ export async function handleNotifyNow(req, res) {
 
 /* ----- VIEW / NAVIGATION ----- */
 
-const VALID_VIEWS = ['home','house','plan2d','plan3d','space','cloud','system','mobile','utils','timer','chrono']
+const VALID_VIEWS = ['home','house','plan2d','plan3d','space','cloud','system','mobile','utils','timer','chrono','vault']
 const VALID_OVERLAYS = ['terminal','gesture_debug','clap_trainer','speaker_config']
 
 export async function handleViewOpen(req, res) {
@@ -402,6 +404,19 @@ export async function handleObsidianPersonalize(req, res) {
   }, res)
 }
 
+/* ----- VAULT GRAPH ----- */
+
+// El GRAFO se sirve desde handlers/knowledge.js (solo lee disco + SQLite); esto
+// es lo único que necesita al renderer, y por eso vive aquí: `bridgeToBus` es
+// privado de este módulo. Enfoca un nodo del visor 3D del modo `vault`.
+export async function handleVaultFocus(req, res) {
+  return withBody(req, (body) => {
+    const node = String(body.node || '').trim()
+    if (!node) return json(res, 400, { ok: false, error: 'missing_node' })
+    return bridgeToBus('vault_focus', { node }, res)
+  }, res)
+}
+
 /* ----- DISPLAY / PICKER ----- */
 
 // Timestamp of the last successful display_show request. speech.js reads it to
@@ -421,6 +436,25 @@ export async function handleDisplayShow(req, res) {
   }, res)
 }
 
+/**
+ * POST /api/skills/speech/say { text }
+ *
+ * Backend-initiated speech. Until this existed the backend could only WRITE to
+ * the screen: proactive notices and the verifier's corrections had no voice.
+ * Goes through the renderer's own speak() (see frontend skills/speakBridge.ts),
+ * so it inherits the abort + echo-gate handling a normal reply gets — a second
+ * audio path would make Jarvis hear itself and answer.
+ */
+export async function handleSpeechSay(req, res) {
+  return withBody(req, (body) => {
+    const text = String(body?.text ?? '').trim()
+    if (!text) return json(res, 400, { ok: false, error: 'missing_text' })
+    if (text.length > 600) return json(res, 400, { ok: false, error: 'text_too_long' })
+    console.log(`[speak] "${text.slice(0, 60)}"`)
+    return bridgeToBus('speak_text', { text }, res)
+  }, res)
+}
+
 export async function handleDisplayHide(req, res) {
   return withBody(req, () => bridgeToBus('display_hide', {}, res), res)
 }
@@ -436,19 +470,54 @@ export async function handlePickFile(req, res) {
 
 /* ----- MODEL 3D ----- */
 
-const VALID_3D_KINDS = ['parametric', 'polytope', 'implicit', 'primitive', 'curve', 'graph', 'vectors', 'plane', 'line']
+const VALID_3D_KINDS = ['parametric', 'polytope', 'implicit', 'primitive', 'curve', 'graph', 'vectors', 'plane', 'line', 'polygon', 'simulation']
+const VALID_SIM_SYSTEMS = ['nbody', 'blackhole', 'dynamics', 'field', 'ode']
 const KIND_DETAIL = `each spec.kind must be one of: ${VALID_3D_KINDS.join(', ')}`
 
 // Accepts a single spec ({kind:...}) or a multi-object scene ({objects:[...]} /
 // legacy {specs:[...]}). Kind validation only — geometry params are validated
 // leniently by the renderer, which degrades gracefully on bad math.
-function validateModel3dBody(body, res, verb) {
+export function validateModel3dBody(body, res, verb) {
   const list = Array.isArray(body?.objects) ? body.objects
     : Array.isArray(body?.specs) ? body.specs
     : [body]
   if (!list.length) return json(res, 400, { ok: false, error: 'empty_objects' })
   const invalid = list.find((s) => !VALID_3D_KINDS.includes(s?.kind))
   if (invalid) return json(res, 400, { ok: false, error: 'invalid_kind', detail: KIND_DETAIL })
+  // Un politopo tiene 2^n vertices y el constructor del renderer LANZA fuera de
+  // 2-7. Dejar pasar un `dimension: 20` (el modelo lo pide de vez en cuando)
+  // reventaba el arbol de React del visor, o sea ventana EN BLANCO. Se corta
+  // aqui para que el modelo reciba un error util y reintente con algo dibujable.
+  const badDim = list.find((s) => s?.kind === 'polytope'
+    && !(Number.isInteger(s?.dimension) && s.dimension >= 2 && s.dimension <= 7))
+  if (badDim) {
+    return json(res, 400, {
+      ok: false, error: 'invalid_dimension',
+      detail: 'polytope.dimension must be an integer 2-7 (4 = teseracto)',
+    })
+  }
+  // Un poligono se dibuja a partir de una lista EXPLICITA de vertices, asi que
+  // aqui si hay algo que validar: sin ternas numericas la geometria sale NaN y
+  // el renderer pinta una figura invisible sin ningun error visible.
+  const badPoly = list.find((s) => s?.kind === 'polygon' && (
+    !Array.isArray(s?.vertices) || s.vertices.length < 2 || s.vertices.length > 512
+    || s.vertices.some((v) => !Array.isArray(v) || v.length !== 3 || v.some((n) => !Number.isFinite(n)))
+  ))
+  if (badPoly) {
+    return json(res, 400, {
+      ok: false, error: 'invalid_vertices',
+      detail: 'polygon.vertices must be 2-512 arrays of three finite numbers [x, y, z] (math coords, z up)',
+    })
+  }
+  // A simulation is discriminated twice (kind + system); catching a bad system
+  // here gives the model a usable error instead of a silently empty scene.
+  const badSystem = list.find((s) => s?.kind === 'simulation' && !VALID_SIM_SYSTEMS.includes(s?.system))
+  if (badSystem) {
+    return json(res, 400, {
+      ok: false, error: 'invalid_system',
+      detail: `simulation.system must be one of: ${VALID_SIM_SYSTEMS.join(', ')}`,
+    })
+  }
   return bridgeToBus(verb, body, res)
 }
 
@@ -462,6 +531,23 @@ export async function handleModel3dAdd(req, res) {
 
 export async function handleModel3dHide(req, res) {
   return withBody(req, () => bridgeToBus('model3d_hide', {}, res), res)
+}
+
+// Transport for a running simulation. Deliberately NOT part of show/add: those
+// rebuild the scene, which would restart the physics instead of pausing it.
+const SIM_ACTIONS = ['play', 'pause', 'toggle', 'reset', 'speed']
+
+export async function handleModel3dSim(req, res) {
+  return withBody(req, (body) => {
+    const action = body?.action || 'toggle'
+    if (!SIM_ACTIONS.includes(action)) {
+      return json(res, 400, { ok: false, error: 'invalid_action', detail: `action must be one of: ${SIM_ACTIONS.join(', ')}` })
+    }
+    if (action === 'speed' && !(Number(body?.speed) > 0)) {
+      return json(res, 400, { ok: false, error: 'invalid_speed', detail: 'speed must be a positive number' })
+    }
+    return bridgeToBus('model3d_sim', { action, speed: Number(body?.speed) || undefined }, res)
+  }, res)
 }
 
 /* ----- CLOUD ----- */
@@ -494,6 +580,150 @@ export async function handleCloudList(req, res) {
   } catch (e) {
     return json(res, 500, { ok: false, error: 'cloud_failed', detail: e.message })
   }
+}
+
+/* ----- RGB (PC remoto vía agente) ----- */
+
+// El PC Windows ya tiene un CLI probado (rgb_ctl.py: OpenRGB para RAM/placa/
+// fans/AIO + HID directo para el teclado). Aquí sólo armamos la línea de
+// comandos y la despachamos como op `exec` por el hub. Los presets (color +
+// targets + efectos) viven en presets.json de esa máquina: el hub no conoce su
+// contenido, sólo pasa el nombre.
+//
+// Cada respuesta entra en el contexto del LLM, así que devolvemos siempre un
+// string CORTO: "OK" o sólo la primera línea del error (que incluye la lista de
+// presets cuando el nombre no existe, para que pueda reintentar).
+const RGB_MACHINE = process.env.JARVIS_RGB_MACHINE || 'main'
+const RGB_SCRIPT = process.env.JARVIS_RGB_SCRIPT || 'C:\\Users\\santi\\jarvis-rgb\\rgb_ctl.py'
+// Ruta ABSOLUTA al intérprete: el agente corre como servicio SYSTEM, donde el
+// launcher `py` responde "No installed Python found!" y el python.exe de
+// WindowsApps es sólo el stub de la Store.
+const RGB_PYTHON = process.env.JARVIS_RGB_PYTHON
+  || 'C:\\Users\\santi\\AppData\\Local\\Programs\\Python\\Python311\\python.exe'
+const RGB_TIMEOUT_MS = 25_000
+// Shared with rgb_ctl.py's _state_path(): the public folder is the only one
+// both the user's GUI and the SYSTEM-side agent can write.
+const RGB_STATE_FILE = process.env.JARVIS_RGB_STATE || 'C:\\Users\\Public\\JarvisRGB\\state.json'
+const RGB_TARGETS = ['all', 'pc', 'keyboard']
+
+function shortError(text) {
+  const line = String(text || '').split('\n').map((l) => l.trim()).find(Boolean) || ''
+  return line.length > 200 ? `${line.slice(0, 200)}…` : line
+}
+
+async function rgbExec(args, res) {
+  let data
+  try {
+    data = await agentRpc(RGB_MACHINE, {
+      op: 'exec',
+      params: { command: RGB_PYTHON, args: [RGB_SCRIPT, ...args], cwd: null, timeout_ms: RGB_TIMEOUT_MS, stream: false },
+    })
+  } catch (e) {
+    return json(res, 502, { ok: false, error: `hub: ${e.message}` })
+  }
+  if (data?.ok === false) return json(res, 502, { ok: false, error: data.error || 'rpc_failed' })
+  const r = data?.result || {}
+  if (r.status === 'error') return json(res, 502, { ok: false, error: shortError(r.message) || 'agent_error' })
+  if (r.timed_out) return json(res, 504, { ok: false, error: 'timeout' })
+  if (r.exit_code !== 0) {
+    return json(res, 500, { ok: false, error: shortError(r.stderr) || shortError(r.stdout) || `exit ${r.exit_code}` })
+  }
+  // Un preset inexistente sale con exit 0 y el aviso en stdout ("Preset 'x' no
+  // existe (disponibles: ...)"), así que el código de salida no alcanza.
+  if (/no existe/i.test(r.stdout || '')) {
+    return json(res, 404, { ok: false, error: shortError(r.stdout) })
+  }
+  return json(res, 200, { ok: true, result: 'OK' })
+}
+
+export async function handleRgbSet(req, res) {
+  return withBody(req, (body) => {
+    const color = String(body.color || '').trim()
+    // Nombre (red, gold...) o hex #RRGGBB — nada más llega al argv del script.
+    if (!/^#?[A-Za-z0-9]{1,16}$/.test(color)) {
+      return json(res, 400, { ok: false, error: 'color inválido' })
+    }
+    const target = String(body.target || 'all').toLowerCase()
+    if (!RGB_TARGETS.includes(target)) {
+      return json(res, 400, { ok: false, error: `target debe ser ${RGB_TARGETS.join('|')}` })
+    }
+    const args = [color, '--target', target]
+    // Jarvis RGB has two brightness paths, like its desktop GUI: the keyboard
+    // takes a hardware level 1-5 (this arg), and the PC side follows the colour
+    // itself, so callers dim that by sending a darker one. Omitted = script default.
+    if (body.brightness != null) {
+      const br = Number(body.brightness)
+      if (!Number.isInteger(br) || br < 1 || br > 5) {
+        return json(res, 400, { ok: false, error: 'brightness debe ser 1-5' })
+      }
+      args.push('--brightness', String(br))
+    }
+    return rgbExec(args, res)
+  }, res)
+}
+
+/**
+ * GET /api/skills/rgb/presets — names only, for the app's preset chips.
+ * `--list-presets` prints one per line (or "(sin presets)" when presets.json
+ * does not exist yet), so an empty list is a normal answer, not an error.
+ */
+export async function handleRgbPresets(_req, res) {
+  let data
+  try {
+    data = await agentRpc(RGB_MACHINE, {
+      op: 'exec',
+      params: { command: RGB_PYTHON, args: [RGB_SCRIPT, '--list-presets'], cwd: null, timeout_ms: RGB_TIMEOUT_MS, stream: false },
+    })
+  } catch (e) {
+    return json(res, 502, { ok: false, error: `hub: ${e.message}` })
+  }
+  const r = data?.result || {}
+  if (data?.ok === false || r.status === 'error') {
+    return json(res, 502, { ok: false, error: shortError(r.message) || data?.error || 'rpc_failed' })
+  }
+  const presets = String(r.stdout || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('('))
+  return json(res, 200, { ok: true, presets })
+}
+
+/**
+ * GET /api/skills/rgb/state — the colour Jarvis RGB last applied, whoever
+ * applied it. Both sides (the Windows GUI and this backend) write the same
+ * file, so the app's wheel can mirror a change made on the PC and vice versa.
+ * Lives in the public folder because the GUI runs as the user and the agent as
+ * SYSTEM — two different %APPDATA%.
+ */
+export async function handleRgbState(_req, res) {
+  let data
+  try {
+    data = await agentRpc(RGB_MACHINE, {
+      op: 'read_file',
+      params: { path: { raw: RGB_STATE_FILE, os: 'Windows' }, offset: 0, length: 8192 },
+    })
+  } catch (e) {
+    return json(res, 502, { ok: false, error: `hub: ${e.message}` })
+  }
+  const r = data?.result || {}
+  // No file yet = nobody has applied a colour since the update; not an error.
+  if (data?.ok === false || r.status === 'error') return json(res, 200, { ok: true, state: null })
+  try {
+    const state = JSON.parse(Buffer.from(r.data_base64 ?? '', 'base64').toString('utf8'))
+    return json(res, 200, { ok: true, state })
+  } catch {
+    return json(res, 200, { ok: true, state: null })
+  }
+}
+
+export async function handleRgbPreset(req, res) {
+  return withBody(req, (body) => {
+    const name = String(body.name || '').trim()
+    if (!name || name.length > 40 || /[\r\n]/.test(name)) {
+      return json(res, 400, { ok: false, error: 'nombre de preset inválido' })
+    }
+    return rgbExec(['--preset', name], res)
+  }, res)
 }
 
 /* ----- SELF-CODE (autodesarrollo: ejecutar / versionar / reiniciar) ----- */
@@ -542,5 +772,48 @@ export async function handleRestartBackend(req, res) {
     json(res, 200, { ok: true, spoken: 'Reiniciándome para aplicar los cambios, señor.', restarting: true })
     scheduleRestart()
     return undefined
+  }, res)
+}
+
+/* ----- SELF-CODE: tarea delegada a un agente Claude Code completo ----- */
+
+export async function handleCodeTask(req, res) {
+  if (ownerOnly(res)) return
+  if (await requireCodeAuth(res, 'Jarvis quiere modificar su propio código.')) return
+  return withBody(req, async (body) => {
+    const result = await startDevJob({
+      instruction: body.instruction || body.task || '',
+      model: body.model || undefined,
+      requestedBy: body.requestedBy || 'mcp',
+    })
+    return json(res, result.ok ? 200 : 409, result)
+  }, res)
+}
+
+// Status is POST (not GET) so the MCP bridge can send { id } as a JSON body.
+export async function handleCodeTaskStatus(req, res) {
+  if (ownerOnly(res)) return
+  return withBody(req, (body) => {
+    const id = String(body.id || '').trim()
+    if (id) {
+      const rec = getDevJob(id)
+      if (!rec) return json(res, 404, { ok: false, error: 'unknown_job' })
+      return json(res, 200, { ok: true, job: rec, log: body.log ? getDevJobLog(id) : undefined })
+    }
+    const activeJob = getActiveJob()
+    return json(res, 200, {
+      ok: true,
+      active: activeJob,
+      recent: listDevJobs(Number(body.limit) || 5),
+    })
+  }, res)
+}
+
+export async function handleCodeTaskCancel(req, res) {
+  if (ownerOnly(res)) return
+  if (await requireCodeAuth(res, 'Jarvis quiere cancelar el cambio de código en curso.')) return
+  return withBody(req, () => {
+    const result = cancelDevJob()
+    return json(res, result.ok ? 200 : 404, result)
   }, res)
 }

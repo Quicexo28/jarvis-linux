@@ -27,6 +27,8 @@ const MIME = {
   '.mp3':   'audio/mpeg',
   '.wasm':  'application/wasm',
   '.webmanifest': 'application/manifest+json',
+  // Companion APK sideload: Android needs this type to offer "install".
+  '.apk': 'application/vnd.android.package-archive',
 }
 
 /**
@@ -70,6 +72,15 @@ export async function serveStatic(req, res, distPath = process.env.JARVIS_FRONTE
 
   res.setHeader('Content-Type', contentType)
   res.setHeader('Content-Length', stat.size)
+  // index.html must never be cached: the Android WebView held a stale shell
+  // after a rebuild, so the phone kept running old JS. Hashed assets are
+  // immutable by construction, so they get the long cache instead.
+  if (ext === '.html') res.setHeader('Cache-Control', 'no-cache')
+  // El APK tiene nombre fijo y contenido que cambia en cada build, asi que sin
+  // esto el navegador (o el gestor de descargas de Android) puede reinstalar el
+  // binario anterior y parecer que la version nueva "no trae los cambios".
+  else if (ext === '.apk') res.setHeader('Cache-Control', 'no-store')
+  else if (url.pathname.startsWith('/assets/')) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
 
   if (req.method === 'HEAD') { res.end(); return true }
 

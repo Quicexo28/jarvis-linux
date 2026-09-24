@@ -84,7 +84,12 @@ STT_INITIAL_PROMPT = os.environ.get(
     # actionable to echo: a neutral, NON-imperative register hint biases Colombian-
     # Spanish orthography/style with no sentence to regurgitate. Domain vocabulary is
     # primed via STT_HOTWORDS (token-level bias, not a context sentence to echo).
-    "Transcripción en español de Colombia.",
+    # La segunda cláusula es DECLARATIVA (no imperativa) y existe para sesgar la
+    # ORTOGRAFÍA del nombre: sin ella Whisper lo escribía "Yardis", "Yardish",
+    # "Jackie", "Ya lo viste"… y el gate de wake se quedaba sin turno. Tiene >=3
+    # palabras, así que _prompt_clauses la convierte sola en ancla de eco: si el
+    # decoder la regurgita en silencio, el guardia descarta la transcripción.
+    "Transcripción en español de Colombia. El asistente se llama Jarvis.",
 )
 
 
@@ -533,17 +538,28 @@ def _load_owner_voiceprint_with_retry(si) -> None:
     stray phrases slip through the gate as if they were the owner. Rather than
     lose owner discrimination until the next manual restart, keep retrying until
     the keyring answers, then inject the embeddings live (the SpeakerIdentifier
-    object is already the live one, so a later inject is picked up)."""
+    object is already the live one, so a later inject is picked up).
+
+    El reintento NO se rinde. La versión anterior paraba a los ~4 min y dejaba el
+    servicio degradado para siempre: tras un reboot en el que el keyring se
+    desbloquea tarde (login diferido, sin auto-unlock por PAM) el dueño se queda
+    solo con los WAV y el coseno se hunde (~0.05 observado en journald el 07-ago,
+    `speaker=None conf=0.047`) hasta un restart MANUAL. Un hilo dormido cada 60 s
+    no cuesta nada; perder la identificación del dueño durante horas, sí."""
     if _load_owner_voiceprint(si):
         return
     if not OWNER_VOICEPRINT_ENC.exists():
         return  # nothing to retry — no encrypted voiceprint on disk
 
     def _retry():
-        # ~4 min of retries at 5 s: the keyring/D-Bus session almost always
-        # comes up within a minute of login; give generous margin either way.
-        for attempt in range(1, 49):
-            time.sleep(5)
+        # Rápido al principio (el keyring suele llegar en el primer minuto tras
+        # el login), luego lento e indefinido. Se avisa al pasar a fase lenta y
+        # cada ~10 min, para que el journal muestre la degradación sin inundarlo.
+        attempt = 0
+        while True:
+            attempt += 1
+            delay = 5 if attempt <= 48 else 60
+            time.sleep(delay)
             try:
                 if _load_owner_voiceprint(si):
                     print(
@@ -555,11 +571,13 @@ def _load_owner_voiceprint_with_retry(si) -> None:
                     return
             except Exception:
                 pass
-        print(
-            "[stt] owner voiceprint still unavailable after retries — "
-            "running with WAV samples only (owner discrimination degraded)",
-            flush=True,
-        )
+            if attempt == 48 or (attempt > 48 and (attempt - 48) % 10 == 0):
+                print(
+                    "[stt] owner voiceprint STILL unavailable "
+                    f"(attempt {attempt}) — running with WAV samples only "
+                    "(owner discrimination degraded); retrying every 60s",
+                    flush=True,
+                )
 
     threading.Thread(target=_retry, name="voiceprint-retry", daemon=True).start()
     print(
@@ -1314,7 +1332,23 @@ def _trust_offset() -> float:
 
 # Wake-word-ish transcripts ("jarvis" and its common mistranscriptions, alone
 # or with 1-2 filler words) qualify for the text-dependent wake voiceprint.
-_WAKE_TEXT_RE = re.compile(r"\b(jarvis|yarvis|jarbis|harvis|javis|charvis)\b", re.IGNORECASE)
+# Same shape-based family as JARVIS_STRONG_RE/JARVIS_HEAD_RE in
+# backend/src/lib/intentClassifier.js (consonante + a/e + r + oclusiva + cola,
+# plus "javier"/"jared"/"jackie"/"ya (lo) ves|veis|viste|oíste"): Whisper swaps
+# the initial consonant, the fricative and the tail, so enumerating variants
+# lagged reality ("Garbis", "Ya lo veis", "Yardis", "Yardish", "Hola Yardist",
+# "Ya lo viste", "Jackie" all observed in journald).
+_WAKE_CONS = r"(?:[jygh]|ch|ll)"
+_WAKE_CORE = rf"{_WAKE_CONS}[ae]r(?:[vbd](?:i(?:s|z|sh|st)?|es|s|e)?|i(?:s|z|sh|st)|es)"
+_WAKE_AMBIG = r"ya ?(?:lo )?(?:ve(?:is|s|z)|viste|oiste)|y ahora ve(?:is|s)|ja ?vier|jared|jackie"
+# Sin anclaje a cabeza (a diferencia del JS): _wake_eligible ya exige <=3 palabras
+# y <=2.5 s, así que el enunciado ES el nombre y no hay medio de frase que proteger.
+# Se matchea sobre la forma sin tildes (igual que el JS): \b no considera "í" un
+# carácter de palabra, así que "jardín" tenía frontera tras "jard" y entraba.
+_WAKE_TEXT_RE = re.compile(
+    rf"\b(?:{_WAKE_CORE}|javis|arvis)\b|\b(?:{_WAKE_AMBIG})\b",
+    re.IGNORECASE,
+)
 
 
 def _wake_eligible(audio: np.ndarray, text: Optional[str]) -> bool:
@@ -1323,7 +1357,7 @@ def _wake_eligible(audio: np.ndarray, text: Optional[str]) -> bool:
     if text is None:
         return True
     t = text.strip()
-    return bool(_WAKE_TEXT_RE.search(t)) and len(t.split()) <= 3
+    return bool(_WAKE_TEXT_RE.search(_strip_accents(t))) and len(t.split()) <= 3
 
 
 # Calibrated emitted confidence: a match that survived the FULL gate stack

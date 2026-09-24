@@ -70,8 +70,16 @@ export function listCloudFiles(category, limit = 10) {
 
 // ─── Telegram core sender ─────────────────────────────────────────────────────
 
+// Global kill switch. Set JARVIS_TELEGRAM_DISABLED=1 (env or secrets.local.json)
+// to mute every outbound Telegram message and stop bot polling. Proactive
+// notifications fall back to the local desktop so nothing is silently lost.
+export function telegramDisabled() {
+  return process.env.JARVIS_TELEGRAM_DISABLED === '1'
+}
+
 async function sendTelegram(token, chatId, text, filePath) {
   if (!token) return false
+  if (telegramDisabled()) return false
   const api = `https://api.telegram.org/bot${token}`
   try {
     if (filePath && fs.existsSync(filePath)) {
@@ -122,6 +130,7 @@ export async function notifyJarvis(text, filePath) {
   const env = process.env
   const token = env.TELEGRAM_BOT_TOKEN_JARVIS || env.TELEGRAM_BOT_TOKEN
   const chatId = env.TELEGRAM_CHAT_ID_JARVIS || SANTI_CHAT_ID
+  if (telegramDisabled()) return notifyDesktop(text)
   if (!token) {
     // No Telegram bot configured — surface proactive agent events locally so
     // the cerebro laptop still sees them. Telegram is an optional upgrade.
@@ -287,6 +296,10 @@ async function pollCloud(token) {
 }
 
 export function startCloudPolling() {
+  if (telegramDisabled()) {
+    console.warn('[cloudBot] JARVIS_TELEGRAM_DISABLED=1 — polling disabled')
+    return
+  }
   const token = process.env.TELEGRAM_BOT_TOKEN
   if (!token) {
     console.warn('[cloudBot] TELEGRAM_BOT_TOKEN not set — polling disabled')

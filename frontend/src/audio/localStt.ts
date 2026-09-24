@@ -7,6 +7,7 @@
  */
 
 import { getApiBase } from '../api/client'
+import { acquireMic, releaseMic } from './micFeed'
 
 export interface SttTranscript {
   text: string
@@ -69,42 +70,24 @@ async function ensureWorklet(ctx: AudioContext): Promise<void> {
  * Start a local STT streaming session.
  * Returns a session handle with stop() to end capture.
  */
-/**
- * Resolve the deviceId of PipeWire's echo-cancelled virtual mic
- * ("Jarvis AEC Mic" / node jarvis_aec_source). Capturing this source instead
- * of the raw mic removes Jarvis's own TTS (played through the Bluetooth
- * speaker) from the input, so the speech pipeline never transcribes its own
- * voice. Returns undefined if the module is not loaded (falls back to default
- * mic + browser AEC).
- */
-async function resolveAecSourceId(): Promise<string | undefined> {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices()
-    const match = devices.find(
-      (d) => d.kind === 'audioinput' && /jarvis.*aec|aec.*mic/i.test(d.label),
-    )
-    return match?.deviceId
-  } catch {
-    return undefined
-  }
-}
-
 export async function startLocalStt(onTranscript: OnTranscript): Promise<LocalSttSession> {
-  const aecSourceId = await resolveAecSourceId()
-  // When the PipeWire echo-cancel source is available, capture it and turn the
-  // browser's own AEC OFF (double AEC fights and degrades both). Otherwise fall
-  // back to the default mic with browser AEC on.
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: aecSourceId
-      ? { deviceId: { exact: aecSourceId }, sampleRate: 16000, channelCount: 1, echoCancellation: false, noiseSuppression: false }
-      : { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
-  })
+  // Micro COMPARTIDO (micFeed): la selección de la fuente AEC de PipeWire y las
+  // constraints viven ahí. Abrir aquí un getUserMedia propio reintroduce el
+  // SIGSEGV de PipeWire al cambiar de modo de voz — ver audio/micFeed.ts.
+  const stream = await acquireMic()
 
-  const ctx = new AudioContext({ sampleRate: 16000 })
-  await ensureWorklet(ctx)
-
-  const source = ctx.createMediaStreamSource(stream)
-  const worklet = new AudioWorkletNode(ctx, 'pcm-capture')
+  let ctx: AudioContext
+  let source: MediaStreamAudioSourceNode
+  let worklet: AudioWorkletNode
+  try {
+    ctx = new AudioContext({ sampleRate: 16000 })
+    await ensureWorklet(ctx)
+    source = ctx.createMediaStreamSource(stream)
+    worklet = new AudioWorkletNode(ctx, 'pcm-capture')
+  } catch (err) {
+    releaseMic() // no dejar la referencia colgada si el worklet falla
+    throw err
+  }
 
   // WebSocket to backend — auto-reconnecting. The Python STT service can take
   // several seconds to come up (model load, or a ~1.6 GB first-boot model
@@ -182,7 +165,8 @@ export async function startLocalStt(onTranscript: OnTranscript): Promise<LocalSt
     try { worklet.disconnect() } catch {}
     try { source.disconnect() } catch {}
     try { ctx.close() } catch {}
-    stream.getTracks().forEach((t) => t.stop())
+    // El stream es compartido: soltar la referencia, NUNCA parar sus tracks.
+    releaseMic()
 
     // Graceful WS close: on PTT release the silence-tail finalize never fires
     // (audio stopped), so ask the backend to flush the buffered utterance and

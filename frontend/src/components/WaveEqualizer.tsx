@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef } from 'react'
 import type { CSSProperties } from 'react'
+import { acquireMic, releaseMic } from '../audio/micFeed'
 
 const POINTS    = 120        // sampled points across the line
 const WAVE_W    = 240        // total drawn width of the wave (px)
@@ -33,6 +34,8 @@ export function WaveEqualizer({ label, active = true, reactive = true, style }: 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const activeRef = useRef(active)
   activeRef.current = active
+  const labelRef = useRef(label)
+  labelRef.current = label
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -58,16 +61,21 @@ export function WaveEqualizer({ label, active = true, reactive = true, style }: 
 
     // ── Mic (Web Audio time-domain) ────────────────────────────────────────
     let audioCtx: AudioContext | null = null
-    let stream: MediaStream | null = null
     let analyser: AnalyserNode | null = null
     let buf: Uint8Array<ArrayBuffer> | null = null
     let micReady = false
 
-    if (reactive && navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices
-        .getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+    let held = false
+    let cancelled = false
+
+    // Micro COMPARTIDO (audio/micFeed.ts). Este componente está montado en
+    // permanencia dentro de ListeningOverlay: con getUserMedia propio sumaba un
+    // stream más al churn que hace SIGSEGV al cliente PipeWire de WebKitGTK.
+    if (reactive) {
+      acquireMic()
         .then((s) => {
-          stream = s
+          if (cancelled) { releaseMic(); return }
+          held = true
           audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
           const src = audioCtx.createMediaStreamSource(s)
           analyser = audioCtx.createAnalyser()
@@ -162,12 +170,13 @@ export function WaveEqualizer({ label, active = true, reactive = true, style }: 
       strokePath(t, cy, ww, 3, 'rgba(61, 240, 255, 0.12)')   // soft glow
       strokePath(t, cy, ww, 1.4, grad)                        // bright core
 
-      if (label) {
+      const lbl = labelRef.current
+      if (lbl) {
         ctx.fillStyle = 'rgba(0, 229, 255, 0.75)'
         ctx.font = '8px monospace'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'top'
-        ctx.fillText(label.toUpperCase().split('').join(' '), cx, cy + AMP + 6)
+        ctx.fillText(lbl.toUpperCase().split('').join(' '), cx, cy + AMP + 6)
       }
 
       raf = requestAnimationFrame(draw)
@@ -175,13 +184,17 @@ export function WaveEqualizer({ label, active = true, reactive = true, style }: 
     raf = requestAnimationFrame(draw)
 
     return () => {
+      cancelled = true
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', resize)
       ro.disconnect()
-      stream?.getTracks().forEach((tr) => tr.stop())
+      if (held) releaseMic()   // compartido: no parar tracks ajenos
       audioCtx?.close().catch(() => {})
     }
-  }, [label, reactive])
+    // `label` NO va en deps: cambia ('Escuchando' ↔ 'PTT') al cambiar de modo y
+    // rehacía todo el efecto — reabriendo el micro en el peor momento posible.
+    // Se lee por ref dentro del bucle de dibujo.
+  }, [reactive])
 
   return (
     <canvas

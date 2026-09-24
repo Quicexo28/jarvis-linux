@@ -12,8 +12,10 @@ import {
   ZOOM_MIN, ZOOM_MAX, POSE_STABLE_FRAMES,
   GRAB_PALM_REF, GRAB_SCALE_MIN, GRAB_SCALE_MAX,
   DISCRETE_MIN_HOLD_MS, DISCRETE_COOLDOWN_MS,
-  POINTER_EXPAND,
-  EURO_POINTER, EURO_WRIST, EURO_APERTURE, EURO_ANGLE, EURO_ROT,
+  POINTER_EXPAND, POINTER_FINE_GAIN,
+  TAP_ENTER_APERTURE, TAP_EXIT_APERTURE, TAP_STABLE_FRAMES,
+  TAP_MIN_PRESS_MS, TAP_COOLDOWN_MS,
+  EURO_POINTER, EURO_WRIST, EURO_APERTURE, EURO_ANGLE, EURO_ROT, EURO_TAP,
   ROT_INCREMENT_DEADZONE,
 } from './config'
 
@@ -287,42 +289,179 @@ export class PinchTracker {
  * Puntero (índice izquierdo): punta filtrada con One-Euro y mapeada a pantalla
  * (espejo + expansión alrededor del centro — la mano no llega cómoda a los
  * bordes del frame de cámara).
+ *
+ * Dos añadidos para usar menús:
+ *  - `vx/vy` (pantalla por ms): el consumidor adelanta la posición para tapar
+ *    el retardo del pipeline (~20 Hz + One-Euro). Se mide sobre la salida YA
+ *    filtrada, así que no reinyecta el jitter que el filtro acaba de quitar.
+ *  - modo FINO: mientras el tap está presionado, el puntero se mueve a
+ *    POINTER_FINE_GAIN de su ganancia anclado al punto de presión. Cerrar la
+ *    pinza desplaza la punta del índice unos milímetros; sin esto, todo
+ *    arrastre empieza con un salto y un clic acaba fuera del botón pulsado.
  */
 export class PointerTracker {
   active = false
   screenX = 0.5
   screenY = 0.5
+  vx = 0
+  vy = 0
 
   private fx = new OneEuro(EURO_POINTER)
   private fy = new OneEuro(EURO_POINTER)
   private lastSeenT = -Infinity
+  private lastT: number | null = null
+  private fine = false
+  private fineAnchor: { rawX: number; rawY: number; outX: number; outY: number } | null = null
 
-  update(posed: boolean, feat: HandFeatures | null, t: number): void {
+  update(posed: boolean, feat: HandFeatures | null, t: number, fine = false): void {
     if (feat) this.lastSeenT = t
 
     if (posed && feat) {
       const x = this.fx.filter(feat.indexTipImage.x, t)
       const y = this.fy.filter(feat.indexTipImage.y, t)
       const sx = 1 - x // espejo: coords de pantalla
-      this.screenX = clamp(0.5 + (sx - 0.5) * POINTER_EXPAND, 0, 1)
-      this.screenY = clamp(0.5 + (y - 0.5) * POINTER_EXPAND, 0, 1)
+      const rawX = clamp(0.5 + (sx - 0.5) * POINTER_EXPAND, 0, 1)
+      const rawY = clamp(0.5 + (y - 0.5) * POINTER_EXPAND, 0, 1)
+
+      if (fine && !this.fine) {
+        this.fineAnchor = { rawX, rawY, outX: this.screenX, outY: this.screenY }
+      } else if (!fine) {
+        this.fineAnchor = null
+      }
+      this.fine = fine
+
+      const nextX = this.fineAnchor
+        ? clamp(this.fineAnchor.outX + (rawX - this.fineAnchor.rawX) * POINTER_FINE_GAIN, 0, 1)
+        : rawX
+      const nextY = this.fineAnchor
+        ? clamp(this.fineAnchor.outY + (rawY - this.fineAnchor.rawY) * POINTER_FINE_GAIN, 0, 1)
+        : rawY
+
+      if (this.active && this.lastT !== null) {
+        const dt = Math.max(1, t - this.lastT)
+        // EMA suave sobre la velocidad: una muestra suelta de MediaPipe no debe
+        // lanzar el adelanto predictivo al otro lado de la pantalla.
+        this.vx += ((nextX - this.screenX) / dt - this.vx) * 0.45
+        this.vy += ((nextY - this.screenY) / dt - this.vy) * 0.45
+      } else {
+        this.vx = 0
+        this.vy = 0
+      }
+
+      this.screenX = nextX
+      this.screenY = nextY
+      this.lastT = t
       this.active = true
       return
     }
 
     // Dropout breve: puntero congelado en vez de desaparecer y reaparecer.
-    if (this.active && !feat && t - this.lastSeenT <= LOST_GRACE_MS) return
+    // Velocidad a cero — extrapolar sobre un hueco de tracking lo dispara.
+    if (this.active && !feat && t - this.lastSeenT <= LOST_GRACE_MS) {
+      this.vx = 0
+      this.vy = 0
+      return
+    }
 
     this.active = false
+    this.vx = 0
+    this.vy = 0
+    this.lastT = null
+    this.fine = false
+    this.fineAnchor = null
     this.fx.reset()
     this.fy.reset()
   }
 
   reset(): void {
     this.active = false
+    this.vx = 0
+    this.vy = 0
+    this.lastT = null
+    this.fine = false
+    this.fineAnchor = null
     this.fx.reset()
     this.fy.reset()
     this.lastSeenT = -Infinity
+  }
+}
+
+/**
+ * Tap: pulgar tocando el índice SIN deshacer el gesto de apuntar. Es el botón
+ * del cursor de mano — `down` al contacto, `up` al separar, `pressed` mientras
+ * dura (arrastrar). Semántica de ratón a propósito: el consumidor emite
+ * pointerdown al bajar y pointerup+click al subir, así los controles del DOM
+ * (botones, sliders, el raycast de R3F) funcionan sin tocarlos.
+ *
+ * Schmitt sobre la MISMA `aperture` del pinch derecho, con One-Euro rápido:
+ * el contacto es un movimiento corto y veloz y un filtro suave lo convertiría
+ * en un clic con retardo. Solo cuenta mientras `posed` (el engine solo lo llama
+ * con la pose `point`): un puño también junta pulgar e índice.
+ */
+export class TapTracker {
+  pressed = false
+  down = false
+  up = false
+
+  private enterCount = 0
+  private pressT = 0
+  private lastUpT = -Infinity
+  private fAperture = new OneEuro(EURO_TAP)
+  private lastSeenT = -Infinity
+
+  update(posed: boolean, feat: HandFeatures | null, t: number): void {
+    this.down = false
+    this.up = false
+    if (feat) this.lastSeenT = t
+
+    if (!posed || !feat) {
+      // Mano perdida dentro de la gracia: mantener la presión (un dropout a
+      // mitad de arrastre no debe soltar el botón). Fuera de gracia, o pose
+      // abandonada, se suelta SIN emitir `up`: no hubo intención de clic.
+      if (this.pressed && !feat && t - this.lastSeenT <= LOST_GRACE_MS) return
+      this.pressed = false
+      this.enterCount = 0
+      this.fAperture.reset()
+      return
+    }
+
+    const a = this.fAperture.filter(feat.aperture, t)
+
+    if (!this.pressed) {
+      if (a < TAP_ENTER_APERTURE && t - this.lastUpT >= TAP_COOLDOWN_MS) {
+        this.enterCount++
+        if (this.enterCount >= TAP_STABLE_FRAMES) {
+          this.pressed = true
+          this.down = true
+          this.pressT = t
+          this.enterCount = 0
+        }
+      } else {
+        this.enterCount = 0
+      }
+      return
+    }
+
+    if (a > TAP_EXIT_APERTURE) {
+      this.pressed = false
+      this.enterCount = 0
+      // Presión de un parpadeo = ruido de landmarks, no un clic.
+      if (t - this.pressT >= TAP_MIN_PRESS_MS) {
+        this.up = true
+        this.lastUpT = t
+      }
+    }
+  }
+
+  reset(): void {
+    this.pressed = false
+    this.down = false
+    this.up = false
+    this.enterCount = 0
+    this.pressT = 0
+    this.lastUpT = -Infinity
+    this.lastSeenT = -Infinity
+    this.fAperture.reset()
   }
 }
 

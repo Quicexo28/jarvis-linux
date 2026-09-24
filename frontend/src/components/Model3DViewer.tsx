@@ -13,8 +13,8 @@
  * (roll=Z, horizontal=Y, vertical=X), 1:1 angular, persists on release.
  */
 
-import { useRef, useMemo, useEffect, useState, type ReactNode } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
+import React, { Component, useRef, useMemo, useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import { useGestureStore } from '../state/gestureStore'
@@ -24,14 +24,18 @@ import {
   type Model3DSpec, type SceneOptions,
   type ParametricSpec, type PolytopeSpec, type ImplicitSpec, type PrimitiveSpec,
   type CurveSpec, type GraphSpec, type VectorsSpec, type PlaneSpec, type LineSpec,
+  type PolygonSpec, type SimulationSpec,
 } from '../state/model3dStore'
+import { SimulationObject } from './sim/SimulationObject'
+import { resolveSceneLook } from '../lib/sim/scene'
+import { useSimStore, SIM_SPEEDS } from '../state/simStore'
 import { evaluateParametricSurface } from '../lib/geometry/parametricMath'
 import { buildHypercube, buildCross, buildHypercubeFaces, rotateInPlane, projectToR3 } from '../lib/geometry/polytopeMath'
 import { marchingCubes } from '../lib/geometry/implicitMath'
 import { brillouinZonePlanes } from '../lib/geometry/brillouinZone'
 import {
   freeSymbols, sampleCurve3D, sampleGraph1D, sampleSurface,
-  planeBasis, spanLatticeLines, vectorsToR3,
+  planeBasis, spanLatticeLines, vectorsToR3, bestFitPlane,
 } from '../lib/geometry/analyticMath'
 
 const mathImplicit = create(all)
@@ -75,7 +79,7 @@ const W_COLOR_FAR = '#ffd700'
 /** Kinds that are meaningless without a coordinate frame → axes auto-on.
  *  Plain shapes (primitive/parametric/curve/...) stay frameless unless
  *  scene.axes is set explicitly — exact positions are the user's call. */
-const ANALYTIC_KINDS = new Set(['graph', 'vectors', 'plane', 'line'])
+const ANALYTIC_KINDS = new Set(['graph', 'vectors', 'plane', 'line', 'polygon'])
 
 type Vec3 = [number, number, number]
 
@@ -90,6 +94,11 @@ function kindLabel(spec: Model3DSpec): string {
     case 'vectors': return 'Vectores'
     case 'plane': return 'Plano'
     case 'line': return 'Recta'
+    case 'polygon': return (spec.height ?? 0) > 0 ? 'Sólido' : 'Polígono'
+    case 'simulation': return ({
+      nbody: 'Simulación orbital', blackhole: 'Agujero negro',
+      dynamics: 'Dinámica', field: 'Campo vectorial', ode: 'Sistema dinámico',
+    })[spec.system] ?? 'Simulación'
   }
 }
 
@@ -160,7 +169,7 @@ function GestureRig({ enabled, children }: { enabled: boolean; children: ReactNo
 
 /* ---- Text label sprite (canvas texture — self-contained, no font assets) ---- */
 
-function TextLabel({ position, text, color, size = 0.55 }: { position: Vec3; text: string; color: string; size?: number }) {
+export function TextLabel({ position, text, color, size = 0.55 }: { position: Vec3; text: string; color: string; size?: number }) {
   const texture = useMemo(() => {
     const canvas = document.createElement('canvas')
     const w = 48 + text.length * 30
@@ -277,6 +286,28 @@ function ParametricObject({ spec, color }: { spec: ParametricSpec; color: string
   )
 }
 
+/** Constantes vacías compartidas: identidad estable para que los `useMemo` de
+ *  abajo no se invaliden en cada render cuando la figura no se pudo construir. */
+const EMPTY_VERTICES: number[][] = []
+const EMPTY_EDGES: [number, number][] = []
+const EMPTY_QUADS: [number, number, number, number][] = []
+
+/**
+ * Aísla cada figura del resto de la escena.
+ *
+ * Una spec que lanza (fórmula imposible, dimensión fuera de rango) tumbaba el
+ * árbol de React entero: la ventana quedaba EN BLANCO y el único rastro era una
+ * línea `CONSOLE JS ERROR` en journald. En la pared del proyector eso es peor
+ * aún, porque nadie está mirando una consola. Con el límite aquí, la figura mala
+ * simplemente no se dibuja y el resto de la escena sigue viva.
+ */
+export class Model3DErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() { return { failed: true } }
+  componentDidCatch(err: Error) { console.warn('[model3d] figura descartada:', err.message) }
+  render() { return this.state.failed ? null : this.props.children }
+}
+
 /* ---- N-dimensional polytope (auto-rotating, w-colored, translucent faces) ---- */
 
 function PolytopeObject({ spec, color }: { spec: PolytopeSpec; color: string }) {
@@ -291,13 +322,31 @@ function PolytopeObject({ spec, color }: { spec: PolytopeSpec; color: string }) 
   const colorByW = spec.colorByW ?? dim >= 4
   const showFaces = spec.faces ?? (spec.type === 'hypercube' && dim >= 4)
 
-  const { vertices: baseVertices, edges } = useMemo(() =>
-    spec.type === 'hypercube' ? buildHypercube(dim) : buildCross(dim),
-  [spec.type, dim])
+  // Los constructores LANZAN fuera de 2–7 dimensiones, y el modelo pide "20
+  // dimensiones" cada tanto. Sin este catch la excepción sube por el árbol de
+  // React y deja la ventana ENTERA en blanco — en la pared eso es el proyector
+  // mostrando nada. Degradar a figura vacía es la misma regla que ya siguen las
+  // superficies paramétricas.
+  const built = useMemo(() => {
+    try {
+      return spec.type === 'hypercube' ? buildHypercube(dim) : buildCross(dim)
+    } catch (err) {
+      console.warn('[model3d] politopo inválido:', err)
+      return null
+    }
+  }, [spec.type, dim])
+  const baseVertices = built?.vertices ?? EMPTY_VERTICES
+  const edges = built?.edges ?? EMPTY_EDGES
 
-  const faceQuads = useMemo(() =>
-    showFaces && spec.type === 'hypercube' ? buildHypercubeFaces(dim) : [],
-  [showFaces, spec.type, dim])
+  const faceQuads = useMemo(() => {
+    if (!built || !showFaces || spec.type !== 'hypercube') return EMPTY_QUADS
+    try {
+      return buildHypercubeFaces(dim)
+    } catch (err) {
+      console.warn('[model3d] caras inválidas:', err)
+      return EMPTY_QUADS
+    }
+  }, [built, showFaces, spec.type, dim])
 
   const lineGeo = useMemo(() => {
     const geo = new THREE.BufferGeometry()
@@ -394,6 +443,9 @@ function PolytopeObject({ spec, color }: { spec: PolytopeSpec; color: string }) 
       spheres.instanceMatrix.needsUpdate = true
     }
   })
+
+  // Todos los hooks ya corrieron: aquí sí se puede salir sin romper su orden.
+  if (!built) return null
 
   return (
     <group>
@@ -737,9 +789,125 @@ function LineObject({ spec, color }: { spec: LineSpec; color: string }) {
   return <ArrowMesh from={from} to={to} color={color} radius={0.035} head={spec.arrow ?? false} opacity={spec.opacity ?? 1} />
 }
 
+/* ---- Explicit vertex polygon (hand capture) ---- */
+
+/**
+ * Vertex-list figure, optionally extruded along its best-fit plane normal.
+ *
+ * The face is triangulated as a fan around the CENTROID, not around vertex 0:
+ * hand-made polygons come out star-shaped around their centre but are often
+ * non-convex, and a vertex-0 fan folds over itself on those.
+ *
+ * `capScale: 0` collapses the top ring to a single apex, so the same spec
+ * covers prism → pyramid and cylinder → cone.
+ */
+function PolygonObject({ spec, color }: { spec: PolygonSpec; color: string }) {
+  const built = useMemo(() => {
+    try {
+      const verts: Vec3[] = (spec.vertices ?? []).map((v) => [v[0], v[1], v[2]])
+      if (verts.length < 2) return null
+      const n = verts.length
+      const closed = spec.closed ?? true
+      const height = spec.height ?? 0
+      const capScale = spec.capScale ?? 1
+      const solid = height > 1e-6 && n >= 3
+
+      const centroid: Vec3 = [0, 0, 0]
+      for (const v of verts) { centroid[0] += v[0]; centroid[1] += v[1]; centroid[2] += v[2] }
+      centroid[0] /= n; centroid[1] /= n; centroid[2] /= n
+
+      const normal = bestFitPlane(verts).normal
+      const lift = (v: Vec3): Vec3 => [
+        centroid[0] + capScale * (v[0] - centroid[0]) + normal[0] * height,
+        centroid[1] + capScale * (v[1] - centroid[1]) + normal[1] * height,
+        centroid[2] + capScale * (v[2] - centroid[2]) + normal[2] * height,
+      ]
+      const top: Vec3[] = solid ? verts.map(lift) : []
+      const apex = capScale < 1e-6
+
+      const lines: number[] = []
+      const edgeCount = closed ? n : n - 1
+      for (let i = 0; i < edgeCount; i++) {
+        const j = (i + 1) % n
+        lines.push(...verts[i], ...verts[j])
+        if (solid) {
+          if (!apex) lines.push(...top[i], ...top[j])
+          lines.push(...verts[i], ...top[i])
+        }
+      }
+
+      const tris: number[] = []
+      const fan = (ring: Vec3[], flip: boolean) => {
+        const c: Vec3 = [0, 0, 0]
+        for (const v of ring) { c[0] += v[0]; c[1] += v[1]; c[2] += v[2] }
+        c[0] /= ring.length; c[1] /= ring.length; c[2] /= ring.length
+        for (let i = 0; i < ring.length; i++) {
+          const j = (i + 1) % ring.length
+          if (flip) tris.push(...c, ...ring[j], ...ring[i])
+          else tris.push(...c, ...ring[i], ...ring[j])
+        }
+      }
+
+      if (n >= 3 && (spec.fill ?? true)) {
+        fan(verts, false)
+        if (solid && !apex) fan(top, true)
+      }
+      if (solid) {
+        for (let i = 0; i < n; i++) {
+          const j = (i + 1) % n
+          if (apex) {
+            tris.push(...verts[i], ...verts[j], ...top[i])
+          } else {
+            tris.push(...verts[i], ...verts[j], ...top[j])
+            tris.push(...verts[i], ...top[j], ...top[i])
+          }
+        }
+      }
+
+      const lineGeo = new THREE.BufferGeometry()
+      lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lines), 3))
+      let faceGeo: THREE.BufferGeometry | null = null
+      if (tris.length) {
+        faceGeo = new THREE.BufferGeometry()
+        faceGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tris), 3))
+        faceGeo.computeVertexNormals()
+      }
+      return { lineGeo, faceGeo, points: solid ? [...verts, ...top] : verts }
+    } catch (err) {
+      console.warn('[model3d] polígono inválido:', err)
+      return null
+    }
+  }, [spec])
+
+  if (!built) return null
+  const opacity = spec.opacity ?? 0.35
+
+  return (
+    <group>
+      {built.faceGeo && !spec.wireframe && (
+        <mesh geometry={built.faceGeo}>
+          <meshStandardMaterial
+            color={color} emissive={color} emissiveIntensity={0.18}
+            transparent opacity={opacity} side={THREE.DoubleSide} depthWrite={false}
+          />
+        </mesh>
+      )}
+      <lineSegments geometry={built.lineGeo}>
+        <lineBasicMaterial color={color} transparent opacity={0.95} />
+      </lineSegments>
+      {built.points.map((v, i) => (
+        <mesh key={i} position={v}>
+          <sphereGeometry args={[0.06, 10, 10]} />
+          <meshBasicMaterial color={color} />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
 /* ---- Per-object dispatcher (position/rotation/scale wrapper) ---- */
 
-function SceneObjectView({ spec, color }: { spec: Model3DSpec; color: string }) {
+export function SceneObjectView({ spec, color }: { spec: Model3DSpec; color: string }) {
   const scale: Vec3 = typeof spec.scale === 'number'
     ? [spec.scale, spec.scale, spec.scale]
     : spec.scale ?? [1, 1, 1]
@@ -754,8 +922,106 @@ function SceneObjectView({ spec, color }: { spec: Model3DSpec; color: string }) 
       {spec.kind === 'vectors' && <VectorsObject spec={spec} color={color} />}
       {spec.kind === 'plane' && <PlaneObject spec={spec} color={color} />}
       {spec.kind === 'line' && <LineObject spec={spec} color={color} />}
+      {spec.kind === 'polygon' && <PolygonObject spec={spec} color={color} />}
+      {spec.kind === 'simulation' && <SimulationObject spec={spec as SimulationSpec} />}
     </group>
   )
+}
+
+/* ---- Modo realista: fondo de estrellas + tone mapping físico ---- */
+
+/** Equirectangular de la Vía Láctea, servida desde `public/textures/`. Ruta
+ *  RELATIVA a propósito: el bundle va con `base: './'` y esta página se sirve
+ *  tanto desde el protocolo de Tauri como desde el backend por Tailscale
+ *  (misma convención que el modelo de MediaPipe en `gestures/landmarker.ts`).
+ *  Nada de CDNs: esta máquina trabaja offline. */
+const STARFIELD_URL = 'textures/2k_stars_milky_way.jpg'
+
+/** Fondo mientras la textura carga, y si no llega. No es negro PURO: el cielo
+ *  real tiene un suelo tenue de luz zodiacal y estelar. */
+const SPACE_BG = '#05070d'
+
+/**
+ * Fondo del modo realista. Va como `scene.background` con mapeo
+ * equirectangular, NUNCA como una esfera gigante invertida: una esfera entra en
+ * el raycast de R3F y se traga los clics del usuario.
+ *
+ * La textura se carga A MANO y no con `useLoader` para no SUSPENDER el árbol
+ * del Canvas —aquí no hay `Suspense` que sostenga la escena— y para que un
+ * fallo de carga degrade a negro en vez de tumbar el visor. No se crea ningún
+ * contexto WebGL nuevo: WebKitGTK sobre esta iGPU mata el segundo.
+ */
+function SpaceBackdrop({ starfield, fallback }: { starfield: boolean; fallback: string }) {
+  const scene = useThree((s) => s.scene)
+
+  useLayoutEffect(() => {
+    const prev = scene.background
+    const plain = new THREE.Color(fallback)
+    scene.background = plain
+
+    let tex: THREE.Texture | null = null
+    let cancelled = false
+
+    if (starfield) {
+      new THREE.TextureLoader().load(
+        STARFIELD_URL,
+        (t) => {
+          if (cancelled) { t.dispose(); return }
+          t.mapping = THREE.EquirectangularReflectionMapping
+          // Es una FOTO: sin marcarla sRGB el renderer la trata como lineal y
+          // la Vía Láctea sale lavada.
+          t.colorSpace = THREE.SRGBColorSpace
+          tex = t
+          scene.background = t
+        },
+        undefined,
+        () => { /* sin estrellas nos quedamos con el negro: un fondo no rompe la escena */ },
+      )
+    }
+
+    return () => {
+      cancelled = true
+      // Solo devolvemos el fondo si sigue siendo NUESTRO. Al salir del modo
+      // realista, el `<color attach="background">` del modo holográfico puede
+      // haberse montado ya (el orden entre su attach y esta limpieza no está
+      // garantizado), y pisarlo dejaría el visor en negro.
+      if (scene.background === plain || (tex !== null && scene.background === tex)) {
+        scene.background = prev
+      }
+      tex?.dispose()
+    }
+  }, [scene, starfield, fallback])
+
+  return null
+}
+
+/**
+ * Tone mapping físico, SOLO en modo realista. Con luz de estrella y un Sol
+ * emisivo el rango dinámico se sale de [0,1]: sin ACES el Sol clipa a un disco
+ * blanco plano (la misma cicatriz que el núcleo emisivo del holograma
+ * `VaultGeo`). Se restaura el valor anterior al desmontar — un ajuste de
+ * renderer que no se revierte deja las figuras abstractas lavadas para siempre.
+ */
+function PhysicalToneMapping() {
+  const gl = useThree((s) => s.gl)
+
+  useLayoutEffect(() => {
+    const prevTone = gl.toneMapping
+    const prevExposure = gl.toneMappingExposure
+    const prevColorSpace = gl.outputColorSpace
+    gl.toneMapping = THREE.ACESFilmicToneMapping
+    // Ligeramente por encima de 1: ACES oscurece los medios y el espacio ya es
+    // oscuro de por sí. Este es el mando de brillo de la escena realista.
+    gl.toneMappingExposure = 1.1
+    gl.outputColorSpace = THREE.SRGBColorSpace   // el default de three, explícito
+    return () => {
+      gl.toneMapping = prevTone
+      gl.toneMappingExposure = prevExposure
+      gl.outputColorSpace = prevColorSpace
+    }
+  }, [gl])
+
+  return null
 }
 
 /* ---- Scene wrapper ---- */
@@ -773,12 +1039,38 @@ function Scene({ objects, colors, sceneOpts, hiddenIds, gestureEnabled }: {
     : sceneOpts.grid || (sceneOpts.grid !== false && objects.some((o) => o.kind === 'graph') ? 'xy' : null)
   const axisLength = sceneOpts.axisLength ?? 6
 
+  /* Holográfico o físico. La condición es estricta (una simulación con look
+   * realista) y vive en `lib/sim/scene.ts`, pura y con tests. Si la escena
+   * MEZCLA una simulación realista con figuras abstractas gana el realista: una
+   * figura holográfica bajo luz física sigue leyéndose (pierde el tinte cyan),
+   * mientras que un planeta bajo ambiente cyan no vuelve a ser un planeta. */
+  const look = useMemo(() => resolveSceneLook(objects), [objects])
+
   return (
     <>
-      <color attach="background" args={[sceneOpts.background ?? '#03080d']} />
-      <ambientLight intensity={0.45} color="#00f0ff" />
-      <pointLight position={[5, 8, 5]} intensity={1.2} color="#ffffff" />
-      <pointLight position={[-5, -3, -5]} intensity={0.6} color="#0059ff" />
+      {look.realistic ? (
+        <>
+          {/* La luz la pone la ESTRELLA, desde dentro de la simulación. Aquí
+              solo queda un suelo tenue y BLANCO —el espacio no es negro puro:
+              hay luz zodiacal y estelar, pero es débil y neutra—, y ni una de
+              las dos pointLights decorativas: el ambiente cyan teñía de azul
+              todo lo que tocaba (un Marte rojo salía malva, la Luna celeste). */}
+          <SpaceBackdrop starfield={look.starfield} fallback={sceneOpts.background ?? SPACE_BG} />
+          <PhysicalToneMapping />
+          <ambientLight intensity={0.05} color="#ffffff" />
+          {/* Relleno solo para los sistemas que NO traen luz propia (dynamics,
+              field, ode): sus cuerpos son `meshStandardMaterial` sin ninguna
+              luz cerca, así que sin el ambiente cyan quedarían negros. */}
+          {look.keyLight && <directionalLight position={[5, 8, 5]} intensity={1.8} color="#ffffff" />}
+        </>
+      ) : (
+        <>
+          <color attach="background" args={[sceneOpts.background ?? '#03080d']} />
+          <ambientLight intensity={0.45} color="#00f0ff" />
+          <pointLight position={[5, 8, 5]} intensity={1.2} color="#ffffff" />
+          <pointLight position={[-5, -3, -5]} intensity={0.6} color="#0059ff" />
+        </>
+      )}
       {!gestureEnabled && <OrbitControls makeDefault enablePan={true} />}
       <GestureRig enabled={gestureEnabled}>
         {/* Math frame: math z becomes screen-up. All specs are math coordinates. */}
@@ -786,11 +1078,93 @@ function Scene({ objects, colors, sceneOpts, hiddenIds, gestureEnabled }: {
           {showAxes && <AxesObject length={axisLength} />}
           {gridPlane && <GridObject plane={gridPlane} size={Math.ceil(axisLength) * 2} />}
           {objects.filter((o) => !hiddenIds.has(o.id!)).map((o) => (
-            <SceneObjectView key={o.id} spec={o} color={colors.get(o.id!) ?? PALETTE[0]} />
+            <Model3DErrorBoundary key={o.id}>
+              <SceneObjectView spec={o} color={colors.get(o.id!) ?? PALETTE[0]} />
+            </Model3DErrorBoundary>
           ))}
         </group>
       </GestureRig>
     </>
+  )
+}
+
+/* ---- Simulation HUD + transport ---- */
+
+/** Physics readout and transport controls. Mounted outside the Canvas so the
+ *  render loop never triggers a React re-render of the 3D tree: the engine
+ *  pushes text into simStore at ~4 Hz and only this panel re-renders. */
+function SimHud() {
+  const active = useSimStore(s => s.active)
+  const playing = useSimStore(s => s.playing)
+  const speed = useSimStore(s => s.speed)
+  const readout = useSimStore(s => s.readout)
+  const title = useSimStore(s => s.title)
+  const toggle = useSimStore(s => s.toggle)
+  const setSpeed = useSimStore(s => s.setSpeed)
+  const reset = useSimStore(s => s.reset)
+
+  useEffect(() => {
+    if (!active) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Space') { e.preventDefault(); toggle() }
+      else if (e.key === 'r' || e.key === 'R') reset()
+      else if (e.key === '+' || e.key === '=') setSpeed(useSimStore.getState().speed * 2)
+      else if (e.key === '-') setSpeed(useSimStore.getState().speed / 2)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [active, toggle, reset, setSpeed])
+
+  if (!active) return null
+
+  const btn: React.CSSProperties = {
+    background: 'rgba(0,240,255,0.10)', border: '1px solid rgba(0,240,255,0.42)',
+    borderRadius: 4, color: '#00f0ff', cursor: 'pointer', padding: '3px 10px', fontSize: 11,
+  }
+
+  return (
+    <div style={{
+      position: 'absolute', left: 14, bottom: 14,
+      background: 'rgba(3, 10, 18, 0.86)', border: '1px solid rgba(0,240,255,0.22)',
+      borderRadius: 8, padding: '10px 12px', minWidth: 240, maxWidth: 380,
+      display: 'flex', flexDirection: 'column', gap: 8,
+      backdropFilter: 'blur(8px)', fontSize: 12, color: '#ccd6f6',
+    }}>
+      {title && (
+        <div style={{ color: '#00f0ff', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase' }}>
+          {title}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <button onClick={toggle} style={btn} title="Espacio">{playing ? '❚❚' : '▶'}</button>
+        <button onClick={reset} style={btn} title="R">↺</button>
+        <span style={{ color: '#7fa6b8', fontSize: 11 }}>×</span>
+        {SIM_SPEEDS.map((v) => (
+          <button
+            key={v}
+            onClick={() => setSpeed(v)}
+            style={{
+              ...btn,
+              padding: '2px 6px',
+              opacity: Math.abs(speed - v) < 1e-6 ? 1 : 0.42,
+              borderColor: Math.abs(speed - v) < 1e-6 ? 'rgba(0,240,255,0.8)' : 'rgba(0,240,255,0.25)',
+            }}
+          >{v}</button>
+        ))}
+      </div>
+
+      {readout.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 10px' }}>
+          {readout.map(([k, v]) => (
+            <React.Fragment key={k}>
+              <span style={{ color: '#7fa6b8', whiteSpace: 'nowrap' }}>{k}</span>
+              <span style={{ fontVariantNumeric: 'tabular-nums' }}>{v}</span>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -837,6 +1211,7 @@ export function Model3DViewer() {
 
   const title = sceneOpts.title
     ?? (objects.length === 1 ? (objects[0].title ?? kindLabel(objects[0])) : `${objects.length} figuras`)
+  const hasSimulation = objects.some((o) => o.kind === 'simulation')
 
   const toggleHidden = (id: string) => {
     setHiddenIds((prev) => {
@@ -915,6 +1290,8 @@ export function Model3DViewer() {
           </div>
         )}
 
+        <SimHud />
+
         {/* Gesture activation prompt */}
         {showGesturePrompt && (
           <div style={{
@@ -944,9 +1321,10 @@ export function Model3DViewer() {
         borderTop: '1px solid rgba(0,240,255,0.1)',
         textAlign: 'center',
       }}>
-        {gestureEnabled
+        {(gestureEnabled
           ? 'Puño cerrado: rotar · Pinch: zoom · Esc: cerrar'
-          : 'Arrastra: rotar · Scroll: zoom · Esc: cerrar'}
+          : 'Arrastra: rotar · Scroll: zoom · Esc: cerrar')
+          + (hasSimulation ? ' · Espacio: pausa · R: reiniciar · ±: velocidad' : '')}
       </div>
     </div>
   )

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { SimulationBody } from '../lib/sim/types'
 
 /** Fields shared by every renderable object in the 3D scene.
  *  position/rotation are MATH coordinates (z up); the viewer applies the frame. */
@@ -122,6 +123,31 @@ export interface LineSpec extends BaseSpec {
   arrow?: boolean
 }
 
+/** Explicit vertex list — the shape the hand-capture mode produces, and the
+ *  only kind whose geometry is edited point by point rather than by formula.
+ *  With `height` it extrudes along the best-fit plane normal, which turns the
+ *  same spec into a prism, a box, a cylinder (many-sided polygon) or, with
+ *  `capScale: 0`, a pyramid/cone. */
+export interface PolygonSpec extends BaseSpec {
+  kind: 'polygon'
+  /** MATH coords (z up). At least 3 for a face; 2 renders as a segment. */
+  vertices: [number, number, number][]
+  /** Close the ring back to the first vertex (default true). */
+  closed?: boolean
+  /** Fill the face (default true when closed). */
+  fill?: boolean
+  /** Extrude this far along the plane normal. Omit/0 = flat figure. */
+  height?: number
+  /** Top cap size relative to the base (default 1). 0 = apex → pyramid/cone. */
+  capScale?: number
+}
+
+/** A time-evolving physical system rather than a static figure: orbital
+ *  mechanics, a black hole, forces on particles, a vector field, a chaotic
+ *  attractor. The physics lives in `lib/sim/`; this is only the wire shape.
+ *  Discriminated a second time by `system`. */
+export type SimulationSpec = BaseSpec & { kind: 'simulation' } & SimulationBody
+
 export type Model3DSpec =
   | ParametricSpec
   | PolytopeSpec
@@ -132,9 +158,12 @@ export type Model3DSpec =
   | VectorsSpec
   | PlaneSpec
   | LineSpec
+  | PolygonSpec
+  | SimulationSpec
 
 export const MODEL3D_KINDS: Model3DSpec['kind'][] = [
   'parametric', 'polytope', 'implicit', 'primitive', 'curve', 'graph', 'vectors', 'plane', 'line',
+  'polygon', 'simulation',
 ]
 
 export interface SceneOptions {
@@ -162,6 +191,10 @@ interface Model3DState {
   show: (specs: Model3DSpec | Model3DSpec[], scene?: SceneOptions) => void
   /** Append object(s) to the current scene (opens the viewer if closed). */
   add: (specs: Model3DSpec | Model3DSpec[]) => void
+  /** Replace one object with a patched copy. Editing MUST go through here:
+   *  every per-kind component memoizes on spec identity, so mutating fields
+   *  in place repaints nothing. */
+  update: (id: string, patch: Partial<Model3DSpec>) => void
   /** Remove one object by id (legend ×). */
   remove: (id: string) => void
   hide: () => void
@@ -173,6 +206,9 @@ export const useModel3dStore = create<Model3DState>((set) => ({
   scene: {},
   show: (specs, scene) => set({ open: true, objects: asArray(specs), scene: scene ?? {} }),
   add: (specs) => set((s) => ({ open: true, objects: [...s.objects, ...asArray(specs)] })),
+  update: (id, patch) => set((s) => ({
+    objects: s.objects.map((o) => (o.id === id ? ({ ...o, ...patch } as Model3DSpec) : o)),
+  })),
   remove: (id) => set((s) => ({ objects: s.objects.filter((o) => o.id !== id) })),
   hide: () => set({ open: false }),
 }))

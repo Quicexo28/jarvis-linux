@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2 rows x 4 columns. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal"
+    android:initialLayout="@layout/widget_tailscale"
+    android:previewLayout="@layout/widget_tailscale"
+    android:description="@string/widget_desc_tailscale"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

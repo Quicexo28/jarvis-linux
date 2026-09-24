@@ -32,6 +32,9 @@ struct AgentConn {
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Response>>>>,
 }
 
+/// Silence after which an agent is considered gone (three missed 20 s pings).
+const AGENT_SILENCE_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Clone, serde::Serialize)]
 struct AgentMeta {
     name: String,
@@ -235,7 +238,23 @@ async fn handle_agent(hub: Hub, stream: TcpStream, peer: String) -> Result<()> {
     });
 
     // Reader loop.
-    while let Some(frame) = src.next().await {
+    //
+    // The timeout is what makes a machine that vanished actually disappear: a
+    // power cut leaves the TCP connection half-open (no FIN, no RST), so
+    // `src.next()` would block until the kernel's own keepalive gave up ~2 h
+    // later, and until then /machines kept reporting the agent as connected —
+    // which also hid the "wake it" button in the app. Any inbound frame resets
+    // the clock, and the 20 s ping above earns a Pong from a healthy agent, so
+    // this only fires after three missed beats.
+    loop {
+        let frame = match tokio::time::timeout(AGENT_SILENCE_TIMEOUT, src.next()).await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(_) => {
+                warn!("agent '{name}' sin señales en {AGENT_SILENCE_TIMEOUT:?}: se da por caído");
+                break;
+            }
+        };
         let text = match frame {
             Ok(WsMessage::Text(t)) => t,
             Ok(WsMessage::Close(_)) | Err(_) => break,
@@ -357,16 +376,55 @@ fn magic_packet(mac: [u8; 6]) -> [u8; 102] {
     pkt
 }
 
+/// Every broadcast address worth trying: the limited one plus the directed
+/// broadcast of each real IPv4 interface.
+///
+/// 255.255.255.255 alone is not enough in practice — it leaves through ONE
+/// interface (the default route) and some access points refuse to flood it
+/// onto the wired segment, which is exactly the Wi-Fi laptop → wired PC case.
+/// The directed form (192.168.1.255) crosses that bridge. Loopback and the
+/// Tailscale/docker ranges are skipped: WoL is layer 2, it cannot route.
+fn broadcast_targets() -> Vec<std::net::Ipv4Addr> {
+    let mut out = vec![std::net::Ipv4Addr::BROADCAST];
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        for iface in ifaces {
+            if iface.is_loopback() {
+                continue;
+            }
+            if let if_addrs::IfAddr::V4(v4) = iface.addr {
+                let Some(mask) = v4.netmask.into() else { continue };
+                let (ip, mask): (u32, u32) = (v4.ip.into(), u32::from(mask));
+                // /32 (tailscale0) has no broadcast address of its own.
+                if mask == u32::MAX {
+                    continue;
+                }
+                let bcast = std::net::Ipv4Addr::from(ip | !mask);
+                if !out.contains(&bcast) {
+                    out.push(bcast);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Broadcast the magic packet on the usual WoL ports. Note: L2 broadcast does
 /// NOT route over Tailscale — this only wakes a machine on the hub's own LAN.
-fn send_wol(mac: [u8; 6]) -> std::io::Result<()> {
+/// Returns how many datagrams actually left, so a caller can tell "sent" from
+/// "silently dropped".
+fn send_wol(mac: [u8; 6]) -> std::io::Result<usize> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0")?;
     sock.set_broadcast(true)?;
     let pkt = magic_packet(mac);
-    for port in [9u16, 7] {
-        let _ = sock.send_to(&pkt, ("255.255.255.255", port));
+    let mut sent = 0;
+    for addr in broadcast_targets() {
+        for port in [9u16, 7] {
+            if sock.send_to(&pkt, (addr, port)).is_ok() {
+                sent += 1;
+            }
+        }
     }
-    Ok(())
+    Ok(sent)
 }
 
 // ---- Control API handlers ----
@@ -425,13 +483,20 @@ async fn wake(State(hub): State<Hub>, Json(body): Json<WakeBody>) -> Json<serde_
     if macs.is_empty() {
         return Json(json!({ "ok": false, "error": "no_macs_known" }));
     }
+    // `sent` stays the count of MACs reached (what the app reports); `packets`
+    // is the datagram total, useful when debugging a LAN that swallows one of
+    // the broadcast forms.
     let mut sent = 0;
+    let mut packets = 0;
     for m in &macs {
         if let Some(mac) = parse_mac(m) {
-            if send_wol(mac).is_ok() {
-                sent += 1;
+            if let Ok(n) = send_wol(mac) {
+                if n > 0 {
+                    sent += 1;
+                    packets += n;
+                }
             }
         }
     }
-    Json(json!({ "ok": sent > 0, "sent": sent, "macs": macs }))
+    Json(json!({ "ok": sent > 0, "sent": sent, "packets": packets, "macs": macs }))
 }

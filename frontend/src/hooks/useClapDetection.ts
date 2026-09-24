@@ -1,4 +1,7 @@
 import { useEffect, useRef } from 'react'
+import { acquireMic, releaseMic } from '../audio/micFeed'
+import { isTtsSpeaking } from '../audio/ttsLevelBus'
+import { ClapEngine, CLAP_DEFAULTS, lowBandShare, highBandShare } from '../audio/clapEngine'
 
 interface ClapDetectionOptions {
   enabled: boolean
@@ -8,45 +11,21 @@ interface ClapDetectionOptions {
   debug?: boolean
 }
 
-// Pure DSP double-clap detector — no ML, no training data.
-//
-// A clap is a percussive broadband transient with four measurable signatures:
-//   1. LOUD      — RMS jumps well above the adaptive noise floor.
-//   2. SHARP     — near-instant attack (this frame ≫ previous frame).
-//   3. PERCUSSIVE— high crest factor (peak/RMS): a spike, not a sustained level.
-//   4. BROADBAND — high spectral flatness: energy spread across the spectrum,
-//                  unlike the few dominant harmonics of speech/music.
-// A double clap = two such onsets separated by 220–900 ms.
-//
-// Detection fires at the SECOND onset (not after it decays) → low latency and
-// immune to reverb tails. A refractory window after each onset prevents a
-// single clap's tail from registering as a second clap.
+// Adaptador WebAudio del detector de doble aplauso. Toda la lógica DSP (gates,
+// emparejado, umbrales medidos) vive en `audio/clapEngine.ts`, que es puro y se
+// testea en Node — aquí sólo se abre el micro compartido y se bombean frames.
 
 const FRAME_MS = 10
 const FFT_SIZE = 512
-
-const NOISE_ALPHA = 0.01        // noise-floor EMA — adapts to the room in ~1 s
-const TRANSIENT_RATIO = 6       // LOUD:  rms > 6× noise floor
-const RISE_RATIO = 2.5          // SHARP: rms[t] / rms[t-1] > 2.5
-const CREST_MIN = 2.5           // PERCUSSIVE: peak / rms within the frame
-const FLATNESS_MIN = 0.22       // BROADBAND: clap ≈ 0.3–0.8, speech ≈ 0.05–0.2
-const REFRACTORY_MS = 150       // ignore a clap's own tail before allowing the next
-const MIN_GAP_MS = 220          // tightest human double-clap spacing
-const MAX_GAP_MS = 900          // loosest; beyond this the first clap is forgotten
-const COOLDOWN_MS = 1500        // after a successful double clap
-
-// Spectral flatness = geometric mean / arithmetic mean of the magnitude
-// spectrum. ~1 = white-noise-like (broadband); ~0 = tonal (speech, music).
-function spectralFlatness(freqData: Uint8Array): number {
-  let logSum = 0, linSum = 0
-  const n = freqData.length
-  for (let i = 0; i < n; i++) {
-    const v = freqData[i] + 1 // +1 avoids log(0)
-    logSum += Math.log(v)
-    linSum += v
-  }
-  return Math.exp(logSum / n) / (linSum / n)
-}
+/** Silencia la detección un poco más allá del final del TTS (cola + latencia BT). */
+const TTS_TAIL_MS = 400
+/**
+ * Sordera inicial al arrancar el detector. Éste se enciende en el instante en
+ * que Jarvis pasa a DORMANT (típicamente porque acabas de cerrarlo con Super+W),
+ * y el ruido de ese momento — teclado, silla, la propia palmada — puede colar un
+ * par de transitorios y reabrir la ventana que acabas de cerrar.
+ */
+const STARTUP_DEAF_MS = 2000
 
 export function useClapDetection({ enabled, onDoubleClap, debug = false }: ClapDetectionOptions) {
   const callbackRef = useRef(onDoubleClap)
@@ -57,98 +36,98 @@ export function useClapDetection({ enabled, onDoubleClap, debug = false }: ClapD
 
     let audioCtx: AudioContext | null = null
     let analyser: AnalyserNode | null = null
-    let stream: MediaStream | null = null
     let intervalId: ReturnType<typeof setInterval> | null = null
     let keepAliveId: ReturnType<typeof setInterval> | null = null
+    let cancelled = false
+    let engine: ClapEngine | null = null
+    let lowBinsRef = 12
+    let highBinsRef = 31
 
     const freqBuf = new Uint8Array(FFT_SIZE / 2)
     const timeBuf = new Uint8Array(FFT_SIZE)
 
-    let noiseFloor     = 0.01
-    let prevRms        = 0
-    let firstClapAt    = 0  // timestamp of the pending first clap (0 = none)
-    let refractoryUntil = 0
-    let cooldownUntil  = 0
+    // Watchdog de calibración: cada 2 s saca el frame MÁS fuerte visto y sus
+    // features. Sin esto, "no detectó" no distingue entre micro mudo,
+    // AudioContext suspendido y umbral mal puesto.
+    let wdAt = 0
+    let wdMaxRms = 0
+    let wdHigh = 0
+    let wdLow = 0
+    const wdBands = new Array<number>(8).fill(0)
 
     const loop = () => {
-      if (!analyser) return
+      if (!analyser || !engine) return
       analyser.getByteFrequencyData(freqBuf)
       analyser.getByteTimeDomainData(timeBuf)
 
-      // RMS + peak in one pass (peak feeds the crest-factor / percussive test).
-      let sumSq = 0, peak = 0
+      let sumSq = 0
       for (let i = 0; i < timeBuf.length; i++) {
         const v = (timeBuf[i] - 128) / 128
         sumSq += v * v
-        const a = Math.abs(v)
-        if (a > peak) peak = a
       }
-      const curRms = Math.sqrt(sumSq / timeBuf.length)
+      const rms = Math.sqrt(sumSq / timeBuf.length)
       const now = performance.now()
 
-      // Adapt the noise floor on quiet frames only, so claps never poison it.
-      if (curRms < noiseFloor * 2.5) {
-        noiseFloor = noiseFloor * (1 - NOISE_ALPHA) + curRms * NOISE_ALPHA
-      }
-      noiseFloor = Math.max(noiseFloor, 0.001)
+      // Mientras Jarvis habla su propio audio no debe contar como aplauso (el
+      // AEC de PipeWire no cancela del todo a volumen alto).
+      if (isTtsSpeaking()) engine.suppressUntil(now + TTS_TAIL_MS)
 
-      if (now < cooldownUntil || now < refractoryUntil) { prevRms = curRms; return }
-
-      const isLoud  = curRms > noiseFloor * TRANSIENT_RATIO
-      // Coming straight out of near-silence counts as a sharp attack even if the
-      // ratio is muddied by a partially-filled previous frame.
-      const isSharp = prevRms < noiseFloor * 2 || curRms / Math.max(prevRms, 1e-6) > RISE_RATIO
-      const crest   = curRms > 1e-6 ? peak / curRms : 0
-      const flatness = spectralFlatness(freqBuf)
-
-      const isOnset = isLoud && isSharp && crest > CREST_MIN && flatness > FLATNESS_MIN
-
-      if (debug && isLoud) {
-        console.log(
-          `[clap] rms=${curRms.toFixed(3)} floor=${noiseFloor.toFixed(3)} ` +
-          `ratio=${(curRms / noiseFloor).toFixed(1)} rise=${(curRms / Math.max(prevRms, 1e-6)).toFixed(1)} ` +
-          `crest=${crest.toFixed(1)} flat=${flatness.toFixed(2)} ` +
-          `onset=${isOnset} gap=${firstClapAt ? Math.round(now - firstClapAt) : '-'}`
-        )
-      }
-
-      if (isOnset) {
-        const gap = now - firstClapAt
-        if (firstClapAt > 0 && gap >= MIN_GAP_MS && gap <= MAX_GAP_MS) {
-          firstClapAt = 0
-          cooldownUntil = now + COOLDOWN_MS
-          callbackRef.current()
-        } else {
-          firstClapAt = now // first clap of a (possibly new) pair
+      if (debug) {
+        if (rms > wdMaxRms) {
+          wdMaxRms = rms
+          wdHigh = highBandShare(freqBuf, highBinsRef)
+          wdLow  = lowBandShare(freqBuf, lowBinsRef)
+          // Media de cada octavo del espectro (32 bins ≈ 2.7 kHz a 44.1 kHz):
+          // la forma real que ve WebKitGTK, que NO coincide con el modelo
+          // teórico de getByteFrequencyData.
+          for (let g = 0; g < 8; g++) {
+            let s = 0
+            for (let i = g * 32; i < (g + 1) * 32; i++) s += freqBuf[i]
+            wdBands[g] = s / 32
+          }
         }
-        refractoryUntil = now + REFRACTORY_MS
-      } else if (firstClapAt > 0 && now - firstClapAt > MAX_GAP_MS) {
-        firstClapAt = 0 // the first clap got lonely — forget it
+        if (now - wdAt > 2000) {
+          console.log(`[clap-wd] max_rms=${wdMaxRms.toFixed(3)} high=${wdHigh.toFixed(2)} ` +
+                      `low=${wdLow.toFixed(2)} bands=${wdBands.map((v) => Math.round(v)).join(',')}`)
+          wdAt = now; wdMaxRms = 0
+        }
       }
 
-      prevRms = curRms
+      const event = engine.push({ rms, freq: freqBuf, now })
+
+      if (event.type === 'double') {
+        console.log(`[clap] DOBLE APLAUSO gap=${Math.round(event.gapMs)}ms sim=${event.similarity.toFixed(2)}`)
+        callbackRef.current()
+      } else if (debug && event.type !== 'none') {
+        console.log(`[clap] ${JSON.stringify(event)}`)
+      }
     }
 
-    navigator.mediaDevices
-      .getUserMedia({
-        audio: {
-          // Browser noise suppression attenuates exactly the broadband
-          // transients claps produce; AGC would wander the noise-floor estimate.
-          noiseSuppression: false,
-          echoCancellation: true,
-          autoGainControl: false,
-          channelCount: 1,
-        },
-        video: false,
-      })
+    // Micro COMPARTIDO. Las constraints (noiseSuppression off — la supresión del
+    // navegador se come justo los transitorios del aplauso — y AGC off) viven en
+    // audio/micFeed.ts. Abrir un stream propio aquí es lo que hacía crashear el
+    // WebProcess al cambiar de modo de voz.
+    let held = false
+    acquireMic()
       .then((s) => {
-        stream   = s
+        if (cancelled) { releaseMic(); return }
+        held     = true
         audioCtx = new AudioContext()
         analyser = audioCtx.createAnalyser()
         analyser.fftSize = FFT_SIZE
         // Default 0.8 time-averages frames and smears the transient we rely on.
         analyser.smoothingTimeConstant = 0
         audioCtx.createMediaStreamSource(s).connect(analyser)
+
+        // Ancho de bin = sampleRate / fftSize (≈93.75 Hz a 48 kHz).
+        const binHz = audioCtx.sampleRate / FFT_SIZE
+        const lowBins = Math.max(1, Math.round(CLAP_DEFAULTS.lowBandHz / binHz))
+        const highBins = Math.max(lowBins + 1, Math.round(CLAP_DEFAULTS.highBandHz / binHz))
+        lowBinsRef = lowBins
+        highBinsRef = highBins
+        engine = new ClapEngine(lowBins, highBins)
+        engine.suppressUntil(performance.now() + STARTUP_DEAF_MS)
+        console.log(`[clap] detector activo (sampleRate=${audioCtx.sampleRate}, lowBins=${lowBins}, highBins=${highBins}, sordo ${STARTUP_DEAF_MS}ms)`)
 
         audioCtx.onstatechange = () => {
           if (audioCtx?.state === 'suspended') audioCtx.resume()
@@ -159,12 +138,14 @@ export function useClapDetection({ enabled, onDoubleClap, debug = false }: ClapD
 
         intervalId = setInterval(loop, FRAME_MS)
       })
-      .catch(() => {})
+      .catch((err) => console.warn('[clap] no se pudo abrir el micro', err))
 
     return () => {
+      cancelled = true
       if (intervalId  !== null) clearInterval(intervalId)
       if (keepAliveId !== null) clearInterval(keepAliveId)
-      stream?.getTracks().forEach((t) => t.stop())
+      // stream compartido: sólo soltar la referencia (nunca parar sus tracks).
+      if (held) releaseMic()
       audioCtx?.close()
     }
   }, [enabled, debug])

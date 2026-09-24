@@ -9,7 +9,7 @@
  * unlisten vacío. Sin throw, sin unhandled rejection.
  */
 import { invoke as nativeInvoke, isTauri as nativeIsTauri } from '@tauri-apps/api/core'
-import { listen as nativeListen, type EventCallback, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen as nativeListen, emit as nativeEmit, type EventCallback, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 export function isTauri(): boolean {
@@ -32,4 +32,16 @@ export function tauriListen<T>(event: string, handler: EventCallback<T>): Promis
 export function getWindowLabel(): string | null {
   if (!isTauri()) return null
   try { return getCurrentWindow().label } catch { return null }
+}
+
+/**
+ * emit() real en Tauri; en navegador es no-op.
+ *
+ * Se usa para hablar entre VENTANAS del mismo proceso: cada `WebviewWindow` es
+ * un contexto JS aparte, así que los stores de zustand NO se comparten. La
+ * ventana principal emite y la de la pared aplica.
+ */
+export function tauriEmit(event: string, payload?: unknown): Promise<void> {
+  if (!isTauri()) return Promise.resolve()
+  return nativeEmit(event, payload)
 }

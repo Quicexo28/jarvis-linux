@@ -162,6 +162,122 @@ export function planeBasis(normal: Vec3): { u: Vec3; v: Vec3 } {
   return { u, v }
 }
 
+export interface FittedPlane {
+  /** Unit normal of the plane. */
+  normal: Vec3
+  /** Centroid of the input points — the plane passes through it. */
+  centroid: Vec3
+  /** Orthonormal in-plane basis. */
+  u: Vec3
+  v: Vec3
+  /** RMS distance of the points to the plane, in input units. 0 = exactly coplanar. */
+  rms: number
+}
+
+/**
+ * Least-squares plane through a point cloud.
+ *
+ * Uses the covariance-determinant method (no eigen solver): the largest of the
+ * three axis determinants picks the best-conditioned formulation, which is what
+ * keeps a nearly axis-aligned cloud from producing a garbage normal.
+ *
+ * Fewer than 3 points has no plane; the fallback normal is +z so callers get a
+ * usable basis instead of NaN.
+ */
+export function bestFitPlane(points: Vec3[]): FittedPlane {
+  const n = points.length
+  const centroid: Vec3 = [0, 0, 0]
+  for (const p of points) {
+    centroid[0] += p[0]; centroid[1] += p[1]; centroid[2] += p[2]
+  }
+  if (n > 0) {
+    centroid[0] /= n; centroid[1] /= n; centroid[2] /= n
+  }
+
+  if (n < 3) {
+    const normal: Vec3 = [0, 0, 1]
+    return { normal, centroid, ...planeBasis(normal), rms: 0 }
+  }
+
+  let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0
+  for (const p of points) {
+    const rx = p[0] - centroid[0]
+    const ry = p[1] - centroid[1]
+    const rz = p[2] - centroid[2]
+    xx += rx * rx; xy += rx * ry; xz += rx * rz
+    yy += ry * ry; yz += ry * rz; zz += rz * rz
+  }
+
+  const detX = yy * zz - yz * yz
+  const detY = xx * zz - xz * xz
+  const detZ = xx * yy - xy * xy
+  const detMax = Math.max(detX, detY, detZ)
+
+  let normal: Vec3
+  if (detMax <= 0) {
+    // Degenerate: all points collinear or coincident — no plane is determined.
+    normal = [0, 0, 1]
+  } else if (detMax === detX) {
+    normal = [detX, xz * yz - xy * zz, xy * yz - xz * yy]
+  } else if (detMax === detY) {
+    normal = [xz * yz - xy * zz, detY, xy * xz - yz * xx]
+  } else {
+    normal = [xy * yz - xz * yy, xy * xz - yz * xx, detZ]
+  }
+  normal = normalize(normal)
+
+  let sq = 0
+  for (const p of points) {
+    const d = (p[0] - centroid[0]) * normal[0]
+      + (p[1] - centroid[1]) * normal[1]
+      + (p[2] - centroid[2]) * normal[2]
+    sq += d * d
+  }
+
+  return { normal, centroid, ...planeBasis(normal), rms: Math.sqrt(sq / n) }
+}
+
+/** (u, v) coordinates of a point in the plane's basis, relative to its centroid. */
+export function toPlaneCoords(p: Vec3, plane: FittedPlane): [number, number] {
+  const rx = p[0] - plane.centroid[0]
+  const ry = p[1] - plane.centroid[1]
+  const rz = p[2] - plane.centroid[2]
+  return [
+    rx * plane.u[0] + ry * plane.u[1] + rz * plane.u[2],
+    rx * plane.v[0] + ry * plane.v[1] + rz * plane.v[2],
+  ]
+}
+
+/**
+ * Sort points into a non-self-intersecting ring: angular order around the
+ * centroid, measured in the plane's own basis. Without this a quadrilateral
+ * built from four fingertips comes out as a bow tie whenever the tips are
+ * listed in anatomical rather than geometric order.
+ */
+export function orderOnPlane(points: Vec3[], plane: FittedPlane): Vec3[] {
+  return points
+    .map((p) => {
+      const [pu, pv] = toPlaneCoords(p, plane)
+      return { p, a: Math.atan2(pv, pu) }
+    })
+    .sort((l, r) => l.a - r.a)
+    .map((e) => e.p)
+}
+
+/** Drop every point onto the plane along its normal — flattens a warped polygon. */
+export function projectToPlane(points: Vec3[], plane: FittedPlane): Vec3[] {
+  return points.map((p) => {
+    const d = (p[0] - plane.centroid[0]) * plane.normal[0]
+      + (p[1] - plane.centroid[1]) * plane.normal[1]
+      + (p[2] - plane.centroid[2]) * plane.normal[2]
+    return [
+      p[0] - d * plane.normal[0],
+      p[1] - d * plane.normal[1],
+      p[2] - d * plane.normal[2],
+    ] as Vec3
+  })
+}
+
 /**
  * Grid lines of the lattice { a·v1 + b·v2 } for a,b ∈ [-extent, extent] —
  * visualizes span(v1, v2) as a ruled plane through the origin.

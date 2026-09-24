@@ -6,9 +6,10 @@
  *   - Apple Shortcuts automations post background events (arrive/leave a place,
  *     charger plugged/unplugged, focus mode, sleep/wake).
  *
- * Auth: a fixed long-lived MOBILE_INGEST_TOKEN (so Shortcuts never expire) OR
- * the currently-activated mobile session token (so the web page reuses its
- * Bearer token). Both checked against `Authorization: Bearer` and `?token=`.
+ * Auth: a fixed long-lived MOBILE_INGEST_TOKEN (so Shortcuts never expire), the
+ * persistent JARVIS_WEB_TOKEN (one-token pairing for the Android app) OR the
+ * currently-activated mobile session token (so the web page reuses its Bearer
+ * token). All checked against `Authorization: Bearer` and `?token=`.
  */
 
 import { env } from 'node:process'
@@ -46,6 +47,12 @@ function checkIngestAuth(req) {
   if (!token) return false
   const ingest = env.MOBILE_INGEST_TOKEN
   if (ingest && token === ingest) return true
+  // The persistent web token is a superset of the ingest token (webAuth already
+  // lets it reach every non-dangerous route), so accepting it here grants no new
+  // power — it just lets the companion app pair with ONE token for both its
+  // WebView and its native background reporter.
+  const web = env.JARVIS_WEB_TOKEN
+  if (web && token === web) return true
   const session = getSession()
   if (session.activated && token === session.token) return true
   return false

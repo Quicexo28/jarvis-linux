@@ -1,5 +1,5 @@
 import { existsSync, unlinkSync, writeFileSync, readFileSync } from 'fs'
-import { join, basename, extname } from 'path'
+import { basename, extname } from 'path'
 import { createRequire } from 'module'
 import { getVaultPath, isConfigured } from './obsidian.js'
 
@@ -81,22 +81,33 @@ async function convertFile(filePath) {
 
 // --- watcher lifecycle ---
 
+/**
+ * Carpetas sin documentos que convertir y con muchísimos ficheros: vigilarlas
+ * sólo gasta inotify watches. `ignored` poda el subárbol entero.
+ */
+const IGNORED_DIRS = new Set(['.obsidian', '.git', '.trash', '.stfolder', 'node_modules'])
+
 export async function startPdfWatcher() {
   if (!isConfigured()) return
   const vault = getVaultPath()
 
   const { default: chokidar } = await import('chokidar')
-  const GLOB = '**/*.{pdf,docx,jpg,jpeg,png}'
 
-  watcher = chokidar.watch(GLOB, {
-    cwd: vault,
+  // chokidar 4+ ELIMINÓ el soporte de globs (aquí corre la 5): pasarle
+  // '**/*.{pdf,docx,jpg,jpeg,png}' hace que lo trate como una ruta LITERAL, que
+  // no existe, y el watcher no dispara nunca — silenciosamente, porque un
+  // directorio inexistente no es un error para chokidar. Verificado: 0 eventos
+  // con el patrón, 1 vigilando el directorio. Por eso se vigila el vault y el
+  // filtro por extensión vive en el handler del evento.
+  watcher = chokidar.watch(vault, {
     ignoreInitial: true,
     persistent: true,
     awaitWriteFinish: { stabilityThreshold: 1500, pollInterval: 200 },
+    ignored: (p) => IGNORED_DIRS.has(basename(p)),
   })
 
-  watcher.on('add', (relPath) => {
-    const full = join(vault, relPath)
+  watcher.on('add', (full) => {
+    if (!CONVERTERS[extname(full).toLowerCase()]) return
     console.log(`[vaultWatcher] new file: ${full}`)
     convertFile(full).catch((e) => console.error('[vaultWatcher]', e.message))
   })

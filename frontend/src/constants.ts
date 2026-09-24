@@ -8,6 +8,19 @@ export const PLAN_STORAGE_KEY = 'jarvis.plan2d.saved.v1'
 export const PLAN3D_ENTITY_STORAGE_KEY = 'jarvis.plan3d.entities.v1'
 export const PLAN3D_VIEWPOINT_STORAGE_KEY = 'jarvis.plan3d.viewpoint.v1'
 
+/**
+ * Composición de los anillos — FUENTE ÚNICA.
+ *
+ * Estas listas estaban triplicadas (`state/jarvisStore.ts`, `scenes/WorldScene.tsx`
+ * y una cuarta copia local dentro de `AwakeApp.tsx`), más un `MAIN_RING_SLOTS = 5`
+ * escrito a mano al lado. Añadir un slot obligaba a acertar en los cuatro sitios;
+ * fallar en el del snap hacía que soltar el arrastre seleccionara el modo
+ * EQUIVOCADO, y eso no lo delata ningún tipo.
+ */
+export const MAIN_RING: Mode[] = ['home', 'house', 'vault', 'system', 'cloud', 'utils']
+export const SUB_RING: Mode[] = ['plan3d', 'space', 'plan2d']
+export const SUB_RING_UTILS: Mode[] = ['timer', 'chrono']
+
 export const modeMeta: Record<Mode, { label: string; title: string; subtitle: string }> = {
   home: { label: 'Core', title: 'Jarvis Core', subtitle: 'Centro de mando personal · comando, voz y escenas contextuales' },
   house: { label: 'Casa', title: 'Casa / Torre Stark', subtitle: 'Instancia de Casa con acceso visual modular.' },
@@ -20,4 +33,5 @@ export const modeMeta: Record<Mode, { label: string; title: string; subtitle: st
   utils:  { label: 'Utilidades', title: 'Herramientas', subtitle: 'Temporizadores, cronómetros y herramientas rápidas.' },
   timer:  { label: 'Temporizador', title: 'Temporizadores', subtitle: 'Cuenta regresiva con alarma. Pausa, reanuda o agrega tiempo.' },
   chrono: { label: 'Cronómetro', title: 'Cronómetros', subtitle: 'Cuenta progresiva con vueltas. Pausa, reanuda o reinicia.' },
+  vault:  { label: 'Memoria', title: 'Grafo de Conocimiento', subtitle: 'Bóveda, memoria y conversaciones como una sola red navegable en 3D.' },
 }

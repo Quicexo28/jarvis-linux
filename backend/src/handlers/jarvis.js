@@ -4,7 +4,7 @@ import { join } from 'path'
 import { json, readBody } from '../lib/http.js'
 import { appendDeviceAction } from '../lib/obsidian.js'
 import { getAgentStatus } from '../agent/bridge.js'
-import { runClaude } from '../lib/claudeCli.js'
+import { runClaude, sessionAsk } from '../lib/claudeCli.js'
 import { addUserMessage, addAssistantMessage, getConversationContext } from '../lib/conversationMemory.js'
 import { markInteraction } from '../lib/attentionState.js'
 
@@ -32,14 +32,6 @@ export async function handleFillerWav(req, res) {
 }
 
 const WAKE_PROMPT = 'Eres Jarvis, asistente personal de Santiago, al estilo del Jarvis de Iron Man. Tratas al usuario de "señor". Responde SOLO con 2 a 5 palabras confirmando que estas atento ("A sus ordenes, señor", "Aqui estoy, señor"). Sin preguntas, sin saludos largos, sin emojis.'
-
-const TURN_PROMPT = `Eres Jarvis, asistente inteligente en espanol (Colombia).
-Responde de forma concisa y natural (1-3 oraciones max).
-Si hay un dispositivo en foco, confirma acciones sobre el.
-Si es una pregunta general, responde directamente.
-Nunca uses emojis. Nunca repitas la pregunta del usuario.
-Reglas de voz: sin markdown, sin rutas de archivos (di "la carpeta de configuracion"), sin URLs (di "el sitio oficial"), sin numeracion Primero/Segundo (usa "y ademas", "luego"), numeros en palabras cuando sea natural.
-Responde directo con la informacion o confirmacion. No uses frases de relleno ni anuncios ("dame un segundo", "dejame ver", "buena pregunta") — ve directo al contenido.`
 
 function runClaudeWake() {
   return runClaude('El usuario te llamo.', {
@@ -369,13 +361,17 @@ export async function handleJarvisTurn(req, res) {
     addUserMessage(message)
     const conversationContext = getConversationContext()
 
-    const reply = await runClaude(userPrompt, {
-      systemPromptText: TURN_PROMPT,
-      timeoutMs: 30000,
-      conversationContext,
+    // The chat runs the SAME brain as voice (persistent session, MCP tools
+    // loaded). With the old one-shot runClaude the model had no tools at all,
+    // so typed orders like "cambia el color de mi setup" got a friendly reply
+    // and nothing happened. The session is already warm from boot.
+    const { SPEECH_SYSTEM_PROMPT } = await import('./speech.js')
+    const reply = await sessionAsk(userPrompt, {
+      systemPromptText: SPEECH_SYSTEM_PROMPT,
+      timeoutMs: 60000,
+      extraContext: conversationContext ? `Contexto reciente:\n${conversationContext}` : null,
       model: 'haiku',
       fallbackReply: 'No tengo respuesta en este momento.',
-      namespace: 'jarvis-turn',
     })
 
     addAssistantMessage(reply)

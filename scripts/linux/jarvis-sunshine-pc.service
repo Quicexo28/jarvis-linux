@@ -1,0 +1,27 @@
+[Unit]
+# Segunda instancia de Sunshine: emite la PANTALLA REAL del portatil (eDP-1).
+#
+# La instancia principal (app-dev.lizardbyte.app.Sunshine.service) emite la
+# salida headless `projmap`, que es la pared del proyector. Desde ese stream no
+# se puede operar el PC — projmap es un monitor virtual con su propio workspace,
+# no un espejo del panel. De ahi dos instancias: una pantalla para proyectar y
+# otra para controlar.
+#
+# Sunshine deriva todos sus puertos de `port`, asi que la config desplaza la base
+# +1000 (48989) y las dos conviven. Puertos de esta: TCP 48984/48989/49010,
+# UDP 48998-49002; la web UI (48990) se deja CERRADA en ufw, igual que la otra.
+Description=Sunshine (pantalla del portatil) para Moonlight
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+ExecStart=/usr/bin/sunshine %h/.config/sunshine-pc/sunshine.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

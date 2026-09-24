@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 1 row x 2 columns. No configure screen: the machines are discovered from the
+     backend, so there is nothing to ask. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="40dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:resizeMode="horizontal"
+    android:initialLayout="@layout/widget_desktop"
+    android:previewLayout="@layout/widget_desktop"
+    android:description="@string/widget_desc_desktop"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

@@ -1,10 +1,13 @@
 // Panel de debug de gestos v2: consume el pipeline COMPARTIDO (video +
-// landmarks del gestureStore, publicados por useGesturePipeline cuando este
-// panel está abierto). No abre segunda cámara ni segundo landmarker — la v1
-// duplicaba la inferencia y el stream PipeWire.
+// canal único de landmarks del gestureStore). No abre segunda cámara ni
+// segundo landmarker — la v1 duplicaba la inferencia y el stream PipeWire.
+// Los landmarks solo se publican mientras alguien los pida: este panel los
+// reserva con acquireLandmarks() mientras está montado.
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useGestureStore } from '../state/gestureStore'
 import { getGestureVideo } from '../gestures/cameraFeed'
+import { extractFeatures } from '../gestures/features'
+import { TAP_ENTER_APERTURE, TAP_EXIT_APERTURE } from '../gestures/config'
 import type { Vec3 } from '../gestures/types'
 
 const CONNECTIONS = [
@@ -26,7 +29,14 @@ export function GestureDebugView({ onClose }: { onClose: () => void }) {
   const statusDetail = useGestureStore(s => s.statusDetail)
   const fps = useGestureStore(s => s.fps)
   const output = useGestureStore(s => s.output)
+  const handsFrame = useGestureStore(s => s.handsFrame)
   const [snapshots, setSnapshots] = useState<string[]>([])
+
+  // Apertura CRUDA pulgar-índice de la mano izquierda: es el número con el que
+  // se calibran TAP_ENTER/EXIT_APERTURE, y sin verlo el ajuste es a ciegas.
+  const leftAperture = handsFrame?.left
+    ? extractFeatures(handsFrame.left.world, handsFrame.left.image).aperture
+    : null
 
   // Video + esqueletos en un solo canvas, espejado para que se sienta selfie.
   // Los landmarks vienen post-swap: left = mano IZQUIERDA física.
@@ -49,7 +59,7 @@ export function GestureDebugView({ onClose }: { onClose: () => void }) {
         ctx.fillRect(0, 0, canvas.width, canvas.height)
       }
 
-      const frame = useGestureStore.getState().debugFrame
+      const frame = useGestureStore.getState().handsFrame
       const drawHand = (landmarks: Vec3[] | null, color: string) => {
         if (!landmarks) return
         ctx.strokeStyle = color
@@ -71,18 +81,22 @@ export function GestureDebugView({ onClose }: { onClose: () => void }) {
           ctx.fill()
         }
       }
-      drawHand(frame?.left ?? null, '#00f0ff')
-      drawHand(frame?.right ?? null, '#64ffda')
+      drawHand(frame?.left?.image ?? null, '#00f0ff')
+      drawHand(frame?.right?.image ?? null, '#64ffda')
       ctx.restore()
     }
+    const release = useGestureStore.getState().acquireLandmarks()
     draw()
-    return () => cancelAnimationFrame(rafRef.current)
+    return () => {
+      cancelAnimationFrame(rafRef.current)
+      release()
+    }
   }, [])
 
   const captureSnapshot = useCallback(() => {
     const snap = JSON.stringify({
       timestamp: new Date().toISOString(),
-      debugFrame: useGestureStore.getState().debugFrame,
+      handsFrame: useGestureStore.getState().handsFrame,
       output: useGestureStore.getState().output,
     }, null, 2)
     setSnapshots(prev => [...prev, snap])
@@ -146,13 +160,22 @@ export function GestureDebugView({ onClose }: { onClose: () => void }) {
           <DataPanel title="OUTPUT" data={{
             grab: output.grab,
             point: output.point,
+            tap: output.tap,
             pinch: output.pinch,
             click: output.click,
             back: output.back,
+            pointerHand: output.pointerHand,
+            tapAperture: leftAperture === null ? null : Number(leftAperture.toFixed(3)),
+            tapUmbrales: `${TAP_ENTER_APERTURE} / ${TAP_EXIT_APERTURE}`,
           }} />
           <div style={{ fontSize: 9, color: '#8899aa', lineHeight: 1.6 }}>
-            Mano IZQUIERDA física: puño = arrastrar/rotar · índice = cursor · V abierta y soltar = click · V cerrada y soltar = back.<br />
-            Mano DERECHA física: pinch pulgar-índice = zoom (abrir acerca, cerrar aleja; abre la mano para soltar).
+            <b>Manda la mano que apunte.</b> Con las dos a la vista: IZQUIERDA maneja la interfaz y DERECHA hace zoom.
+            Con una sola: esa mano maneja la interfaz, sea cual sea (mira <b>pointerHand</b>).<br />
+            Mano de puntero: índice = cursor · tocar el índice con el pulgar = clic (señala y toca) ·
+            puño = arrastrar/rotar · V abierta y soltar = click del slot enfocado · V cerrada y soltar = back.<br />
+            Zoom: pinch pulgar-índice (abrir acerca, cerrar aleja; abre la mano para soltar).<br />
+            <b>tapAperture</b> es la apertura cruda pulgar-índice: apunta y toca mirando el número para
+            calibrar TAP_ENTER/EXIT_APERTURE.
           </div>
         </div>
       </div>

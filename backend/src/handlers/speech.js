@@ -10,12 +10,21 @@
 
 import { json, readBody } from '../lib/http.js'
 import { getAttentionState, markInteraction, forcePassive, setVoiceMuted, isVoiceMuted } from '../lib/attentionState.js'
-import { classifyIntent, WAKE_RE } from '../lib/intentClassifier.js'
+import { classifyIntent, hasWakePhrase } from '../lib/intentClassifier.js'
 import { pickModel } from '../lib/modelRouter.js'
 import { addUserMessage, addAssistantMessage, getConversationContext } from '../lib/conversationMemory.js'
 import { sessionAskStream, sessionAsk, warmSession, getCodeDir } from '../lib/claudeCli.js'
+import { recordTurn, setTurnVerdict, turnStats, allFacts, searchFacts, deleteFact } from '../lib/turnStore.js'
+import { recallContext, learnFromTurn } from '../lib/memory.js'
+import { verifyTurn } from '../lib/verifier.js'
+import {
+  runOnce as runProactiveOnce,
+  blockingReason as proactiveBlockingReason,
+  gatherSignals as gatherProactiveSignals,
+} from '../lib/proactive.js'
 import { appendHistoryEntry, isConfigured as vaultConfigured } from '../lib/obsidian.js'
 import { handleSelfBuild } from './selfBuild.js'
+import { startDevJob } from '../lib/devAgent.js'
 import { activateSkill } from '../lib/skillRegistry.js'
 import { findSkillByText, invokeRoute } from '../lib/skillManifest.js'
 import { routes } from '../routes.js'
@@ -25,7 +34,6 @@ import {
   incrementTurnCount,
 } from '../lib/speakerContext.js'
 import { requestClient as skillBusRequest, hasClient as skillBusHasClient } from '../lib/skillBus.js'
-import { getLastDisplayShowAt, getLastUiActionAt } from './skillTools.js'
 
 const SPEECH_SYSTEM_PROMPT_BASE = `Eres Jarvis, el asistente personal de inteligencia artificial de Santiago. Hablas por voz, en español neutro (no uses regionalismos ni modismos de ningún país en particular).
 
@@ -35,7 +43,7 @@ IDENTIDAD: Leal, sereno y eficiente, al estilo del Jarvis de Iron Man. Tratas al
 
 MODO DE OPERACION: Tienes herramientas disponibles para ejecutar acciones reales en la aplicacion y en los sistemas del señor. Usalas — no las describas, hazlas. Si necesitas saber que esta visible en la interfaz, llama view_current. Si el señor pide algo que encaja en una herramienta, llamala antes de responder. Si te falta informacion para completar la accion (duracion, etiqueta, hora), pregunta antes de llamar.
 
-NAVEGACION (MUY IMPORTANTE): La interfaz de Jarvis tiene vistas navegables. Cuando el señor mencione el nombre de una vista o pida ir a alguna parte, llama open_view de inmediato. Vistas disponibles: home (centro de mando principal), house (la casa / Stark Tower), plan2d (plano 2D), plan3d (editor 3D), space (vista inmersiva primera persona), cloud (nube familiar), system (telemetria y configuracion movil), timer (temporizadores), chrono (cronometros). Mapeos directos: "home" → home, "casa" o "hogar" → house, "nube" → cloud, "sistema" → system, "plano" → plan2d o plan3d segun contexto. Para "volver" o "atras" usa close_view. Para "siguiente" o "anterior" usa ring_rotate. NO preguntes si quiere navegar — ejecuta directamente.
+NAVEGACION (MUY IMPORTANTE): La interfaz de Jarvis tiene vistas navegables. Cuando el señor mencione el nombre de una vista o pida ir a alguna parte, llama open_view de inmediato. Vistas disponibles: home (centro de mando principal), house (la casa / Stark Tower), plan2d (plano 2D), plan3d (editor 3D), space (vista inmersiva primera persona), cloud (nube familiar), system (telemetria y configuracion movil), timer (temporizadores), chrono (cronometros), vault (el grafo de conocimiento en 3D: la boveda, tu memoria y las conversaciones como una sola red). Mapeos directos: "home" → home, "casa" o "hogar" → house, "nube" → cloud, "sistema" → system, "plano" → plan2d o plan3d segun contexto, "grafo", "memoria", "boveda" o "que sabes" → vault. Para resaltar una nota concreta dentro del grafo usa vault_focus con su nombre. Para "volver" o "atras" usa close_view. Para "siguiente" o "anterior" usa ring_rotate. NO preguntes si quiere navegar — ejecuta directamente.
 
 CONFIRMACION (VARIA SIEMPRE — CRITICO): Confirma cada accion con una frase BREVE y DISTINTA, ajustada a lo que acabas de hacer; nunca uses una muletilla fija. PROHIBIDO repetir el mismo cierre de un turno al siguiente y PROHIBIDO empezar siempre con "Entendido" o "Listo". No tienes un catalogo de frases; redacta una nueva cada vez segun el contexto real (que se hizo, sobre que, el resultado). El "señor" es opcional: usalo a veces, no en cada frase. Manera de confirmar segun el caso: si abriste o navegaste algo, nombra lo que aparece ("Ahi tienes el plano", "Sistema en pantalla"); si creaste algo, refierete a ello ("Temporizador de diez minutos corriendo"); si ejecutaste un comando, resume el efecto, no digas solo "hecho". Si una accion falla, dilo con franqueza sin inventar. Si algo ya esta en el estado que el señor pide, díselo con tacto.
 
@@ -43,7 +51,7 @@ ESTILO VOZ: Una a tres oraciones. Sin emojis, markdown, rutas de archivo, ni URL
 
 SIMBOLOS (CRITICO): Tu respuesta se lee en voz alta tal cual. NUNCA vocalices simbolos ni signos de puntuacion como palabras. Jamas digas "numeral", "guion", "asterisco", "slash", "barra", "guion bajo", "almohadilla" ni deletrees signos (# - * _ / \\ \` ~ | etc.). No uses encabezados, vinetas ni listas con simbolos: si enumeras, hazlo hablando ("primero…, segundo…") o con comas. Si necesitas mostrar algo con simbolos (codigo, ruta, formula), usa show_display y en voz da solo un resumen natural.
 
-INTERPRETACION FONETICA (IMPORTANTE): El texto que recibes viene de reconocimiento de voz y puede traer errores: palabras mal transcritas, nombres deformados o frases que el transcriptor "corrigio" a algo sin sentido. NO exijas coincidencia literal. Interpreta siempre la intencion mas probable segun como SUENA lo escrito — la orden o pregunta foneticamente mas cercana que tenga sentido en el contexto. Ej: "abre el plano dos de" probablemente es "abre el plano 2D", "pon un tem por izador" es "pon un temporizador". TU PROPIO NOMBRE se transcribe mal a menudo: "javier", "ya ves", "jarbis", "harvis" casi siempre son "Jarvis" — interpretalo como que te llaman a ti. Si lo que oiste es ambiguo entre dos cosas razonables, ejecuta la mas probable o pregunta breve; nunca respondas literalmente a un transcript sin sentido como si fuera la intencion real.
+INTERPRETACION FONETICA (IMPORTANTE): El texto que recibes viene de reconocimiento de voz y puede traer errores: palabras mal transcritas, nombres deformados o frases que el transcriptor "corrigio" a algo sin sentido. NO exijas coincidencia literal. Interpreta siempre la intencion mas probable segun como SUENA lo escrito — la orden o pregunta foneticamente mas cercana que tenga sentido en el contexto. Ej: "abre el plano dos de" probablemente es "abre el plano 2D", "pon un tem por izador" es "pon un temporizador". TU PROPIO NOMBRE se transcribe mal a menudo: "javier", "ya ves", "ya lo veis", "jarbis", "garbis", "garvis", "harvis" casi siempre son "Jarvis" — interpretalo como que te llaman a ti. Si lo que oiste es ambiguo entre dos cosas razonables, ejecuta la mas probable o pregunta breve; nunca respondas literalmente a un transcript sin sentido como si fuera la intencion real.
 
 NUMEROS: Notacion natural española. Decimales con "coma" ("uno coma cuatro"). Sin coma de miles. Nunca repitas la pregunta del señor.`
 
@@ -80,7 +88,15 @@ REGLAS:
 // for self-development (read/understand/edit its own code).
 const CODE_PROMPT_SECTION = `
 
-CODIGO PROPIO (AUTODESARROLLO): Tienes acceso DIRECTO a tu propio codigo fuente — el de Jarvis Desktop. Puedes leerlo, explorarlo y editarlo con tus herramientas de archivos, igual que la boveda. Llama list_allowed_directories para ver las rutas permitidas; el directorio del codigo es el que NO es la boveda. Usa directory_tree y search_files para ubicarte, read_text_file para leer, y edit_file o write_file para modificar. Backend en backend/src (Node ESM), frontend en frontend/src (React+TS), servidor MCP de herramientas en backend/mcp-server/jarvis-mcp.js. Al editar tu codigo: cambios precisos, no rompas sintaxis, y avisa al señor que los cambios requieren reconstruir y reinstalar la app para surtir efecto. Si no estas seguro de algo, lee el archivo antes de editar. Nunca leas rutas ni codigo en voz alta; resume en lenguaje natural.`
+CODIGO PROPIO (AUTODESARROLLO): Puedes modificar tu propio codigo fuente. La regla es DELEGAR, no editar tu a mano:
+
+- Cuando el señor pida CUALQUIER cambio en ti o en tu codigo — arreglar un fallo, añadir una funcion, cambiar un comportamiento, quitar algo, mejorar rendimiento, tocar backend, frontend, voz o herramientas — llama code_task con la instruccion COMPLETA y literal de lo que pidio, con todo el detalle que dio. Un agente de programacion de verdad hace el cambio en el repositorio, corre los tests y el sistema reconstruye y reinicia lo que haga falta.
+- code_task es ASINCRONA y tarda minutos. En cuanto la llames, dile al señor con naturalidad que te pones con ello y que le avisas al terminar. NUNCA digas que ya esta hecho en ese mismo turno, y NUNCA te quedes esperando.
+- Si el señor pregunta como va, llama code_task_status y resume: en curso, terminado (con el resumen) o fallido.
+- Si un cambio salio mal o el señor pide deshacerlo, confirma en voz una vez y llama code_rollback.
+- Para mirar el estado del repositorio o correr algo puntual (tests, git status) usa code_run. Para leer tu codigo y responder una pregunta sobre el sin cambiar nada, usa tus herramientas de archivos (list_allowed_directories, search_files, read_text_file) y responde: no lances code_task para una simple consulta.
+- Backend en backend/src (Node ESM), frontend en frontend/src (React y TypeScript), servicios de voz en backend/voice/python, herramientas MCP en backend/mcp-server/jarvis-mcp.js.
+- Nunca leas rutas ni codigo en voz alta; resume en lenguaje natural.`
 
 // Appended when broad storage access is on (JARVIS_ALL_DRIVES=1 or
 // JARVIS_EXTRA_DIRS set). Grants whole-disk file access — with explicit safety
@@ -126,14 +142,44 @@ CONTROL DE SISTEMA: Para estas acciones usa las herramientas dedicadas, NO run_t
 - Volumen: system_volume (up, down, set value=0-100, mute, unmute, toggle, get). "sube/baja el volumen", "pon el volumen en 40", "silencio".
 - Bluetooth: system_bluetooth (devices=emparejados, scan=buscar, connect/disconnect con target=nombre, on/off, status). "qué bluetooth tengo"→devices; "conecta mis audífonos"→connect.
 - Procesos: system_process (list=top de CPU, kill name=...). "qué consume"→list; "cierra spotify"→kill. No puede cerrar procesos críticos del sistema ni a Jarvis; si pasa eso, dilo.
+- Portapapeles: system_clipboard (get, set text=...). "resume/traduce/explica/corrige lo que copié" → get primero y trabaja sobre ese texto; "cópiame el comando/la fórmula/la respuesta" → set con el texto exacto y en voz di solo que quedó copiado.
+- Música y vídeo: system_media (status, play, pause, toggle, next, previous). "pausa", "siguiente canción", "qué suena".
+- Ventanas y escritorios: system_window (list, active, focus target, workspace N, move target+workspace, close, fullscreen). "ve al escritorio tres", "trae el navegador", "manda esta ventana al dos", "cierra esta ventana". Para abrir una app que no está abierta sigue usando launch_app; si ya está abierta, focus.
+- No molestar: system_dnd (on, off, toggle, status). Actívalo cuando el señor vaya a estudiar o concentrarse y apágalo cuando termine.
+- Qué está haciendo el señor: si pregunta por algo "de la pantalla", "esto" o "este error" sin decir qué, usa look_screen antes de responder en vez de adivinar.
 Resume el resultado en voz natural; no leas números crudos salvo que aporten (ej. "volumen al 40 por ciento").`
+
+// Estudio: el señor estudia física (universidad). Sin esta sección el modelo
+// contestaba conceptos con la regla de "una a tres oraciones" del estilo de voz
+// y las derivaciones se quedaban en una frase vaga o se recitaban en voz.
+const STUDY_PROMPT_SECTION = `
+
+TUTOR DE ESTUDIO: El señor estudia física en la universidad y te usa para estudiar. Cuando pregunte un concepto, pida resolver un problema o una demostración, actúa como un buen profesor particular:
+- Explicación de conceptos: primero la intuición física en palabras (qué pasa y por qué), luego lo formal. En estas respuestas puedes extenderte a cuatro o seis oraciones habladas; sigue sin listas ni símbolos en la voz.
+- Toda ecuación, derivación o desarrollo paso a paso va en pantalla con show_display (kind=formula para una fórmula en LaTeX, kind=markdown con LaTeX entre signos de dólar para varios pasos). En la voz narra la idea de cada paso, nunca dictes la ecuación.
+- Problemas numéricos: plantea qué se conserva o qué ley aplica, resuelve en pantalla con unidades, y en voz da el resultado con sus unidades y la idea clave. Verifica órdenes de magnitud y unidades antes de responder; si un dato falta, pregúntalo.
+- Si la geometría ayuda (campos, superficies, vectores, órbitas, sistemas dinámicos), muéstrala con show_3d.
+- Al terminar una explicación larga, a veces cierra con una pregunta breve de comprobación para que el señor la responda; si la responde, corrígele con precisión, sin condescendencia.
+- Si no estás seguro de un dato o fórmula, dilo; nunca inventes constantes ni referencias.
+- Si el señor dice "guárdalo", "anótalo" o similar tras una explicación, escribe una nota clara en la carpeta de conocimiento de la bóveda que corresponda al tema, con las ecuaciones en LaTeX.
+
+SESIONES Y REPASO:
+- "Vamos a estudiar", "pomodoro", "modo foco": study_session start con la materia (una hora son dos bloques de 25). Confirma en una frase y NO vuelvas a hablar del temporizador: los avisos de fin de bloque y descanso los da el sistema solo. "Ya terminé" o "para" → study_session stop.
+- Tarjetas: tras explicar algo importante, ofrece convertirlo en tarjetas; si acepta, flashcards add con tres a seis tarjetas de pregunta y respuesta cortas, mazo = la materia. Para "hazme tarjetas de mi nota de X", lee la nota primero.
+- Repaso o "hazme un quiz": flashcards due, pregunta UNA tarjeta por turno en voz sin dar la respuesta, espera la respuesta del señor, dile si acertó con la respuesta correcta en una frase, llama flashcards grade con la nota que merece y pasa a la siguiente. Si no hay tarjetas pendientes, hazle tres preguntas de lo último que estudió.
+
+PRODUCTIVIDAD DEL DIA:
+- "Qué tengo hoy", "cómo va mi día", "planeemos el día": day_brief y resume en voz lo que importa. Para planear, propone un orden concreto (qué primero y cuándo estudiar) y crea las tareas que acepte con obsidian_task_create.
+- "Ya hice X", "marca X como hecha": obsidian_task_done. Si X es un hábito (entrenar, leer, meditar, dormir temprano), usa habit log con un nombre estable; si es ambas cosas, las dos.
+- "Qué hice hoy" o revisión de la noche: day_brief, di lo logrado y lo pendiente, y pregunta si pasa lo pendiente a mañana.`
 
 const terminalAutoEnabled = process['env']['JARVIS_TERMINAL_AUTO'] !== '0'
 
-const SPEECH_SYSTEM_PROMPT =
+export const SPEECH_SYSTEM_PROMPT =
   SPEECH_SYSTEM_PROMPT_BASE +
   DISPLAY_PROMPT_SECTION +
   MODEL3D_PROMPT_SECTION +
+  STUDY_PROMPT_SECTION +
   (vaultConfigured() ? VAULT_PROMPT_SECTION : '') +
   (getCodeDir() ? CODE_PROMPT_SECTION : '') +
   (broadStorageEnabled ? STORAGE_PROMPT_SECTION : '') +
@@ -153,7 +199,7 @@ const STT_CORRECT_WORDCONF = Number(process['env']['JARVIS_STT_CORRECT_WORDCONF'
 
 const STT_CORRECTION_PROMPT = `Eres un corrector de transcripciones de voz en español para el asistente Jarvis de Santiago. Recibes UNA transcripción cruda de un reconocedor de voz que pudo equivocarse: nombres castellanizados, palabras partidas, términos mal oídos, o frases que el transcriptor "corrigió" a algo sin sentido.
 
-Tu única tarea: devolver la frase que el usuario MÁS PROBABLEMENTE dijo, corrigiendo solo errores fonéticos evidentes. Interpreta por cómo SUENA. Vocabulario frecuente: Jarvis (a veces oído "javier", "ya ves", "jarbis", "harvis"), Santiago, Obsidian, Brave, Firefox, Spotify, Telegram, Kitty, Hyprland; comandos: abre, cierra, pon, navega, sube/baja el volumen, temporizador, cronómetro, recordatorio, plano, casa, nube, sistema, bluetooth.
+Tu única tarea: devolver la frase que el usuario MÁS PROBABLEMENTE dijo, corrigiendo solo errores fonéticos evidentes. Interpreta por cómo SUENA. Vocabulario frecuente: Jarvis (a veces oído "javier", "ya ves", "ya lo veis", "jarbis", "garbis", "garvis", "harvis"), Santiago, Obsidian, Brave, Firefox, Spotify, Telegram, Kitty, Hyprland; comandos: abre, cierra, pon, navega, sube/baja el volumen, temporizador, cronómetro, recordatorio, plano, casa, nube, sistema, bluetooth.
 
 REGLAS ESTRICTAS:
 - Si la transcripción ya tiene sentido, devuélvela TAL CUAL.
@@ -442,22 +488,72 @@ async function runSpeechTurn(body, { onSentence: onSentenceRaw = () => {} } = {}
     if (!tFirstSentence) tFirstSentence = Date.now()
     onSentenceRaw(clean)
   }
+  // Per-turn scratch the inner pipeline fills in (model metadata from the Claude
+  // session: tools called, tool errors, tokens, cost, session id).
+  const ctx = { meta: null, turnId: null }
   const traceTurn = (result) => {
     if (result && result.action === 'respond') {
       const first = tFirstSentence ? tFirstSentence - t0 : -1
+      const m = ctx.meta
+      const tools = m?.tools?.length ? ` tools=${m.tools.join(',')}` : ''
+      const failed = m?.toolErrors?.length ? ` tool_errors=${m.toolErrors.length}` : ''
       console.log(
-        `[turn] intent=${result.intentTag ?? '-'} first_sentence=${first}ms total=${Date.now() - t0}ms`
+        `[turn] intent=${result.intentTag ?? '-'} first_sentence=${first}ms total=${Date.now() - t0}ms${tools}${failed}`
       )
+      // Persist the turn. This is the substrate for both the stats endpoint and
+      // the eval harness — before it, the line above was the ONLY record.
+      ctx.turnId = recordTurn({
+        ts: t0,
+        speaker: result.speaker ?? null,
+        mode: result.state ?? null,
+        source: 'voice',
+        text: result.userText ?? '',
+        reply: result.reply ?? null,
+        intent: result.intentTag ?? null,
+        model: m?.model ?? null,
+        tools: m?.tools ?? null,
+        msFirst: first,
+        msTotal: Date.now() - t0,
+        inTokens: m?.inTokens ?? null,
+        outTokens: m?.outTokens ?? null,
+        costUsd: m?.costUsd ?? null,
+        sessionId: m?.sessionId ?? null,
+        error: m?.toolErrors?.length ? m.toolErrors.join(' | ').slice(0, 500)
+             : (m?.error ?? (m?.isError ? 'model_error' : null)),
+      })
+      // Verification runs AFTER the reply left for TTS, so it costs the spoken
+      // turn nothing, and after recordTurn so the verdict has a row to land on.
+      if (ctx.meta) {
+        verifyTurn({
+          reply: result.reply ?? '',
+          tools: ctx.meta.tools ?? [],
+          toolCalls: ctx.meta.toolCalls ?? [],
+          toolErrors: ctx.meta.toolErrors ?? [],
+          model: ctx.meta.model ?? 'haiku',
+          sinceTs: ctx.claudeStartedAt ?? t0,
+          systemPromptText: SPEECH_SYSTEM_PROMPT,
+        })
+          .then((verdict) => { if (ctx.turnId) setTurnVerdict(ctx.turnId, verdict) })
+          .catch(() => {})
+      }
+      if (result.userText) {
+        learnFromTurn({
+          text: result.userText,
+          reply: result.reply,
+          turnId: ctx.turnId,
+          intent: result.intentTag ?? '',
+        })
+      }
     }
     return result
   }
-  const result = await _runSpeechTurnInner(body, onSentence)
+  const result = await _runSpeechTurnInner(body, onSentence, ctx)
   // Buffered path (mobile/process-speech) speaks result.reply directly — same guard.
   if (result && typeof result.reply === 'string') result.reply = sanitizeSpoken(result.reply)
   return traceTurn(result)
 }
 
-async function _runSpeechTurnInner(body, onSentence) {
+async function _runSpeechTurnInner(body, onSentence, ctx = { meta: null }) {
   let text = String(body.text ?? '').trim()
   const speakerConfidence = Number(body.speakerConfidence ?? 0)
   // RAW cosine for the execution-authorization gate. Falls back to the calibrated
@@ -473,7 +569,7 @@ async function _runSpeechTurnInner(body, onSentence) {
   // explicitly naming "jarvis" in a transcript (STT path).
   if (isVoiceMuted()) {
     const norm = text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '')
-    if (WAKE_RE.test(norm)) {
+    if (hasWakePhrase(norm)) {
       setVoiceMuted(false)
       markInteraction()
       const ack = 'Escuchando de nuevo, señor.'
@@ -593,13 +689,28 @@ async function _runSpeechTurnInner(body, onSentence) {
     return { action: 'voice_mode_set', mode, applied, reply: ack, state }
   }
 
+  // self_code: the owner asked Jarvis to change its OWN source. Delegate to a
+  // full Claude Code agent (devAgent) instead of hoping the haiku brain picks
+  // the code_task tool — the intent is unambiguous and the job is async, so the
+  // turn just acknowledges and the result is announced later.
+  if (intentTag === 'self_code') {
+    const job = await startDevJob({ instruction: text, requestedBy: speakerName || 'voz' })
+    const reply = job.spoken || (job.ok
+      ? 'Me pongo con ello, señor.'
+      : 'No pude iniciar el cambio en mi código, señor.')
+    addAssistantMessage(reply)
+    appendHistoryEntry(speakerName, { userText: text, assistantReply: reply }).catch(() => {})
+    onSentence(reply)
+    return { action: 'self_code', jobId: job.jobId || null, ok: job.ok, reply, intentTag, state }
+  }
+
   // self_build: generate a new dynamic capability — cannot go through MCP (FS + restart).
   if (intentTag === 'self_build') {
     const reply = await handleSelfBuild({ capability: text })
     addAssistantMessage(reply)
     appendHistoryEntry(speakerName, { userText: text, assistantReply: reply }).catch(() => {})
     onSentence(reply)
-    return { action: 'respond', reply, intentTag, score: classification.score, state }
+    return { action: 'respond', reply, intentTag, score: classification.score, state, userText: text, speaker: speakerName }
   }
 
   // activate_skill: activate a pre-built skill by name — no MCP tool yet.
@@ -614,7 +725,7 @@ async function _runSpeechTurnInner(body, onSentence) {
       : 'No identifiqué qué habilidad activar. Intenta de nuevo con el nombre exacto.'
     addAssistantMessage(reply)
     onSentence(reply)
-    return { action: 'respond', reply, intentTag, score: classification.score, state }
+    return { action: 'respond', reply, intentTag, score: classification.score, state, userText: text, speaker: speakerName }
   }
 
   // chat: try a matching pre-built skill trigger first (instant, no Claude).
@@ -634,7 +745,7 @@ async function _runSpeechTurnInner(body, onSentence) {
         addAssistantMessage(reply)
         appendHistoryEntry(speakerName, { userText: text, assistantReply: reply }).catch(() => {})
         onSentence(reply)
-        return { action: 'respond', reply, intentTag: 'invoke_skill', skill: skill.slug, score: classification.score, state }
+        return { action: 'respond', reply, intentTag: 'invoke_skill', skill: skill.slug, score: classification.score, state, userText: text, speaker: speakerName }
       }
     }
   }
@@ -654,8 +765,8 @@ async function _runSpeechTurnInner(body, onSentence) {
 
   // Multi-model routing: delicate work → opus, complex reasoning → sonnet,
   // everything else → haiku (fast). Each model has its own warm session.
-  const model = pickModel(intentTag)
-  if (model !== 'haiku') console.log(`[speech] routing intent "${intentTag}" -> ${model}`)
+  const model = pickModel(intentTag, text)
+  if (model !== 'haiku') console.log(`[speech] routing "${intentTag}" -> ${model}`)
 
   // Cross-model memory: each model has its OWN persistent session/history, so
   // switching models loses the other's recent turns. When this turn routes to a
@@ -671,13 +782,19 @@ async function _runSpeechTurnInner(body, onSentence) {
   let streamedAnything = false
   const tClaudeStart = Date.now()
   const sentencer = makeSentencer((s) => { streamedAnything = true; onSentence(s) })
+  // Long-term memory: whatever Jarvis already knows that relates to this
+  // utterance. Local FTS5 lookup (sub-ms), so it costs tokens, not latency.
+  const memory = recallContext(text)
+  if (memory) console.log(`[memory] recalled ${memory.split('\n').filter((l) => l.startsWith('- ')).length} item(s)`)
+
   const reply = await sessionAskStream(text, {
     systemPromptText: SPEECH_SYSTEM_PROMPT,
     // Opus/sonnet reason longer than haiku; give the heavier models more headroom.
     timeoutMs: model === 'haiku' ? 45000 : 90000,
-    extraContext: timeContext + bridge,
+    extraContext: timeContext + memory + bridge,
     model,
     fallbackReply: 'No tengo respuesta en este momento.',
+    onMeta: (m) => { ctx.meta = m },
   }, (delta) => sentencer.push(delta))
   sentencer.end()
   // Safety net: if Claude returned a reply but no text deltas were streamed
@@ -692,53 +809,10 @@ async function _runSpeechTurnInner(body, onSentence) {
   addAssistantMessage(reply)
   appendHistoryEntry(speakerName, { userText: text, assistantReply: reply }).catch(() => {})
 
-  enforceDisplayClaim(reply, model, tClaudeStart)
+  // The wrapper verifies once the turn row exists (see runSpeechTurn).
+  ctx.claudeStartedAt = tClaudeStart
 
-  return { action: 'respond', reply, intentTag, score: classification.score, state }
-}
-
-// After a reply, Jarvis must SHOW (not speak) any URL, source or named tool.
-// The prompt orders this ("URLS Y FUENTES" + "HERRAMIENTAS MENCIONADAS"), but
-// haiku often skips it — either CLAIMING something is on screen without calling
-// show_display (hallucinated compliance), or just NAMING a tool/link in voice
-// with no card at all. When the reply trips any of these AND no UI verb (display
-// card, view, 3D, ...) reached the backend this turn, fire ONE corrective turn
-// into the SAME session (it still has the context) ordering the real
-// show_display call. Fire-and-forget: the card pops a couple seconds after the
-// voice. Gating on getLastUiActionAt keeps navigation replies ("Sistema en
-// pantalla" after open_view) from re-triggering — those turns DID run a UI verb.
-// Disable the whole net with JARVIS_ENFORCE_DISPLAY=0.
-const ENFORCE_DISPLAY = process['env']['JARVIS_ENFORCE_DISPLAY'] !== '0'
-
-// (1) Verbal claim that something is already on screen.
-const DISPLAY_CLAIM_RE = /\bpantalla\b|\b(?:ah[íi]\s+(?:tienes?|est[áa]n?)|te\s+dejo|le\s+dejo|te\s+muestro|le\s+muestro)\b[\s\S]{0,60}?\b(?:enlaces?|links?|referencias?|fuentes?|url(?:es)?|f[óo]rmulas?)\b/i
-// (2) A URL or bare domain spoken in the reply — links are NEVER read aloud.
-// Bare domains require a real TLD after a letter-led label, so decimals ("3.14")
-// and abbreviations don't match.
-const URL_IN_REPLY_RE = /\bhttps?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|so|app|ai|co|es|gg|md|sh|xyz|info|tech|cloud|design|page)\b(?:\/\S*)?/i
-// (3) A named tool/app/product/service the "HERRAMIENTAS MENCIONADAS" rule
-// requires a card for. Curated for precision (real product names, word-bounded)
-// so ordinary Spanish words don't false-fire.
-const NAMED_TOOL_RE = /\b(obsidian|notion|firefox|brave|chromium|chrome|spotify|telegram|whatsapp|discord|kitty|hyprland|vs\s?code|visual studio code|github|gitlab|figma|canva|photoshop|blender|davinci resolve|excel|powerpoint|google\s+(?:docs|drive|sheets|calendar|maps|keep)|gmail|outlook|slack|zoom|trello|todoist|anki|zotero|wolfram|perplexity|chatgpt|openai|gemini|copilot|tailscale|react|next\.?js|svelte|vue|tailwind|ffmpeg)\b/i
-
-function enforceDisplayClaim(reply, model, sinceTs) {
-  if (!ENFORCE_DISPLAY || !reply) return
-  const claim = DISPLAY_CLAIM_RE.test(reply)
-  const url = URL_IN_REPLY_RE.test(reply)
-  const tool = !claim && !url && NAMED_TOOL_RE.test(reply)
-  if (!claim && !url && !tool) return
-  if (getLastUiActionAt() >= sinceTs || getLastDisplayShowAt() >= sinceTs) return
-  const trigger = claim ? 'claim' : url ? 'url' : 'tool'
-  console.warn(`[display] ${trigger} without UI action — firing corrective turn`)
-  sessionAsk(
-    '[SISTEMA — no es el señor] Tu última respuesta nombró una herramienta, un enlace o una fuente (o dijo que algo estaba en pantalla) SIN llamar a ninguna herramienta: la pantalla está vacía. Llama show_display AHORA MISMO con ese contenido — kind=url para un único enlace o herramienta (incluye su URL oficial), kind=markdown con una línea "Nombre — URL" por cada herramienta o fuente si son varias, kind=formula con LaTeX para fórmulas o resultados. Después de llamarla responde únicamente "listo", sin ninguna otra palabra.',
-    {
-      systemPromptText: SPEECH_SYSTEM_PROMPT,
-      timeoutMs: 30000,
-      model,
-      fallbackReply: '',
-    },
-  ).catch(() => {})
+  return { action: 'respond', reply, intentTag, score: classification.score, state, userText: text, speaker: speakerName }
 }
 
 export async function handleProcessSpeech(req, res) {
@@ -778,5 +852,76 @@ export async function handleConverse(req, res) {
     res.end()
   } catch (error) {
     try { res.write(JSON.stringify({ type: 'error', error: String(error) }) + '\n'); res.end() } catch {}
+  }
+}
+
+/**
+ * GET /api/jarvis/stats — rolling turn telemetry (volume, latency percentiles,
+ * cost, model/intent mix, tool errors) plus what memory holds. This is the read
+ * side of turnStore: before it, tuning the voice stack meant grepping journald.
+ * Query: ?hours=24
+ */
+export async function handleTurnStats(req, res) {
+  try {
+    const url = new URL(req.url, 'http://localhost')
+    const hours = Math.min(720, Math.max(1, Number(url.searchParams.get('hours') ?? 24)))
+    const stats = turnStats(hours)
+    if (!stats) return json(res, 200, { ok: false, error: 'store_unavailable' })
+    return json(res, 200, { ok: true, ...stats })
+  } catch (error) {
+    return json(res, 500, { ok: false, error: 'stats_error', detail: String(error) })
+  }
+}
+
+/**
+ * GET /api/jarvis/memory — what Jarvis has learned. ?q= searches, otherwise the
+ * newest facts. A memory system nobody can inspect is a memory system nobody can
+ * correct.
+ */
+export async function handleMemoryList(req, res) {
+  try {
+    const url = new URL(req.url, 'http://localhost')
+    const q = url.searchParams.get('q')
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? 50)))
+    const facts = q ? searchFacts(q, limit) : allFacts(limit)
+    return json(res, 200, { ok: true, count: facts.length, facts })
+  } catch (error) {
+    return json(res, 500, { ok: false, error: 'memory_error', detail: String(error) })
+  }
+}
+
+/** POST /api/jarvis/memory/forget {id} — remove a wrong or outdated fact. */
+export async function handleMemoryForget(req, res) {
+  try {
+    const body = await readBody(req)
+    const id = Number(body?.id)
+    if (!Number.isFinite(id)) return json(res, 400, { ok: false, error: 'missing_id' })
+    return json(res, 200, { ok: deleteFact(id) })
+  } catch (error) {
+    return json(res, 500, { ok: false, error: 'memory_error', detail: String(error) })
+  }
+}
+
+/**
+ * POST /api/jarvis/proactive/run — force one proactive cycle now (bypasses the
+ * schedule, honours delivery). GET /api/jarvis/proactive — why the loop is or
+ * isn't allowed to speak right now, which is otherwise invisible.
+ */
+export async function handleProactiveRun(req, res) {
+  try {
+    const body = await readBody(req).catch(() => ({}))
+    const result = await runProactiveOnce({ force: body?.force !== false })
+    return json(res, 200, { ok: true, ...result })
+  } catch (error) {
+    return json(res, 500, { ok: false, error: 'proactive_error', detail: String(error) })
+  }
+}
+
+export async function handleProactiveStatus(_req, res) {
+  try {
+    const reason = proactiveBlockingReason()
+    return json(res, 200, { ok: true, wouldRun: !reason, blockedBy: reason, signals: await gatherProactiveSignals() })
+  } catch (error) {
+    return json(res, 500, { ok: false, error: 'proactive_error', detail: String(error) })
   }
 }

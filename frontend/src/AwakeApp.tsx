@@ -4,10 +4,10 @@ import { useBootStore } from './state/bootStore'
 import { Plan2DEditor, loadSavedPlans } from './modes/Plan2DEditor'
 import { Plan3DViewer } from './modes/Plan3DViewer'
 import { SpaceViewer } from './modes/SpaceViewer'
+import { VaultGraph } from './modes/VaultGraph'
 import { HudPanel } from './components/HudPanel'
 import { HudBtn } from './components/HudBtn'
 import { CoreTerminal } from './components/CoreTerminal'
-import { GlassPanel } from './components/GlassPanel'
 import { GestureMonitor } from './components/GestureMonitor'
 import { GesturePointer } from './components/GesturePointer'
 import { GestureDebugView } from './components/GestureDebugView'
@@ -15,6 +15,10 @@ import { SpeakerIdPanel } from './components/SpeakerIdPanel'
 import { SpeakerConfigWindow } from './components/SpeakerConfigWindow'
 import { TtsTestWidget } from './components/TtsTestWidget'
 import { ObsidianStatusBadge } from './components/ObsidianStatusBadge'
+import { PanelSection } from './components/PanelSection'
+import { StatRow } from './components/StatRow'
+import { HoloMeter } from './components/HoloMeter'
+import { Badge } from './components/Badge'
 import { TimerPanel } from './components/TimerPanel'
 import { ChronoPanel } from './components/ChronoPanel'
 import { startTimerTicker } from './state/timerStore'
@@ -27,33 +31,35 @@ import { PlanSelectorOverlay } from './components/PlanSelectorOverlay'
 import { ListeningOverlay } from './components/ListeningOverlay'
 import { DisplayCard } from './components/DisplayCard'
 import { Model3DViewer } from './components/Model3DViewer'
+import { useWall3dMirror } from './hooks/useWall3dMirror'
 import { WakeWordWizard } from './components/WakeWordWizard'
 import { getApiBase } from './api/client'
 import { streamTtsAndPlay, streamTtsSession, setTtsDucking, type TtsSession } from './audio/streamingTts'
+import { registerSpeaker } from './skills/speakBridge'
 import { streamConverse } from './audio/converse'
 import { ttsBusThinking } from './audio/ttsLevelBus'
 import { useClapDetection } from './hooks/useClapDetection'
 import { useLocalStt } from './hooks/useLocalStt'
 import { useSkillBus } from './hooks/useSkillBus'
 import { useGesturePipeline } from './hooks/useGesturePipeline'
+import { useGestureCursor } from './hooks/useGestureCursor'
 import { useGestureStore } from './state/gestureStore'
 import { getWakeConfirmation } from './utils/wakeReply'
 import { PINCH_ENTER_THRESHOLD, PINCH_VIGNETTE_START, RING_DRAG_SENSITIVITY } from './gestures/config'
-import { useGestureRotation } from './lib/gestures/useGestureRotation'
-import { snapToNearestSlot } from './state/ringSnap'
-import { modeMeta } from './constants'
+import { snapToNearestSlot, dragToRingAngle } from './state/ringSnap'
+import { modeMeta, MAIN_RING } from './constants'
 import QRCode from 'qrcode'
 import type { SystemTelemetry, MobileTokenInfo, MobileStatus, Mode } from './types'
 import { useModel3dStore } from './state/model3dStore'
+// wake_word gate. Tolerant of common Whisper mis-spellings of "jarvis".
+import { hasWakePhrase, stripWakePhrase } from './lib/wakePhrase'
 
 // Default to false; replaced at runtime by /api/system/config.
 // Server reads JARVIS_TELEMETRY_ENABLED to enable the periodic poll.
 
 // Modes that fully replace the world canvas when zoomed
-const CANVAS_MODES = new Set(['plan2d', 'plan3d', 'space'])
+const CANVAS_MODES = new Set(['plan2d', 'plan3d', 'space', 'vault'])
 
-// wake_word gate. Tolerant of common Whisper mis-spellings of "jarvis".
-const WAKE_RE = /\b(j+arvis|y+arvis|ll?arvis|jervis|jarbis)\b/i
 const WAKE_WINDOW_MS = 15000
 // Ctrl+C grace: while Jarvis is THINKING (turn accepted, not yet speaking) a new
 // final normally interrupts and replaces the turn. Within this window after the
@@ -124,8 +130,6 @@ export function AwakeApp() {
   const activeRingMode  = useJarvisStore(s => s.activeRingMode)
   const setRingLevel    = useJarvisStore(s => s.setRingLevel)
   const rotateRing      = useJarvisStore(s => s.rotateRing)
-  const setActiveRingMode = useJarvisStore(s => s.setActiveRingMode)
-  const setRingAngle    = useJarvisStore(s => s.setRingAngle)
   const setBootState    = useBootStore(s => s.setBootState)
 
   const pinchZoomProgress    = useJarvisStore(s => s.pinchZoomProgress)
@@ -133,6 +137,8 @@ export function AwakeApp() {
   const speakerName          = useJarvisStore(s => s.speakerName)
 
   const gestureEnabled    = useGestureStore(s => s.enabled)
+  const gestureStatus     = useGestureStore(s => s.status)
+  const gestureFps        = useGestureStore(s => s.fps)
   const setGestureEnabled = useGestureStore(s => s.setEnabled)
   // NADA del `output` de gestos se suscribe con selectores de React aquí. El
   // engine publica una muestra nueva ~20 veces/s; incluso con selectores
@@ -142,46 +148,85 @@ export function AwakeApp() {
   // suscripción IMPERATIVA (abajo) y solo cambia estado cuando toca actuar.
   // El puntero vive en <GesturePointer/> con su propia suscripción.
   const model3dOpen       = useModel3dStore(s => s.open)
+  // Con el proyector encendido el 3D se va a la pared; aqui NO se pinta,
+  // para que el portatil quede libre en vez de mostrarlo duplicado.
+  const wall3dOwner       = useWall3dMirror()
   const model3dHide       = useModel3dStore(s => s.hide)
 
   useGesturePipeline()
+  // El cursor de mano convierte el puntero en eventos de puntero del DOM, así
+  // que los menús se manejan señalando y tocando (ver useGestureCursor). Va
+  // ligado al pipeline: sin manos no hay cursor que emitir.
+  useGestureCursor(gestureEnabled)
 
   /** Handler de eventos de gesto; se reasigna en cada render (ver más abajo). */
   const gestureEventsRef = useRef<Parameters<typeof useGestureStore.subscribe>[0]>(() => {})
 
-  const MAIN_RING_SLOTS = 5  // MAIN_RING has 5 modes: home, house, system, cloud, utils
+  // Gesture: el puño AGARRA el carrusel y lo gira; al soltar, snap al slot más
+  // cercano. Manipulación DIRECTA y absoluta — el ángulo es una función de
+  // dónde está la mano ahora mismo, no la integral de sus incrementos.
+  //
+  // Lo que había antes y por qué se cambió entero:
+  //  1. `ringAngle` lo escribía este arrastre y no lo leía NADIE: el carrusel
+  //     seguía `activeRingMode`, así que mientras arrastrabas no se movía un
+  //     pixel y al soltar saltaba de golpe al slot elegido. Sin feedback no hay
+  //     manera de apuntar: arrastrabas a ciegas.
+  //  2. Se sumaban "radianes" (deltaYaw · sensibilidad) a un valor medido en
+  //     SLOTS — dos unidades distintas en la misma variable.
+  //  3. `useGestureRotation` metía EMA + zona muerta + exponente 1.4 sobre el
+  //     INCREMENTO POR FRAME, encima del One-Euro que el GrabTracker ya aplica.
+  //     Una zona muerta sobre la derivada mata los movimientos lentos enteros
+  //     (a 20 Hz un gesto suave da ~0.005/frame, por debajo del umbral 0.015) y
+  //     el exponente aplasta lo que queda. De ahí que hubiera que "remar".
+  // El visor 3D (overlay z-index 5000) CAPTURA los gestos: mientras esté
+  // abierto, el ring de debajo no se mueve.
+  useEffect(() => {
+    let dragging = false
+    let baseAngle = 0
+    let lastSlot = -1
 
-  // Gesture: grab → arrastra el ring; al soltar, snap al slot más cercano.
-  // useGestureRotation aporta clutch + EMA + zona muerta y llama a onFrame en
-  // cada muestra (sin re-render). El visor 3D (overlay z-index 5000) CAPTURA
-  // los gestos: mientras esté abierto, el ring de debajo no se mueve.
-  useGestureRotation({
-    sensitivity: RING_DRAG_SENSITIVITY,
-    emaAlpha: 0.20,
-    deadZone: 0.015,
-    nonLinearExp: 1.4,
-    onFrame: ({ deltaYaw, grabActive: dragging, justReleased }) => {
-      if (zoomedMode != null || model3dOpen) return
-      if (useGestureStore.getState().output.pinch.active) return
+    const stop = () => {
+      if (!dragging) return
+      dragging = false
+      lastSlot = -1
+      const jarvis = useJarvisStore.getState()
+      const slot = snapToNearestSlot(jarvis.ringAngle, MAIN_RING.length)
+      // El orden importa: soltar la bandera ANTES deja que setActiveRingMode
+      // vuelva a mantener el invariante ángulo↔modo (ver jarvisStore).
+      jarvis.setRingDragging(false)
+      jarvis.setRingAngle(slot)
+      jarvis.setActiveRingMode(MAIN_RING[slot])
+    }
 
-      if (dragging) {
-        // ringAngle se lee con getState() y NO es dependencia: leerlo de una
-        // suscripción y volver a escribirlo en cadena fue el loop infinito de
-        // setState (React #185) que tumbaba la app al primer arrastre.
-        if (ringLevel === 'main' && deltaYaw !== 0) {
-          setRingAngle(useJarvisStore.getState().ringAngle + deltaYaw)
-        }
-        return
+    return useGestureStore.subscribe((s, prev) => {
+      const g = s.output.grab
+      const p = prev.output.grab
+      if (g.active === p.active && g.deltaX === p.deltaX) return
+
+      const jarvis = useJarvisStore.getState()
+      const blocked =
+        jarvis.zoomedMode != null ||
+        useModel3dStore.getState().open ||
+        s.output.pinch.active
+
+      if (!g.active || blocked || jarvis.ringLevel !== 'main') { stop(); return }
+
+      if (!dragging) {
+        dragging = true
+        baseAngle = jarvis.ringAngle
+        jarvis.setRingDragging(true)
       }
-
-      if (justReleased && ringLevel === 'main') {
-        const MAIN_RING: Mode[] = ['home', 'house', 'system', 'cloud', 'utils']
-        const slot = snapToNearestSlot(useJarvisStore.getState().ringAngle, MAIN_RING_SLOTS)
-        setRingAngle(slot)
-        setActiveRingMode(MAIN_RING[slot])
+      const angle = dragToRingAngle(baseAngle, g.deltaX, RING_DRAG_SENSITIVITY)
+      jarvis.setRingAngle(angle)
+      // Resalte en vivo del slot que pasa por el frente: sin esto el holograma
+      // no se ilumina hasta soltar y el arrastre sigue siendo a ciegas.
+      const slot = snapToNearestSlot(angle, MAIN_RING.length)
+      if (slot !== lastSlot) {
+        lastSlot = slot
+        jarvis.setActiveRingMode(MAIN_RING[slot])
       }
-    },
-  })
+    })
+  }, [])
 
   const [housePlanKey, setHousePlanKey]     = useState<string>('')
   const [systemTelemetry, setSystemTelemetry] = useState<SystemTelemetry | null>(null)
@@ -430,6 +475,10 @@ export function AwakeApp() {
       .finally(() => { if (speakAbortRef.current === ctrl) speakingRef.current = false })
   }, [voiceEnabled])
 
+  // Expose the REAL speak() to the skill bus, so backend-initiated speech goes
+  // through the same abort + echo-gate bookkeeping as a normal reply.
+  useEffect(() => registerSpeaker(speak), [speak])
+
   // Duck TTS volume while the user is speaking. Called on every interim
   // transcript so the fade starts as soon as Whisper detects speech. An
   // auto-restore timer fires 2.5s later in case no final transcript arrives
@@ -503,14 +552,14 @@ export function AwakeApp() {
     // handled, with the wake word stripped). Each accepted turn re-arms the
     // window so a back-and-forth keeps going without repeating "jarvis".
     if (voiceMode === 'wake_word') {
-      const heard = WAKE_RE.test(text)
+      const heard = hasWakePhrase(text)
       if (!wakeListening && !heard) {
         console.log(`[wake] gated (no wake word): "${text}"`)
         return
       }
       openWakeWindow()
       if (heard) {
-        const stripped = text.replace(WAKE_RE, ' ').replace(/\s+/g, ' ').trim()
+        const stripped = stripWakePhrase(text)
         if (stripped) text = stripped
       }
     }
@@ -693,6 +742,11 @@ export function AwakeApp() {
 
 
   const isVoiceActive = sttListening || wakeListening
+  // Para las ETIQUETAS del modo de voz, no `sttListening`: en continuo y en
+  // wake_word el micro está abierto siempre, así que «Escuchando…» tapaba el
+  // nombre del modo y los dos se veían idénticos (parecía que wake no existía).
+  // Solo cuenta como escucha la ventana de wake abierta o el PTT sostenido.
+  const voiceHeard = wakeListening || (voiceMode === 'ptt' && sttListening)
   const audioLevel = useAudioLevel({ enabled: isVoiceActive || processingReply })
 
   // Early duck: as soon as mic level rises (before any transcript), fade Jarvis
@@ -788,17 +842,62 @@ export function AwakeApp() {
           {zoomedMode === 'plan2d' && <Plan2DEditor />}
           {zoomedMode === 'plan3d' && <Plan3DViewer initialSelectedKey={housePlanKey} />}
           {zoomedMode === 'space'  && <SpaceViewer  initialSelectedKey={housePlanKey} />}
+          {zoomedMode === 'vault'  && <VaultGraph />}
         </div>
       )}
 
-      {/* Status bar */}
+      {/* Barra de estado. Antes era marca + hora + un punto sin explicación; el
+          punto no distinguía "escuchando" de "pensando", que es justo lo que uno
+          quiere saber cuando Jarvis tarda. Ahora cada estado lleva su hue. */}
       <div className="status-bar">
-        <span className="mode-label">{zoomedMode ? modeMeta[zoomedMode].label : 'JARVIS'}</span>
+        <span className="status-brand">JARVIS</span>
+        <span className="status-divider" />
+        <span className="mode-label">
+          {modeMeta[zoomedMode ?? activeRingMode].label}
+        </span>
+        <span className="status-spacer" />
+        {/* Las insignias son los CONTROLES: antes había un panel flotante
+            aparte que decía lo mismo y se solapaba con el reloj. Un clic cicla
+            el modo de voz; otro enciende o apaga los gestos. */}
+        <button
+          className="status-badge-btn"
+          title={`Modo de voz: ${voiceMode} · clic para cambiar`}
+          onClick={() => {
+            const cycle: Record<string, import('./state/jarvisStore').VoiceMode> = {
+              off: 'continuous', continuous: 'wake_word', wake_word: 'ptt', ptt: 'off',
+            }
+            setVoiceMode(cycle[voiceMode])
+          }}
+        >
+          <Badge
+            tone={voiceMode === 'off' ? 'idle' : processingReply ? 'attn' : isVoiceActive ? 'voice' : 'info'}
+            live={processingReply || isVoiceActive}
+          >
+            {voiceMode === 'off' ? 'voz off'
+             : processingReply ? 'pensando'
+             : voiceHeard ? 'escucha'
+             : voiceMode === 'wake_word' ? 'wake'
+             : voiceMode === 'ptt' ? 'ptt' : 'continuo'}
+          </Badge>
+        </button>
+        <button
+          className="status-badge-btn"
+          title="Pipeline de gestos"
+          onClick={() => setGestureEnabled(!gestureEnabled)}
+        >
+          <Badge
+            tone={!gestureEnabled ? 'idle' : gestureStatus === 'error' ? 'fail' : gestureStatus === 'running' ? 'ok' : 'attn'}
+            live={gestureEnabled && gestureStatus === 'starting'}
+          >
+            gestos
+          </Badge>
+        </button>
         <span className="clock">{time}</span>
-        {isVoiceActive && zoomedMode !== 'home' && <span className="voice-dot-mini" />}
       </div>
 
-      {zoomedMode && (
+      {/* El modo `vault` trae su propio botón dentro del HUD, y el global le
+          caía encima de la marca de la barra de estado. Un solo "volver". */}
+      {zoomedMode && zoomedMode !== 'vault' && (
         <button className="world-back-btn" onClick={handleBack}>
           ← Volver
         </button>
@@ -820,14 +919,19 @@ export function AwakeApp() {
                 }}
               >
                 {voiceMode === 'off'       ? 'Voz apagada'
-                 : voiceMode === 'continuous' ? (sttListening ? 'Escuchando…' : 'Siempre activa')
-                 : voiceMode === 'wake_word'  ? (sttListening ? 'Escuchando…' : 'Wake word')
-                 : /* ptt */                   (sttListening ? 'Escuchando…' : 'Modo PTT')}
+                 : voiceHeard               ? 'Escuchando…'
+                 : voiceMode === 'continuous' ? 'Siempre activa'
+                 : voiceMode === 'wake_word'  ? 'Wake word'
+                 : /* ptt */                   'Modo PTT'}
               </HudBtn>
               <HudBtn active={clapWakeEnabled} onClick={() => setClapWakeEnabled(!clapWakeEnabled)}>
                 {clapWakeEnabled ? 'Aplauso activo' : 'Activar aplauso'}
               </HudBtn>
-              <HudBtn onClick={() => setBootState('DORMANT')}>Dormir sistema</HudBtn>
+              {/* El clic por permanencia del cursor de mano no puede dormir el
+                  sistema sin querer: aquí solo vale un tap deliberado. */}
+              <span data-gesture-nodwell style={{ display: 'contents' }}>
+                <HudBtn onClick={() => setBootState('DORMANT')}>Dormir sistema</HudBtn>
+              </span>
             </div>
           )}
           {terminalOpen && (
@@ -842,124 +946,109 @@ export function AwakeApp() {
       {/* Cloud panel */}
       {panelMounted && (zoomedMode === 'cloud' || (!zoomedMode && activeRingMode === 'cloud')) && (
         <HudPanel mode="Cloud" exiting={panelExiting} className="mode-panel" style={{ opacity: panelOpacity, transition: 'opacity 0.15s ease' }}>
-          <div style={{ color: 'var(--text-dim)', fontSize: 11, padding: '4px 0', letterSpacing: '0.04em', lineHeight: 1.5 }}>
-            <div style={{ fontSize: 10, letterSpacing: '2px', color: 'var(--cyan, #00e5ff)', opacity: 0.7, marginBottom: 8 }}>
-              SINCRONIZACIÓN
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              Esta vista alojará la sincronización de tu bóveda de Obsidian con la nube y la replicación de planos 3D entre dispositivos.
-            </div>
-            <div style={{ opacity: 0.6, fontSize: 10 }}>
-              · Backup cifrado de Speakers/&lt;nombre&gt;/<br />
-              · Sync de planos 2D/3D entre escritorio y móvil<br />
-              · Historial cruzado de conversaciones<br />
-              <br />
-              Disponible en una próxima versión.
-            </div>
-          </div>
+          <PanelSection title="Sincronización" tone="idle" meta="pendiente">
+            <StatRow label="Backup de voz" value="no" tone="idle" />
+            <StatRow label="Planos 2D/3D" value="no" tone="idle" />
+            <StatRow label="Historial cruzado" value="no" tone="idle" />
+          </PanelSection>
+          <PanelSection title="Bóveda" tone="info">
+            <ObsidianStatusBadge />
+            <HudBtn onClick={() => setZoomedMode('vault')}>Abrir grafo de conocimiento</HudBtn>
+          </PanelSection>
         </HudPanel>
       )}
 
-      {/* System panel */}
+      {/* System panel.
+
+          Antes: ~120 líneas de estilos inline con siete colores literales
+          distintos (#64ffda, #ffd700, #00e5ff, #ffffff22…), cada bloque con su
+          propio tamaño de fuente. Ahora cada bloque es una PanelSection y cada
+          número una fila o un medidor, así que el panel se lee en vertical y el
+          COLOR queda reservado para lo que de verdad tiene estado. */}
       {panelMounted && (zoomedMode === 'system' || (!zoomedMode && activeRingMode === 'system')) && (
         <HudPanel mode="System" exiting={panelExiting} className="mode-panel" style={{ opacity: panelOpacity, transition: 'opacity 0.15s ease' }}>
 
-          {/* Conexion Movil */}
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 9, letterSpacing: '2px', color: 'var(--cyan, #00e5ff)', opacity: 0.7, marginBottom: 8 }}>
-              CONEXION MOVIL
-            </div>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                <canvas ref={qrCanvasRef} style={{ borderRadius: 4 }} />
-                <div style={{ fontSize: 9, color: '#ffd700' }}>{countdown}</div>
-                <button
-                  className="hud-btn"
-                  style={{ fontSize: 9 }}
-                  onClick={refreshQr}
-                >
-                  nuevo QR
-                </button>
+          <PanelSection
+            title="Conexión móvil"
+            tone={mobileStatus?.connected ? 'ok' : 'idle'}
+            meta={mobileStatus?.connected ? 'activa' : 'sin sesión'}
+          >
+            <div className="qr-block">
+              <div className="qr-frame">
+                <canvas ref={qrCanvasRef} />
+                <span className="qr-countdown">{countdown}</span>
               </div>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 10 }}>
-                {mobileToken?.tunnelUrl ? (
-                  <div
-                    style={{ border: '1px solid #64ffda44', borderRadius: 4, padding: 8, cursor: 'pointer' }}
-                    onClick={() => copyUrl(mobileToken.tunnelUrl!)}
-                    title="Copiar"
-                  >
-                    <div style={{ fontSize: 8, color: '#64ffda', marginBottom: 2 }}>
-                      TUNEL {copiedUrl === mobileToken.tunnelUrl ? '· Copiado' : '· Clic para copiar'}
-                    </div>
-                    <div style={{ wordBreak: 'break-all', opacity: 0.9 }}>{mobileToken.tunnelUrl}</div>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 9, color: '#ffd700', opacity: 0.8 }}>
-                    ⏳ Túnel no listo — reiniciando backend...
-                  </div>
-                )}
+              <div className="qr-urls">
+                {mobileToken?.tunnelUrl
+                  ? <StatRow label="Túnel" value={mobileToken.tunnelUrl} tone="ok" wrap
+                      onClick={() => copyUrl(mobileToken.tunnelUrl!)}
+                      title={copiedUrl === mobileToken.tunnelUrl ? 'Copiado' : 'Clic para copiar'} />
+                  : <StatRow label="Túnel" value="no listo" tone="attn" />}
                 {mobileToken?.tailscaleUrl && (
-                  <div
-                    style={{ border: '1px solid #00e5ff44', borderRadius: 4, padding: 8, cursor: 'pointer' }}
+                  <StatRow label="Tailscale" value={mobileToken.tailscaleUrl} tone="info" wrap
                     onClick={() => copyUrl(mobileToken.tailscaleUrl!)}
-                    title="Copiar"
-                  >
-                    <div style={{ fontSize: 8, color: '#00e5ff', marginBottom: 2 }}>
-                      TAILSCALE {copiedUrl === mobileToken.tailscaleUrl ? '· Copiado' : '· Clic para copiar'}
-                    </div>
-                    <div style={{ wordBreak: 'break-all', opacity: 0.9 }}>{mobileToken.tailscaleUrl}</div>
-                  </div>
+                    title={copiedUrl === mobileToken.tailscaleUrl ? 'Copiado' : 'Clic para copiar'} />
                 )}
-                <div
-                  style={{ border: '1px solid #ffffff22', borderRadius: 4, padding: 8, cursor: mobileToken?.lanUrl ? 'pointer' : 'default' }}
-                  onClick={() => mobileToken?.lanUrl && copyUrl(mobileToken.lanUrl)}
-                  title={mobileToken?.lanUrl ? 'Copiar' : undefined}
-                >
-                  <div style={{ fontSize: 8, opacity: 0.5, marginBottom: 2 }}>
-                    LAN {mobileToken?.lanUrl && copiedUrl === mobileToken.lanUrl ? '· Copiado' : mobileToken?.lanUrl ? '· Clic para copiar' : ''}
-                  </div>
-                  <div style={{ wordBreak: 'break-all', opacity: 0.7 }}>{mobileToken?.lanUrl ?? '—'}</div>
-                </div>
+                <StatRow label="LAN" value={mobileToken?.lanUrl ?? '—'} wrap
+                  onClick={mobileToken?.lanUrl ? () => copyUrl(mobileToken.lanUrl!) : undefined}
+                  title={mobileToken?.lanUrl ? 'Clic para copiar' : undefined} />
                 {mobileStatus?.connected && (
-                  <div style={{ border: '1px solid #64ffda33', borderRadius: 4, padding: 8 }}>
-                    <div style={{ fontSize: 8, color: '#64ffda', marginBottom: 2 }}>SESION ACTIVA</div>
-                    <div style={{ opacity: 0.8 }}>
-                      {mobileStatus.lastSeen
-                        ? `Hace ${Math.round((Date.now() - mobileStatus.lastSeen) / 60_000)} min`
-                        : 'Conectado'}
-                      {mobileStatus.via ? ` · ${mobileStatus.via}` : ''}
-                    </div>
-                  </div>
+                  <StatRow
+                    label="Sesión"
+                    tone="ok"
+                    value={mobileStatus.lastSeen
+                      ? `hace ${Math.round((Date.now() - mobileStatus.lastSeen) / 60_000)} min`
+                      : 'conectado'}
+                    unit={mobileStatus.via ?? undefined}
+                  />
                 )}
               </div>
             </div>
-          </div>
+            <HudBtn onClick={refreshQr}>Nuevo QR</HudBtn>
+          </PanelSection>
 
-          {/* Gestos */}
-          <GestureMonitor />
-          <HudBtn onClick={() => setGestureDebugOpen(true)}>Debug gestos</HudBtn>
+          <PanelSection
+            title="Gestos"
+            tone={!gestureEnabled ? 'idle' : gestureStatus === 'error' ? 'fail' : gestureStatus === 'running' ? 'ok' : 'attn'}
+            meta={gestureEnabled && gestureStatus === 'running' ? `${gestureFps} fps` : undefined}
+          >
+            <GestureMonitor />
+            <HudBtn onClick={() => setGestureDebugOpen(true)}>Debug gestos</HudBtn>
+          </PanelSection>
 
-          {/* Speaker ID */}
-          <SpeakerIdPanel onOpenConfig={() => setSpeakerConfigOpen(true)} />
+          <PanelSection title="Hablante">
+            <SpeakerIdPanel onOpenConfig={() => setSpeakerConfigOpen(true)} />
+          </PanelSection>
 
-          {/* TTS Test */}
-          <TtsTestWidget />
+          <PanelSection title="Voz sintética">
+            <TtsTestWidget />
+          </PanelSection>
 
-          {/* Obsidian */}
-          <ObsidianStatusBadge />
+          <PanelSection title="Bóveda">
+            <ObsidianStatusBadge />
+            <HudBtn onClick={() => setZoomedMode('vault')}>Grafo de conocimiento</HudBtn>
+          </PanelSection>
 
-          {/* Telemetria */}
-          {telemetryEnabled ? (
-            <>
-              <div className="hud-stat">CPU · {(systemTelemetry?.host?.cpu?.usagePct ?? 0).toFixed(1)}%</div>
-              <div className="hud-stat">GPU · {(systemTelemetry?.host?.gpu?.avgUtilizationPct ?? 0).toFixed(1)}%</div>
-              <div className="hud-stat">
-                Red · ↓{(systemTelemetry?.host?.network?.rxMbps ?? 0).toFixed(2)} ↑{(systemTelemetry?.host?.network?.txMbps ?? 0).toFixed(2)} Mbps
-              </div>
-            </>
-          ) : (
-            <div style={{ color: 'var(--text-dim)', fontSize: 11, padding: '4px 0' }}>Telemetría desactivada.</div>
-          )}
+          {/* Telemetría: medidores con umbral, no tres líneas de texto. El hue
+              lo decide severityHue dentro de HoloMeter, así que un 92% de CPU se
+              pone rojo sin que este sitio tenga que acordarse. */}
+          <PanelSection
+            title="Telemetría"
+            tone={telemetryEnabled ? 'info' : 'idle'}
+            meta={telemetryEnabled ? undefined : 'off'}
+          >
+            {telemetryEnabled ? (
+              <>
+                <HoloMeter label="CPU" value={systemTelemetry?.host?.cpu?.usagePct ?? null} warn={70} crit={90} decimals={1} />
+                <HoloMeter label="GPU" value={systemTelemetry?.host?.gpu?.avgUtilizationPct ?? null} warn={80} crit={95} decimals={1} />
+                <HoloMeter label="RAM" value={systemTelemetry?.host?.memory?.usagePct ?? null} warn={80} crit={93} decimals={0} />
+                <StatRow label="Red ↓" value={(systemTelemetry?.host?.network?.rxMbps ?? 0).toFixed(2)} unit="Mbps" />
+                <StatRow label="Red ↑" value={(systemTelemetry?.host?.network?.txMbps ?? 0).toFixed(2)} unit="Mbps" />
+              </>
+            ) : (
+              <StatRow label="Estado" value="desactivada" tone="idle" />
+            )}
+          </PanelSection>
         </HudPanel>
       )}
 
@@ -973,24 +1062,6 @@ export function AwakeApp() {
         <ChronoPanel exiting={panelExiting} style={{ opacity: panelOpacity, transition: 'opacity 0.15s ease' }} />
       )}
 
-      {/* Voice + Gesture toggles — floating top-right */}
-      <GlassPanel style={{ position: 'fixed', top: 16, right: 36, padding: '6px 14px', zIndex: 100, display: 'flex', gap: 8 }}>
-        <HudBtn
-          active={voiceMode !== 'off'}
-          onClick={() => {
-            const cycle: Record<string, import('./state/jarvisStore').VoiceMode> = {
-              off: 'continuous', continuous: 'wake_word', wake_word: 'ptt', ptt: 'off',
-            }
-            setVoiceMode(cycle[voiceMode])
-          }}
-        >
-          {voiceMode === 'off' ? 'Voz' : voiceMode === 'continuous' ? 'Continuo' : voiceMode === 'wake_word' ? 'Wake' : 'PTT'}
-        </HudBtn>
-        <HudBtn active={gestureEnabled} onClick={() => setGestureEnabled(!gestureEnabled)}>
-          Gestos
-        </HudBtn>
-      </GlassPanel>
-
       {/* Point gesture pointer — componente propio: se re-renderiza solo él a
           la tasa del pipeline, no toda la app. */}
       <GesturePointer />
@@ -1001,8 +1072,11 @@ export function AwakeApp() {
       {/* Self-controlled via displayStore — Jarvis pushes content over the bus. */}
       <DisplayCard />
 
-      {/* 3D model viewer — full-screen overlay driven by model3dStore */}
-      <Model3DViewer />
+      {/* 3D model viewer — full-screen overlay driven by model3dStore.
+          Solo se monta cuando el dueño es ESTA ventana: con `pending` (aún no se
+          sabe si el proyector está encendido) montar aquí crearía un segundo
+          contexto WebGL y la iGPU mataría uno de los dos. */}
+      {wall3dOwner === 'main' ? <Model3DViewer /> : null}
 
       {/* Wake word calibration wizard — shown on first boot if not yet calibrated */}
       <WakeWordWizard />

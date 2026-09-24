@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawn } from 'node:child_process'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = join(__dir, '..', '..', 'data')
@@ -98,7 +99,21 @@ function nextFire(entry, now) {
   return null
 }
 
+// Mirror of cloudStorage.notifyDesktop — this process imports nothing from lib/.
+function notifyDesktop(text) {
+  try {
+    const p = spawn('notify-send', ['-a', 'Jarvis', 'Jarvis', text], {
+      stdio: 'ignore',
+      detached: true,
+    })
+    p.on('error', () => {})
+    p.unref()
+  } catch {}
+  return false
+}
+
 async function sendTelegram(token, chatId, text) {
+  if (process.env.JARVIS_TELEGRAM_DISABLED === '1') return notifyDesktop(text)
   try {
     const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
@@ -129,9 +144,11 @@ async function tick(token, chatId) {
   }
   saveReminders(kept)
 
+  const muted = process.env.JARVIS_TELEGRAM_DISABLED === '1'
   for (const r of due) {
     const ok = await sendTelegram(token, chatId, `⏰ Recordatorio: ${r.text}`)
-    console.log(`[notifier] fired "${r.text}" — telegram: ${ok ? 'ok' : 'fail'}`)
+    const via = muted ? 'desktop (telegram muted)' : `telegram: ${ok ? 'ok' : 'fail'}`
+    console.log(`[notifier] fired "${r.text}" — ${via}`)
   }
 }
 
@@ -144,13 +161,16 @@ function start() {
   const token = process.env.TELEGRAM_BOT_TOKEN_JARVIS || process.env.TELEGRAM_BOT_TOKEN
   const chatId = process.env.TELEGRAM_CHAT_ID_JARVIS || '2017358997'
 
-  if (!token) {
+  const muted = process.env.JARVIS_TELEGRAM_DISABLED === '1'
+  if (!token && !muted) {
     console.warn('[notifier] No Telegram token configured — notifications disabled')
     setInterval(() => {}, 60000)
     return
   }
 
-  console.log('[notifier] scheduler started, checking every 30s')
+  console.log(
+    `[notifier] scheduler started, checking every 30s${muted ? ' (telegram muted — desktop notifications only)' : ''}`
+  )
   tick(token, chatId).catch((e) => console.error('[notifier] tick error:', e?.message))
   setInterval(() => {
     tick(token, chatId).catch((e) => console.error('[notifier] tick error:', e?.message))

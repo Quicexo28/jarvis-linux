@@ -3,13 +3,23 @@ import { isTauri, tauriInvoke, tauriListen, getWindowLabel } from './platform/ta
 import { useBootStore } from './state/bootStore'
 import { useJarvisStore } from './state/jarvisStore'
 import { PttOverlayPage } from './PttOverlayPage'
+import { WallPage } from './WallPage'
 
 // Detect if this JS context is running inside the PTT overlay Tauri window.
 const IS_OVERLAY = getWindowLabel() === 'ptt-overlay'
+// Ventana de la pared: solo el visor 3D sobre el proyector.
+// Se mira TAMBIEN la URL y no solo el label: el label depende de que Tauri lo
+// resuelva antes de que corra el bundle, y si falla esta ventana renderiza la
+// app entera en vez del visor — que es justo el sintoma (ventana visible desde
+// el arranque, sin grafico).
+const IS_WALL = getWindowLabel() === 'wall' ||
+  new URLSearchParams(window.location.search).get('window') === 'wall'
+console.log('[boot] label=', getWindowLabel(), 'search=', window.location.search, 'IS_WALL=', IS_WALL)
 import { DormantLayer } from './components/DormantLayer'
 import { RadialTransition } from './components/RadialTransition'
 import { AwakeApp } from './AwakeApp'
 import { MobileClient } from './modes/MobileClient'
+import { isNativeApp, openNativeSettings } from './modes/remote/native'
 import {
   getApiBase,
   setApiBase,
@@ -30,6 +40,7 @@ function hasMobileSignal(): boolean {
 export default function App() {
   // Render the standalone overlay page when running in the ptt-overlay Tauri window
   if (IS_OVERLAY) return <PttOverlayPage />
+  if (IS_WALL) return <WallPage />
 
   const bootState = useBootStore((s) => s.bootState)
   const setBootState = useBootStore((s) => s.setBootState)
@@ -190,9 +201,21 @@ export default function App() {
 
   if (mobileState === 'expired') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#050510', color: '#ccd6f6', fontFamily: 'monospace', gap: 12 }}>
-        <div style={{ color: '#ff6b6b', fontSize: 14 }}>QR expirado</div>
-        <div style={{ fontSize: 11, opacity: 0.6 }}>Pide al PC que genere un nuevo codigo QR.</div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#050510', color: '#ccd6f6', fontFamily: 'monospace', gap: 12, padding: 24, textAlign: 'center' }}>
+        <div style={{ color: '#ff6b6b', fontSize: 14 }}>Token no válido</div>
+        <div style={{ fontSize: 11, opacity: 0.6, maxWidth: 320, lineHeight: 1.6 }}>
+          {isNativeApp()
+            ? 'El token guardado no sirve para la GUI (el de ingesta no vale). Pega en Ajustes el enlace del QR del escritorio.'
+            : 'Pide al PC que genere un nuevo código QR.'}
+        </div>
+        {isNativeApp() && (
+          <button
+            style={{ minHeight: 44, padding: '0 18px', borderRadius: 10, background: 'rgba(0,229,255,0.12)', border: '1px solid rgba(0,229,255,0.45)', color: '#00e5ff', fontFamily: 'inherit', fontSize: 14 }}
+            onClick={openNativeSettings}
+          >
+            Volver a emparejar
+          </button>
+        )}
       </div>
     )
   }

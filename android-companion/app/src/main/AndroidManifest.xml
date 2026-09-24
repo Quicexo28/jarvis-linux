@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Dictation: the WebView has no SpeechRecognition API, so the shell
+         records with SpeechRecognizer and hands the text to the page. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
@@ -10,23 +14,147 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Modo proyector: lanzar Moonlight desde BOOT_COMPLETED es un arranque de
+         activity en segundo plano, prohibido desde Android 10. Esta permiso es
+         la exencion; se concede una sola vez con
+         `adb shell appops set com.jarvis.companion SYSTEM_ALERT_WINDOW allow`.
+         Sin ella el sistema descarta el arranque EN SILENCIO. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- Android 11+ hides other packages unless declared. Without this,
+         `openMoonlight` cannot even tell whether Moonlight is installed:
+         getPackageInfo throws NameNotFoundException for a package that is
+         plainly there, and the button would always fall back to the store. -->
+    <queries>
+        <package android:name="com.limelight" />
+        <package android:name="com.limelight.noir" />
+        <!-- The Tailscale widget has to know whether Tailscale is installed
+             before offering to toggle it. -->
+        <package android:name="com.tailscale.ipn" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="market" />
+        </intent>
+    </queries>
 
     <!-- Cleartext allowed so the LAN backend (http://IP:8788) works; the
          tunnel/Tailscale URLs are https anyway. -->
     <application
         android:usesCleartextTraffic="true"
-        android:label="Jarvis Companion"
+        android:label="Jarvis"
         android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.DeviceDefault.DayNight">
 
+        <!-- WebView host. configChanges keeps the page alive through rotation
+             and keyboard show/hide instead of reloading the whole UI. -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".SetupActivity"
+            android:exported="false"
+            android:label="Ajustes de Jarvis"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Voice overlay: what the 2x2 hologram opens. Translucent and
+             singleInstance so tapping the widget twice does not stack two mics.
+             The ASSIST filter lets it be picked as the system assistant. -->
+        <activity
+            android:name=".voice.VoiceActivity"
+            android:exported="true"
+            android:theme="@style/JarvisVoiceOverlay"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- "Compartir → Jarvis": entra en la hoja de compartir del sistema
+             para CUALQUIER tipo (`*/*`), sube a /api/vault/ingest y deja que
+             pdfWatcher convierta a markdown. Sin UI: translucida, noHistory y
+             fuera de recientes, porque es un puente, no una pantalla. -->
+        <activity
+            android:name=".ShareActivity"
+            android:exported="true"
+            android:label="@string/share_label"
+            android:icon="@drawable/ic_launcher"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:noHistory="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- Invisible trampoline for widget taps (see WidgetActionActivity). -->
+        <activity
+            android:name=".widget.WidgetActionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:noHistory="true" />
+
+        <receiver
+            android:name=".widget.JarvisWidget"
+            android:exported="false"
+            android:label="@string/widget_label_jarvis">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_jarvis_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.TailscaleWidget"
+            android:exported="false"
+            android:label="@string/widget_label_tailscale">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_tailscale_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.DesktopWidget"
+            android:exported="false"
+            android:label="@string/widget_label_desktop">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_desktop_info" />
+        </receiver>
 
         <service
             android:name=".ReporterService"

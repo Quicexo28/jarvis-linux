@@ -1,6 +1,39 @@
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+/// Workspace donde vive la ventana de Jarvis cuando está despierta.
+///
+/// Por defecto el 1, en la pantalla del portátil. `JARVIS_UI_WORKSPACE` lo
+/// cambia — p. ej. `name:proj`, el workspace de la salida headless `projmap`
+/// que Sunshine emite al proyector: así Jarvis se ve en la PARED y el panel del
+/// portátil queda libre.
+///
+/// Es env y no una regla de Hyprland a propósito: la ventana se mueve sola con
+/// `hyprctl` en cada wake/sleep, así que cualquier `windowrule` que intentara
+/// colocarla perdía la carrera y fallaba en silencio.
+const DEFAULT_WORKSPACE: &str = "1";
+
+fn ui_workspace() -> String {
+    std::env::var("JARVIS_UI_WORKSPACE")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_WORKSPACE.to_string())
+}
+
+/// Workspace de destino para esta llamada.
+///
+/// El frontend manda uno explícito porque solo él sabe si el proyector está
+/// encendido AHORA. Con el proyector apagado, mandar la ventana a `projmap`
+/// (que es headless y existe siempre) la volvía invisible en los dos sitios: ni
+/// en la pared, ni en el portátil. Sin argumento se usa el de env.
+fn target_workspace(requested: Option<String>) -> String {
+    requested
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(ui_workspace)
+}
+
 #[tauri::command]
 fn hide_window(window: tauri::WebviewWindow) {
     window.hide().ok();
@@ -17,7 +50,22 @@ fn show_window(window: tauri::WebviewWindow) {
 }
 
 #[tauri::command]
-fn focus_window(window: tauri::WebviewWindow) {
+fn focus_window(window: tauri::WebviewWindow, workspace: Option<String>) {
+    // Al dormir, la ventana se va fuera de vista (ver `dormant_window`), así que
+    // despertar sin traerla de vuelta la dejaría escondida. Siempre aterriza en
+    // su workspace, venga el wake de donde venga (doble aplauso, wake-bus, Super+J).
+    let ws = target_workspace(workspace);
+    std::process::Command::new("hyprctl")
+        .args(["dispatch", "movetoworkspacesilent", &format!("{ws},title:Jarvis")])
+        .status().ok();
+    // Solo se arrastra la vista del usuario cuando Jarvis comparte pantalla con
+    // él. En modo proyector vive en su propio monitor (headless `projmap`), y
+    // saltar allí dejaría el portátil mirando una salida que no se ve.
+    if ws == DEFAULT_WORKSPACE {
+        std::process::Command::new("hyprctl")
+            .args(["dispatch", "workspace", &ws])
+            .status().ok();
+    }
     window.show().ok();
     window.set_focus().ok();
 }
@@ -26,6 +74,14 @@ fn focus_window(window: tauri::WebviewWindow) {
 // Used by clap detection so it only wakes Jarvis when the user is already on workspace 1.
 #[tauri::command]
 fn show_if_workspace(window: tauri::WebviewWindow, workspace: i64) -> bool {
+    // En modo proyector el gate no aplica: Jarvis tiene monitor propio, así que
+    // un aplauso debe despertarlo esté el usuario donde esté. Mantener la
+    // comprobación lo haría inservible salvo estando en el workspace 1.
+    if ui_workspace() != DEFAULT_WORKSPACE {
+        window.show().ok();
+        window.set_focus().ok();
+        return true;
+    }
     let active = std::process::Command::new("hyprctl")
         .args(["activeworkspace", "-j"])
         .output()
@@ -127,10 +183,44 @@ fn set_ptt_overlay(app: tauri::AppHandle, visible: bool) {
 }
 
 #[tauri::command]
-fn dormant_window(_window: tauri::WebviewWindow) {
+fn dormant_window(_window: tauri::WebviewWindow, workspace: Option<String>) {
+    // En modo proyector la ventana NO se esconde: ese monitor es suyo y nada más
+    // se ve ahí, así que apartarla dejaría la pared en un escritorio vacío. Solo
+    // cuando comparte pantalla con el usuario hay que quitarla de en medio.
+    if target_workspace(workspace) != DEFAULT_WORKSPACE {
+        return;
+    }
     std::process::Command::new("hyprctl")
         .args(["dispatch", "movetoworkspacesilent", "special:jarvis,title:Jarvis"])
         .spawn().ok();
+}
+
+/// Muestra u oculta la ventana de la pared, colocandola en el monitor del
+/// proyector.
+///
+/// El workspace se pasa desde el frontend (igual que en `focus_window`): solo el
+/// llama sabe si el proyector esta encendido AHORA, y mandar la ventana a una
+/// salida headless apagada la haria invisible sin ningun error.
+#[tauri::command]
+fn set_wall(app: tauri::AppHandle, visible: bool, workspace: Option<String>) {
+    let Some(w) = app.get_webview_window("wall") else { return };
+    if !visible {
+        w.hide().ok();
+        return;
+    }
+    w.show().ok();
+    let ws = target_workspace(workspace);
+    // `movetoworkspacesilent` NO roba el foco ni cambia lo que ve el usuario en
+    // el portatil, que es justo el objetivo: el grafico aparece en la pared sin
+    // interrumpir lo que esta haciendo.
+    std::process::Command::new("hyprctl")
+        .args(["dispatch", "movetoworkspacesilent", &format!("{ws},title:JarvisWall")])
+        .status().ok();
+    // Nada de `dispatch fullscreen`: ese dispatch NO acepta selector de ventana,
+    // actua sobre la ENFOCADA — y aqui la pared se muestra sin robar foco, asi
+    // que acababa poniendo a pantalla completa lo que el usuario tuviera abierto
+    // en el portatil. El tamaño de la pared lo fija la windowrule `jarvis-wall`
+    // de scripts/linux/hyprland-jarvis.conf.
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -158,11 +248,14 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![hide_window, show_window, focus_window, show_if_workspace, open_devtools, set_ptt_overlay, dormant_window])
+        .invoke_handler(tauri::generate_handler![hide_window, show_window, focus_window, show_if_workspace, open_devtools, set_ptt_overlay, dormant_window, set_wall])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Intercept close (Super+W / killactive): send to special workspace instead
                 // of hiding, so WebKit JS keeps running for wake-bus and clap detection.
+                // Leaving it in place does NOT work: DORMANT paints nothing and WebKitGTK
+                // never clears a transparent window, so the last awake frame stays frozen
+                // on screen (and eats clicks).
                 api.prevent_close();
                 std::process::Command::new("hyprctl")
                     .args(["dispatch", "movetoworkspacesilent", "special:jarvis,title:Jarvis"])
@@ -212,11 +305,38 @@ pub fn run() {
             .visible(false)
             .build()?;
 
+            // Ventana de la PARED: el visor 3D a pantalla completa en el proyector.
+            //
+            // Es una ventana aparte y no un modo de la principal porque el punto
+            // es que Jarvis siga en el portatil mientras el grafico se proyecta.
+            // Nace oculta y en el workspace del monitor headless; `set_wall`
+            // la muestra cuando hay algo que ensenar.
+            tauri::WebviewWindowBuilder::new(
+                app,
+                "wall",
+                tauri::WebviewUrl::App("index.html?window=wall".into()),
+            )
+            .title("JarvisWall")
+            .inner_size(1920.0, 1080.0)
+            .decorations(false)
+            // OCULTA al arrancar: si no, la pared nace en negro y ahi se queda
+            // hasta que alguien despierte a Jarvis, porque quien la esconde es
+            // `useWall3dMirror` y ese hook vive en AwakeApp.
+            //
+            // Hubo una version que la creaba visible culpando a WebKit de no
+            // correr los efectos en ventanas ocultas. Era falso: lo que rompia
+            // era el ACL de Tauri (faltaba `wall` en capabilities), que hacia
+            // fallar `tauriListen` sin instalar el listener. Con el ACL puesto,
+            // oculta funciona — el listener se registra y el saludo
+            // WALL_READY_EVENT llega igual.
+            .visible(false)
+            .build()?;
+
             // On Linux/WebKit2GTK: auto-allow all permission requests (microphone, camera).
             // Without this, getUserMedia silently fails — WebKit has no browser chrome to
             // show a permission prompt inside a kiosk-style Tauri window.
             #[cfg(target_os = "linux")]
-            for label in ["main", "ptt-overlay"] {
+            for label in ["main", "ptt-overlay", "wall"] {
                 if let Some(window) = app.get_webview_window(label) {
                     window.with_webview(move |webview| {
                         use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};

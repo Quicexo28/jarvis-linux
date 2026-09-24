@@ -85,3 +85,6 @@ backend/voice/python/owner_voiceprint.enc.*
 backend/secrets.local.json
 maestro-skill.tar.gz
 scripts/__pycache__/
+
+# Caché de idiomas de tesseract.js (OCR de pdfWatcher); se redescarga sola
+backend/*.traineddata

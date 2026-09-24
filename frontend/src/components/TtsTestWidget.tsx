@@ -67,7 +67,7 @@ export function TtsTestWidget() {
       flexDirection: 'column',
       gap: 6,
     }}>
-      <div style={{ fontSize: 9, color: '#00e5ff', letterSpacing: 1 }}>PRUEBA TTS</div>
+      {/* El título lo pone la PanelSection de arriba ("VOZ SINTÉTICA"). */}
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}

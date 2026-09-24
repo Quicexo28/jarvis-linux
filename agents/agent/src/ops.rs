@@ -155,6 +155,11 @@ fn err(message: impl Into<String>) -> OpResult {
 fn sysinfo_result() -> OpResult {
     let mut sys = System::new_all();
     sys.refresh_all();
+    // CPU usage is a DELTA between two samples. `new_all()` + one refresh gives
+    // sysinfo no interval to divide by, so it reported garbage (78% on an idle
+    // machine). Same treatment as list_processes: sample, wait, sample again.
+    std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+    sys.refresh_cpu_usage();
     let disks = Disks::new_with_refreshed_list();
     let (disk_total, disk_avail) = disks
         .iter()

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Same tokens as frontend/src/modes/remote/theme.ts, so the widgets on the
+     home screen and the app they launch read as one system. -->
+<resources>
+    <color name="jarvis_bg">#FF05070D</color>
+    <color name="jarvis_surface">#FF0B1018</color>
+    <color name="jarvis_surface_up">#FF111A26</color>
+    <color name="jarvis_line">#FF1B2635</color>
+    <color name="jarvis_text">#FFE6EDF7</color>
+    <color name="jarvis_dim">#FF8EA0B8</color>
+    <color name="jarvis_faint">#FF5C6B80</color>
+    <color name="jarvis_accent">#FF00E5FF</color>
+    <color name="jarvis_ok">#FF4ADE80</color>
+    <color name="jarvis_warn">#FFFBBF24</color>
+    <color name="jarvis_bad">#FFF87171</color>
+    <color name="jarvis_scrim">#E605070D</color>
+</resources>

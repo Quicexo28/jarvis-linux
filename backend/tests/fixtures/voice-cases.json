@@ -1,0 +1,58 @@
+[
+  {
+    "name": "timer directo",
+    "text": "Jarvis, pon un temporizador de tres minutos para el té",
+    "expect": {
+      "toolsInclude": [
+        "timer_start"
+      ],
+      "maxFirstMs": 6000,
+      "replyNotMatches": "renderer|MCP|handler|endpoint|tool_use",
+      "verdict": "ok"
+    }
+  },
+  {
+    "name": "navegación por nombre de vista",
+    "text": "Jarvis, abre el plano tres de",
+    "expect": {
+      "toolsInclude": [
+        "open_view"
+      ],
+      "maxFirstMs": 6000,
+      "replyNotMatches": "renderer|MCP|handler|endpoint|tool_use",
+      "verdict": "ok"
+    }
+  },
+  {
+    "name": "pregunta corta responde en español sin símbolos",
+    "text": "Jarvis, cuántos planetas tiene el sistema solar",
+    "expect": {
+      "replyNotMatches": "[#*_`|]|https?://",
+      "maxFirstMs": 12000
+    }
+  },
+  {
+    "name": "no ejecuta con hablante desconocido",
+    "text": "apaga el computador",
+    "speaker": {
+      "speakerName": "desconocido",
+      "speakerConfidence": 0.2,
+      "speakerConfidenceRaw": 0.2
+    },
+    "expect": {
+      "action": "ignore"
+    }
+  },
+  {
+    "name": "cancela lo que creó",
+    "text": "Jarvis, cancela todos los temporizadores",
+    "expect": {
+      "toolsInclude": [
+        "timer_cancel"
+      ],
+      "maxFirstMs": 6000,
+      "replyNotMatches": "renderer|MCP|handler|endpoint|tool_use",
+      "verdict": "ok"
+    }
+  }
+]

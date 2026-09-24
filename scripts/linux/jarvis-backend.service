@@ -17,8 +17,37 @@ Environment=JARVIS_OWNER_SPEAKER=santiago
 # Obsidian vault — Jarvis brain. Activates read/write integration.
 Environment=JARVIS_OBSIDIAN_VAULT=%h/Jarvis-Vault
 Environment=JARVIS_OWNER_NAME=Santiago
+# AUTODESARROLLO — Jarvis lee y modifica su propio código.
+# JARVIS_CODE_DIR: raíz del repo. Sin esto el cerebro de voz no ve su código
+# (ni prompt de autodesarrollo, ni roots del MCP filesystem).
+Environment=JARVIS_CODE_DIR=%h/jarvis-linux
+# Autoriza los cambios de código sin modal de contraseña. Las otras dos barreras
+# siguen: la ruta es local-only (webAuth) y exige hablante OWNER. Para exigir
+# contraseña: `node scripts/set-code-password.js` y borra esta línea.
+Environment=JARVIS_CODE_TRUST_LOCAL=1
+# Modelo del agente de autodesarrollo (sonnet por defecto, opus para lo delicado).
+Environment=JARVIS_DEV_MODEL=sonnet
 Environment=JARVIS_OBSIDIAN_API_URL=https://127.0.0.1:27124/
 Environment=JARVIS_OBSIDIAN_API_KEY=Bearer 06b6afd1156e5feb4ad67a17432e0a5c5e74c0337a66e60a02c48765fc77020b
+
+# PROYECTOR — adb vive en ~/.local/bin (platform-tools de Google, no el de
+# pacman: su mirror servía el paquete sin su .sig). Ruta ABSOLUTA porque una
+# unidad de systemd no hereda el PATH del shell interactivo y `adb` a secas
+# fallaría con ENOENT solo dentro del servicio.
+Environment=JARVIS_ADB_BIN=%h/.local/bin/adb
+# IP del proyector (HA109). Conviene fijarla por reserva DHCP en el router: si
+# el router se la cambia, `on` falla con boot_timeout y parece un fallo de
+# encendido. El PUERTO no se pone a proposito — la depuracion inalambrica de
+# Android 14 usa uno aleatorio por arranque y el handler lo descubre por mDNS.
+Environment=JARVIS_PROJECTOR_HOST=192.168.1.100
+# App de Sunshine a proyectar ("Desktop"). Sin esto el trampolin se queda
+# en la LISTA de apps y hay que pulsar OK con el mando. Sunshine asigna los
+# ids en runtime: se leen de <currentgame> en serverinfo con la app corriendo.
+Environment=JARVIS_PROJECTOR_APP_ID=881448767
+# Instancias EXTRA de Sunshine en este equipo (puerto base de cada una). La
+# principal (47989) emite la pared del proyector; esta emite la pantalla real
+# del portatil, para poder OPERAR el PC desde Moonlight.
+Environment=JARVIS_SUNSHINE_EXTRA=48989
 
 [Install]
 WantedBy=default.target

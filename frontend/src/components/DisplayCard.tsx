@@ -8,6 +8,7 @@
 import { useEffect, useRef, type ReactNode, type CSSProperties } from 'react'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
+import { splitMath, joinMathBlocks } from '../lib/mathText'
 import { useDisplayStore, type DisplayCardData } from '../state/displayStore'
 
 const PALETTE = {
@@ -67,11 +68,25 @@ function isSeparator(line: string): boolean {
   return /\|/.test(line) && /^[\s|:-]+$/.test(line) && /-/.test(line)
 }
 
-// Render markdown content. Tables (GFM pipe syntax) become real <table>s; every
-// other line is plain text. Keeps it dependency-free — covers the cases Jarvis
+// One line of text with `$…$` / `$$…$$` math rendered by KaTeX. The study
+// prompt has the brain write derivations this way; without it they showed raw.
+function MathLine({ line }: { line: string }) {
+  return (
+    <>
+      {splitMath(line).map((seg, i) => {
+        if (seg.kind === 'text') return <span key={i}>{seg.value}</span>
+        const html = katex.renderToString(seg.value, { throwOnError: false, displayMode: seg.kind === 'display' })
+        return <span key={i} dangerouslySetInnerHTML={{ __html: html }} />
+      })}
+    </>
+  )
+}
+
+// Render markdown content. Tables (GFM pipe syntax) become real <table>s;
+// `#` headings are emphasised; every other line is text with inline math. Keeps it dependency-free — covers the cases Jarvis
 // actually emits (tables, paths, short notes) without a full markdown engine.
 function MarkdownBody({ text }: { text: string }) {
-  const lines = String(text ?? '').split('\n')
+  const lines = joinMathBlocks(String(text ?? '').split('\n'))
   const blocks: ReactNode[] = []
   let i = 0
   let key = 0
@@ -111,8 +126,11 @@ function MarkdownBody({ text }: { text: string }) {
       continue
     }
     // Non-table line. Skip blank lines but keep paragraph spacing.
-    if (line.trim()) {
-      blocks.push(<div key={key++} style={{ color: '#e8f6ff', lineHeight: 1.5 }}>{line}</div>)
+    const heading = line.match(/^\s*#{1,6}\s+(.*)$/)
+    if (heading) {
+      blocks.push(<div key={key++} style={{ color: '#38d5ff', fontWeight: 600, margin: '6px 0 2px' }}><MathLine line={heading[1]} /></div>)
+    } else if (line.trim()) {
+      blocks.push(<div key={key++} style={{ color: '#e8f6ff', lineHeight: 1.5 }}><MathLine line={line} /></div>)
     } else {
       blocks.push(<div key={key++} style={{ height: 6 }} />)
     }

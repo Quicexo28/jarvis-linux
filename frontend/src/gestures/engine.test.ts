@@ -172,21 +172,65 @@ test('V cerrada sostenida y soltada → back', () => {
 })
 
 test('mano derecha: pinch engancha en contacto y el spread sube el zoom', () => {
-  let out = step(null, pinchHand(0.35))
-  for (let i = 0; i < 3; i++) out = step(null, pinchHand(0.35))
+  // El zoom exige la segunda mano: la izquierda maneja la interfaz mientras la
+  // derecha hace la pinza (ver la nota de cabecera de engine.ts).
+  let out = step(pointing(), pinchHand(0.35))
+  for (let i = 0; i < 3; i++) out = step(pointing(), pinchHand(0.35))
   expect(out.pinch.active).toBe(true)
   expect(out.debug.rightGesture).toBe('pinch')
   expect(out.pinch.zoom).toBe(1.0)
 
-  for (let i = 1; i <= 12; i++) out = step(null, pinchHand(0.35 + i * 0.07))
+  for (let i = 1; i <= 12; i++) out = step(pointing(), pinchHand(0.35 + i * 0.07))
   expect(out.pinch.zoom).toBeGreaterThan(1.3)
+})
+
+test('con UNA sola mano no hay zoom, ni siquiera haciendo la pinza', () => {
+  // Una mano en reposo cumple el enganche del pinch sin querer, y el pinch es
+  // pegajoso: enganchado, bloqueaba el arrastre del anillo en AwakeApp.
+  let out = step(null, pinchHand(0.35))
+  for (let i = 0; i < 8; i++) out = step(null, pinchHand(0.35))
+  expect(out.pinch.active).toBe(false)
+  expect(out.pointerHand).toBe('right')
 })
 
 test('puño derecho NO es pinch (guard anti-puño)', () => {
   let out = step(null, fist())
   for (let i = 0; i < 6; i++) out = step(null, fist())
   expect(out.pinch.active).toBe(false)
-  expect(out.debug.rightGesture).toBe('idle')
+})
+
+// --- Reparto de papeles: con UNA sola mano, esa mano maneja la interfaz ---
+
+test('solo mano derecha: el índice mueve el CURSOR (antes solo servía para zoom)', () => {
+  let out = step(null, pointing())
+  for (let i = 0; i < 5; i++) out = step(null, pointing())
+  expect(out.pointerHand).toBe('right')
+  expect(out.point.active).toBe(true)
+  expect(out.pinch.active).toBe(false)
+})
+
+test('solo mano derecha: el puño ARRASTRA', () => {
+  let out = step(null, fist())
+  for (let i = 0; i < 5; i++) out = step(null, fist())
+  expect(out.pointerHand).toBe('right')
+  expect(out.grab.active).toBe(true)
+})
+
+test('con las dos manos la izquierda conserva el puntero y la derecha el zoom', () => {
+  let out = step(pointing(), pinchHand(0.35))
+  for (let i = 0; i < 5; i++) out = step(pointing(), pinchHand(0.35))
+  expect(out.pointerHand).toBe('left')
+  expect(out.point.active).toBe(true)
+  expect(out.pinch.active).toBe(true)
+})
+
+test('cambiar de mano de puntero no arrastra el estado de la anterior', () => {
+  for (let i = 0; i < 6; i++) step(null, fist())        // derecha arrastrando
+  let out = step(fist(), null)                           // ahora manda la izquierda
+  expect(out.pointerHand).toBe('left')
+  // Re-enganche limpio: el grab vuelve a empezar en cero, sin heredar el onset.
+  expect(out.grab.deltaX).toBe(0)
+  expect(out.grab.deltaY).toBe(0)
 })
 
 test('dropout de 1 frame no suelta el grab (gracia)', () => {

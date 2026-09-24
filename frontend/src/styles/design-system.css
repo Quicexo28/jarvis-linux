@@ -1,15 +1,75 @@
-/* --- Jarvis Design System ---------------------------------------- */
+/* --- Jarvis Design System ----------------------------------------
+   El COLOR no se escribe aquí: se genera desde src/lib/theme.ts, que es la
+   fuente única (el visor 3D lee el hex en JS y no puede leer variables CSS).
+   El bloque marcado abajo es su espejo; theme.test.ts compara los dos y falla
+   si divergen. Para regenerarlo:
+     node -e "import('./src/lib/theme.ts').then(m=>console.log(m.cssRootBlock()))"
+-------------------------------------------------------------------- */
 :root {
-  --bg:           #03080d;
-  --primary:      #00f0ff;
-  --accent:       #0059ff;
+  /* >>> generado desde theme.ts — no editar a mano <<< */
+  --bg:                       #03080d;
+  --text:                     #e6faff;
+  --text-2:                   rgba(200, 244, 255, 0.72);
+  --text-dim:                 rgba(200, 244, 255, 0.45);
+  --text-faint:               rgba(200, 244, 255, 0.26);
+  --hue-info:                 #00f0ff;
+  --hue-info-dim:             rgba(0, 240, 255, 0.15);
+  --hue-info-glow:            rgba(0, 240, 255, 0.4);
+  --hue-deep:                 #0059ff;
+  --hue-deep-dim:             rgba(0, 89, 255, 0.15);
+  --hue-deep-glow:            rgba(0, 89, 255, 0.4);
+  --hue-attn:                 #ffb01f;
+  --hue-attn-dim:             rgba(255, 176, 31, 0.15);
+  --hue-attn-glow:            rgba(255, 176, 31, 0.4);
+  --hue-voice:                #ff4fd8;
+  --hue-voice-dim:            rgba(255, 79, 216, 0.15);
+  --hue-voice-glow:           rgba(255, 79, 216, 0.4);
+  --hue-ok:                   #3dffa8;
+  --hue-ok-dim:               rgba(61, 255, 168, 0.15);
+  --hue-ok-glow:              rgba(61, 255, 168, 0.4);
+  --hue-fail:                 #ff4d5e;
+  --hue-fail-dim:             rgba(255, 77, 94, 0.15);
+  --hue-fail-glow:            rgba(255, 77, 94, 0.4);
+  --hue-idle:                 #5d7f8f;
+  --hue-idle-dim:             rgba(93, 127, 143, 0.15);
+  --hue-idle-glow:            rgba(93, 127, 143, 0.4);
+  --folder-00-system:         #7a8cff;
+  --folder-01-perfil:         #ff4fd8;
+  --folder-02-proyectos:      #ffb01f;
+  --folder-03-conocimiento:   #00f0ff;
+  --folder-04-habitos:        #3dffa8;
+  --folder-05-daily:          #5de0ff;
+  --folder-06-conversaciones: #a06bff;
+  --folder-wiki:              #00d0a8;
+  --folder-clippings:         #ff8a5c;
+  --folder-memoria:           #ff4d90;
+  --folder-tags:              #8fa0b0;
+  --folder-raiz:              #8fb4c4;
+  --folder-fantasmas:         #5d7f8f;
+  /* <<< fin del bloque generado >>> */
+
+  /* Alias de compatibilidad: quedan ~100 usos de --primary/--accent repartidos
+     por los .tsx. Apuntan al rol semántico en vez de a un hex suelto. */
+  --primary:      var(--hue-info);
+  --accent:       var(--hue-deep);
+
+  /* Vidrio — derivado del rol base, no un rgba escrito a ojo */
   --glass-bg:     rgba(0, 240, 255, 0.04);
-  --glass-border: rgba(0, 240, 255, 0.15);
-  --glow-sm:      0 0 12px rgba(0, 240, 255, 0.4);
+  --glass-border: var(--hue-info-dim);
+  --glow-sm:      0 0 12px var(--hue-info-glow);
   --glow-md:      0 0 24px rgba(0, 240, 255, 0.3);
-  --text:         #c8f4ff;
-  --text-dim:     rgba(200, 244, 255, 0.45);
+
+  /* Tipografía. Dos pesos y ni uno más: con tres, la jerarquía se decide al
+     azar. La jerarquía real la lleva la LUMINANCIA (--text .. --text-faint). */
   --font:         'Space Grotesk', sans-serif;
+  --w-reg:        400;
+  --w-bold:       600;
+  /* Cifras de ancho fijo: sin esto un contador que corre baila de píxeles. */
+  --num:          tabular-nums;
+
+  /* Ritmo de espaciado — escala de 4 px. Sustituye los márgenes sueltos. */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
+
   --r:            12px;
   --r-sm:         6px;
   --hud-line-h:       36px;
@@ -17,7 +77,7 @@
   --hud-border-dur:   350ms;
   --hud-reveal-delay: 280ms;
   --hud-indicator:    rgba(0,240,255,0.35);
-  --hud-indicator-on: #00f0ff;
+  --hud-indicator-on: var(--hue-info);
   /* Safe edge offset — scales with viewport so panels never clip */
   --safe-edge:        clamp(20px, 4vw, 72px);
   /* Holographic materialization timing */
@@ -213,7 +273,9 @@ html, #root { background: transparent; }
 /* --- World back button --- */
 .world-back-btn {
   position: fixed;
-  top: 18px;
+  /* Debajo de la barra de estado, no encima: con top:18px se solapaba con la
+     marca "JARVIS" y el nombre del modo, que ahora viven ahí. */
+  top: 46px;
   left: var(--safe-edge);
   z-index: 200;
   background: rgba(0,240,255,0.06);
@@ -552,7 +614,27 @@ html, #root { background: transparent; }
   z-index: 100;
 }
 .mode-label { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-dim); }
-.clock { font-size: 11px; color: rgba(0,240,255,0.45); letter-spacing: 0.08em; }
+/* Cifras de ancho fijo: sin esto el reloj baila un píxel a cada segundo. */
+.clock { font-size: 11px; color: var(--hue-info); opacity: 0.55; letter-spacing: 0.08em; font-variant-numeric: var(--num); }
+
+/* La barra ahora carga insignias de estado, así que necesita ancho completo y
+   un separador real en vez de fiarlo todo al `gap`. */
+.status-bar { right: var(--safe-edge); }
+.status-bar > * { pointer-events: auto; }
+.status-brand {
+  font-size: 11px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.34em;
+  color: var(--text);
+  text-shadow: 0 0 14px var(--hue-info-glow);
+}
+.status-divider {
+  width: 1px;
+  height: 11px;
+  background: var(--hue-info);
+  opacity: 0.25;
+}
+.status-spacer { flex: 1; }
 
 /* --- Plan2D redesign --- */
 .plan2d-overlay {
@@ -1248,3 +1330,442 @@ html, #root { background: transparent; }
 .chrono-lap-split { color: var(--text); }
 .chrono-lap-total { color: var(--text-dim); text-align: right; }
 
+
+/* ═══════════════════════════════════════════════════════════════════
+   Primitivas de información — PanelSection / StatRow / HoloMeter / Badge
+   Sustituyen los estilos inline repetidos en AwakeApp.tsx. El hue llega
+   por variable local (--sec-hue / --m-hue) desde theme.ts, nunca escrito
+   aquí: el CSS no decide significado.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* --- PanelSection --- */
+.panel-section { margin-bottom: var(--s5); }
+.panel-section:last-child { margin-bottom: 0; }
+
+.panel-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+}
+.panel-section-rule {
+  width: 2px;
+  height: 11px;
+  flex-shrink: 0;
+  background: var(--sec-hue, var(--hue-info));
+  box-shadow: 0 0 8px var(--sec-hue, var(--hue-info));
+}
+.panel-section-title {
+  flex: 1;
+  font-size: 9px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--sec-hue, var(--hue-info));
+  opacity: 0.85;
+}
+.panel-section-meta {
+  font-size: 9px;
+  font-variant-numeric: var(--num);
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+.panel-section-body { display: flex; flex-direction: column; gap: var(--s1); }
+
+/* --- StatRow --- */
+.stat-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(0, 240, 255, 0.05);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.stat-row:last-child { border-bottom: none; }
+.stat-row--click { cursor: pointer; transition: background 0.12s; }
+.stat-row--click:hover { background: rgba(0, 240, 255, 0.04); }
+
+.stat-dot {
+  width: 5px; height: 5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  /* El punto se alinea con la línea base del texto, no con su caja. */
+  transform: translateY(-2px);
+}
+.stat-label {
+  flex: 1;
+  color: var(--text-2);
+  letter-spacing: 0.06em;
+}
+.stat-value {
+  color: var(--text);
+  font-weight: var(--w-bold);
+  font-variant-numeric: var(--num);
+  text-align: right;
+}
+.stat-unit {
+  margin-left: 3px;
+  font-weight: var(--w-reg);
+  font-size: 9px;
+  color: var(--text-dim);
+}
+/* Valores largos (URLs, rutas): la fila pasa a dos líneas en vez de desbordar. */
+.stat-row--wrap { flex-direction: column; align-items: stretch; gap: 2px; }
+.stat-row--wrap .stat-value { text-align: left; font-size: 10px; word-break: break-all; font-weight: var(--w-reg); }
+
+/* --- HoloMeter --- */
+.holo-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 5px 0;
+  font-size: 10px;
+}
+.holo-meter-label {
+  width: 42px;
+  flex-shrink: 0;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.holo-meter-bar {
+  flex: 1;
+  display: flex;
+  gap: 2px;
+  height: 9px;
+}
+.holo-meter-seg {
+  flex: 1;
+  /* Segmento apagado: presente pero casi invisible — la escala se sigue leyendo. */
+  background: rgba(0, 240, 255, 0.07);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+.holo-meter-value {
+  width: 46px;
+  flex-shrink: 0;
+  text-align: right;
+  font-weight: var(--w-bold);
+  font-variant-numeric: var(--num);
+}
+.holo-meter-unit { font-size: 8px; font-weight: var(--w-reg); opacity: 0.6; margin-left: 1px; }
+
+/* --- Badge --- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.badge-dot { width: 4px; height: 4px; border-radius: 50%; }
+.badge--live .badge-dot { animation: badge-pulse 1.6s ease-in-out infinite; }
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(0.7); }
+}
+
+/* --- Rejilla de tarjetas: la disposición por defecto de un panel ancho --- */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s3);
+}
+.info-card {
+  padding: var(--s3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  background: rgba(0, 240, 255, 0.02);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Grafo de conocimiento (modo `vault`)
+   El lienzo ocupa todo; el HUD es una columna a la derecha que NO
+   intercepta el puntero salvo en sus propios controles — arrastrar el
+   grafo por debajo del HUD tiene que seguir funcionando.
+   ═══════════════════════════════════════════════════════════════════ */
+.vault-graph { position: fixed; inset: 0; background: var(--bg); }
+.vault-graph-canvas { position: absolute; inset: 0; }
+
+.vault-graph-hud {
+  position: absolute;
+  top: var(--safe-edge);
+  right: var(--safe-edge);
+  bottom: var(--safe-edge);
+  width: 290px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  overflow-y: auto;
+  scrollbar-width: none;
+  pointer-events: none;
+}
+.vault-graph-hud::-webkit-scrollbar { display: none; }
+.vault-graph-hud > * { pointer-events: auto; }
+
+.vault-graph-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s3); }
+.vault-graph-title {
+  font-size: 13px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.vault-graph-sub {
+  margin-top: 3px;
+  font-size: 10px;
+  font-variant-numeric: var(--num);
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.vault-graph-close {
+  padding: 4px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  background: rgba(0, 240, 255, 0.04);
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.vault-graph-close:hover { background: var(--hue-info-dim); color: var(--hue-info); }
+
+.vault-graph-search { width: 100%; }
+
+.vault-graph-loading {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+/* --- Etiqueta de nodo (drei Html) --- */
+.graph-label {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 3px;
+  background: rgba(3, 8, 13, 0.82);
+  font-family: var(--font);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  /* Sin esto, una etiqueta larga en un nodo del borde estira el layer. */
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.graph-label--focus {
+  font-weight: var(--w-bold);
+  background: rgba(3, 8, 13, 0.95);
+  box-shadow: 0 0 14px rgba(0, 0, 0, 0.6);
+}
+
+/* --- Leyenda de cúmulos --- */
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 3px 0;
+  font-size: 10px;
+}
+.legend-swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.legend-name { flex: 1; color: var(--text-2); letter-spacing: 0.05em; }
+.legend-count { color: var(--text-dim); font-variant-numeric: var(--num); }
+
+/* --- Detalle del nodo enfocado --- */
+.graph-detail-title {
+  font-size: 12px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.06em;
+  line-height: 1.35;
+  margin-bottom: var(--s2);
+}
+.graph-detail-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: var(--s2); }
+.graph-detail-links { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--s2); }
+.graph-link-chip {
+  padding: 2px 7px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+.graph-link-chip:hover { border-color: var(--hue-info); color: var(--hue-info); }
+
+
+/* --- Bloque del QR (panel System) --- */
+.qr-block { display: flex; gap: var(--s3); align-items: flex-start; }
+.qr-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.qr-frame canvas {
+  border-radius: var(--r-sm);
+  /* El QR se escanea desde un móvil: un borde claro lo separa del fondo negro
+     y sube la tasa de lectura. */
+  outline: 1px solid var(--hue-info-dim);
+}
+.qr-countdown {
+  font-size: 9px;
+  font-variant-numeric: var(--num);
+  letter-spacing: 0.1em;
+  color: var(--hue-attn);
+}
+.qr-urls { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+/* --- Monitor de gestos --- */
+.gesture-monitor { display: flex; flex-direction: column; gap: var(--s3); }
+.gesture-hands { display: flex; gap: var(--s2); }
+.gesture-hand {
+  flex: 1;
+  padding: 6px 9px;
+  border: 1px solid;
+  border-radius: var(--r-sm);
+  transition: border-color 0.15s, background 0.15s;
+}
+.gesture-hand-head { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+.gesture-hand-dot { width: 5px; height: 5px; border-radius: 50%; }
+.gesture-hand-label {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.gesture-hand-gesture {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.gesture-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.gesture-zoom { display: flex; align-items: center; gap: var(--s2); }
+.gesture-zoom-label {
+  width: 34px;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.gesture-zoom-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(0, 240, 255, 0.07);
+  overflow: hidden;
+}
+.gesture-zoom-fill { height: 100%; border-radius: 4px; transition: width 0.08s linear; }
+.gesture-zoom-value {
+  width: 32px;
+  text-align: right;
+  font-size: 9px;
+  font-variant-numeric: var(--num);
+  color: var(--text-dim);
+}
+
+.gesture-cross-row { display: flex; gap: var(--s3); align-items: flex-start; }
+.gesture-cross { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.gesture-cross-label {
+  font-size: 7px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.gesture-cross-svg {
+  border: 1px solid var(--hue-idle-dim);
+  border-radius: var(--r-sm);
+  background: rgba(0, 0, 0, 0.25);
+}
+.gesture-events { display: flex; flex-direction: column; gap: 6px; padding-top: 14px; }
+
+/* El HUD va POR ENCIMA de las etiquetas del grafo.
+   `zIndexRange={[0,0]}` en el Html de drei NO basta: su contenedor se cuelga
+   del wrapper que crea el Canvas de R3F, que es su propio contexto de
+   apilamiento, así que un 10 aquí no ganaba. Con un valor alto y, sobre todo,
+   con fondo propio en cada tarjeta, el HUD deja de ser texto flotando sobre un
+   grafo cargado — que era un problema de legibilidad aparte del solape. */
+.vault-graph-hud { z-index: 50; }
+.vault-graph-hud > * {
+  background: rgba(3, 8, 13, 0.82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  padding: var(--s3);
+}
+/* El encabezado y el buscador no son tarjetas: uno es el título y el otro ya
+   trae su propio recuadro. */
+.vault-graph-hud > .vault-graph-head { background: none; border: none; backdrop-filter: none; padding: 0; }
+.vault-graph-hud > .vault-graph-search { padding: 6px 8px; }
+
+/* Insignia interactiva de la barra de estado: el botón no pinta nada, solo
+   aporta el área de clic y el cursor. */
+.status-badge-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  line-height: 1;
+}
+.status-badge-btn:hover .badge { filter: brightness(1.35); }
+
+/* Leyenda de la codificación por tamaño (grafo de conocimiento). */
+.legend-encoding {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s2);
+  padding-top: var(--s2);
+  border-top: 1px solid rgba(0, 240, 255, 0.07);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.legend-encoding-dots { display: flex; align-items: center; gap: 3px; }
+.legend-encoding-dots i {
+  display: block;
+  border-radius: 50%;
+  background: var(--hue-info);
+  opacity: 0.75;
+}
+
+/* ── Cursor de mano ──────────────────────────────────────────────────────────
+   `:hover` de CSS lo controla el navegador y NO se dispara con eventos
+   sintéticos, así que el cursor de gestos marca su objetivo con una clase.
+   Mismo lenguaje visual que el hover de ratón, un punto más marcado: apuntar
+   con la mano es menos preciso y el usuario necesita confirmación de QUÉ va a
+   pulsar antes de cerrar la pinza. */
+.gesture-hover {
+  outline: 1px solid var(--hue-info);
+  outline-offset: 2px;
+  box-shadow: 0 0 16px rgba(0, 240, 255, 0.28);
+  filter: brightness(1.18);
+}
+
+@keyframes gesture-click-pulse {
+  from { width: 6px;  height: 6px;  opacity: 0.95; }
+  to   { width: 46px; height: 46px; opacity: 0; }
+}

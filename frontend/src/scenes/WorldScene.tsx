@@ -1,4 +1,4 @@
-import { useRef, useMemo, useState, Suspense, Component } from 'react'
+import { useRef, useMemo, useState, useEffect, Suspense, Component } from 'react'
 import type { ReactNode } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Float, Html, useGLTF } from '@react-three/drei'
@@ -7,7 +7,8 @@ import { useJarvisStore } from '../state/jarvisStore'
 import { useSystemStore } from '../state/systemStore'
 import { getTtsLevel, isTtsSpeaking, isTtsThinking, isHoloAwake } from '../audio/ttsLevelBus'
 import { PINCH_SCALE_MULTIPLIER, PINCH_APPROACH_DISTANCE, PINCH_DISSOLVE_START } from '../gestures/config'
-import { modeMeta } from '../constants'
+import { modeMeta, MAIN_RING, SUB_RING, SUB_RING_UTILS } from '../constants'
+import { FOLDER_HUE, HUE } from '../lib/theme'
 import type { Mode } from '../types'
 
 /* ─────────────────────────────────────────────────────────────
@@ -21,22 +22,25 @@ import type { Mode } from '../types'
 const R_ACTIVE = 4
 const R_IDLE   = 7
 
-const MAIN_ORDER: Mode[] = ['home', 'house', 'system', 'cloud', 'utils']
-const SUB_ORDER:  Mode[] = ['plan3d', 'space', 'plan2d']
-const UTILS_SUB_ORDER: Mode[] = ['timer', 'chrono']
+// Orden de los anillos: importado, NO redeclarado (ver constants.ts).
+const MAIN_ORDER = MAIN_RING
+const SUB_ORDER  = SUB_RING
+const UTILS_SUB_ORDER = SUB_RING_UTILS
 
 // Snap angle (radians, clockwise from front) for each main slot.
 // 5 slots equally spaced (2π/5) — adding utils redistributed the existing 4.
-const TAU_5 = (2 * Math.PI) / 5
-const MAIN_ANGLES: Record<Mode, number> = {
-  home:   0,
-  house:  TAU_5,
-  system: 2 * TAU_5,
-  cloud:  3 * TAU_5,
-  utils:  4 * TAU_5,
-  plan3d: 0, plan2d: 0, space: 0, // unused at main level
-  mobile: 0, timer: 0, chrono: 0, // unused at main level
-}
+// Un slot por modo del anillo principal, repartido a partes iguales. Se DERIVA
+// de MAIN_ORDER: al añadir 'vault' el reparto pasó solo de 2π/5 a 2π/6, sin
+// tocar cinco constantes a mano.
+const TAU_MAIN = (2 * Math.PI) / MAIN_ORDER.length
+const MAIN_ANGLES: Record<Mode, number> = (() => {
+  const zeros = {
+    home: 0, house: 0, system: 0, cloud: 0, utils: 0, vault: 0,
+    plan3d: 0, plan2d: 0, space: 0, mobile: 0, timer: 0, chrono: 0,
+  } as Record<Mode, number>
+  MAIN_ORDER.forEach((m, i) => { zeros[m] = i * TAU_MAIN })
+  return zeros
+})()
 const SUB_ANGLES: Record<'plan3d'|'space'|'plan2d', number> = {
   plan3d: 0,
   space:  (2 * Math.PI) / 3,
@@ -880,24 +884,136 @@ function HexDieGeo({ active }: { active: boolean }) {
 }
 
 /* ─────────────────────────────────────────────────────────────
+   VAULT — constelación de nodos enlazados.
+
+   Es el ÚNICO holograma multicolor del anillo, y a propósito: anuncia el
+   código de color del grafo (un hue por carpeta de la bóveda) antes de que
+   el señor entre, así el salto del anillo a la vista no cambia de idioma
+   visual. La constelación es FIJA y precalculada — el anillo no puede
+   permitirse correr un layout de fuerzas mientras gira.
+───────────────────────────────────────────────────────────── */
+const VAULT_NODE_COUNT = 15
+
+function VaultGeo({ active }: { active: boolean }) {
+  const groupRef = useRef<THREE.Group>(null)
+  const coreRef = useRef<THREE.Mesh>(null)
+
+  // Esfera de Fibonacci: reparto uniforme sin azar, así el holograma se ve
+  // igual en cada arranque (un azar aquí haría que cada boot pareciera otro
+  // aparato).
+  const nodes = useMemo(() => {
+    const hues = Object.values(FOLDER_HUE)
+    const golden = Math.PI * (3 - Math.sqrt(5))
+    return Array.from({ length: VAULT_NODE_COUNT }, (_, i) => {
+      const y = 1 - (i / (VAULT_NODE_COUNT - 1)) * 2
+      const r = Math.sqrt(Math.max(0, 1 - y * y))
+      const th = golden * i
+      const rad = 0.55 + (i % 3) * 0.28
+      return {
+        pos: [Math.cos(th) * r * rad, y * rad, Math.sin(th) * r * rad] as [number, number, number],
+        hue: hues[i % hues.length],
+        size: 0.045 + (i % 4) * 0.018,
+      }
+    })
+  }, [])
+
+  // Aristas al vecino más cercano de cada nodo, calculadas una vez. Geometría
+  // estática: nada que reescribir por frame.
+  const edgeGeom = useMemo(() => {
+    const segs: number[] = []
+    const cols: number[] = []
+    for (let i = 0; i < nodes.length; i++) {
+      let best = -1
+      let bestD = Infinity
+      for (let j = 0; j < nodes.length; j++) {
+        if (i === j) continue
+        const dx = nodes[i].pos[0] - nodes[j].pos[0]
+        const dy = nodes[i].pos[1] - nodes[j].pos[1]
+        const dz = nodes[i].pos[2] - nodes[j].pos[2]
+        const d = dx * dx + dy * dy + dz * dz
+        if (d < bestD) { bestD = d; best = j }
+      }
+      if (best < 0) continue
+      segs.push(...nodes[i].pos, ...nodes[best].pos)
+      const a = new THREE.Color(nodes[i].hue)
+      const b = new THREE.Color(nodes[best].hue)
+      // 0.85 y no 0.6: a esta escala (radio 0.55-1.1) las aristas caían por
+      // debajo del umbral de visibilidad y la constelación parecía puntos
+      // sueltos sin red.
+      cols.push(a.r * 0.85, a.g * 0.85, a.b * 0.85, b.r * 0.85, b.g * 0.85, b.b * 0.85)
+    }
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs), 3))
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3))
+    return g
+  }, [nodes])
+
+  useEffect(() => () => { edgeGeom.dispose() }, [edgeGeom])
+
+  useFrame((state, delta) => {
+    const spd = active ? 1.6 : 0.8
+    if (groupRef.current) {
+      groupRef.current.rotation.y += 0.004 * spd * delta * 60
+      groupRef.current.rotation.x += 0.0015 * spd * delta * 60
+    }
+    if (coreRef.current) {
+      const mat = coreRef.current.material as THREE.MeshStandardMaterial
+      mat.emissiveIntensity = (active ? 3.2 : 1.8) + Math.sin(state.clock.elapsedTime * 1.7) * 0.4
+    }
+  })
+
+  return (
+    <group ref={groupRef}>
+      {/* Núcleo: el propio Jarvis, del que cuelga todo lo que sabe.
+
+          WIREFRAME y con emisión baja, igual que UtilsGeo. Sólido a 2.2 la
+          superficie emisiva entera clipaba a BLANCO: se veía una bola blanca en
+          vez de un núcleo cyan, y encima tapaba la etiqueta "Memoria" que el
+          RingHologram dibuja en el origen del grupo. */}
+      <mesh ref={coreRef}>
+        <icosahedronGeometry args={[0.2, 1]} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={1.4} color="#001520" wireframe />
+      </mesh>
+
+      <lineSegments geometry={edgeGeom}>
+        <lineBasicMaterial vertexColors transparent opacity={0.9} blending={THREE.AdditiveBlending} depthWrite={false} />
+      </lineSegments>
+
+      {nodes.map((n, i) => (
+        <mesh key={i} position={n.pos}>
+          <icosahedronGeometry args={[n.size, 1]} />
+          <meshBasicMaterial color={n.hue} transparent opacity={active ? 0.95 : 0.7} toneMapped={false} />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────────
    RingGroup — owns the lerped rotation.y. Children render at
    fixed local angles; the group spins them past the camera.
 ───────────────────────────────────────────────────────────── */
 interface RingGroupProps {
   targetAngle: number
+  /** Objetivo VIVO (radianes). Tiene prioridad sobre `targetAngle`. */
+  targetRef?: { current: number }
   initialAngle?: number
   children: React.ReactNode
 }
-function RingGroup({ targetAngle, initialAngle, children }: RingGroupProps) {
+function RingGroup({ targetAngle, targetRef, initialAngle, children }: RingGroupProps) {
   const groupRef = useRef<THREE.Group>(null)
   const angleRef = useRef(initialAngle ?? targetAngle)
 
   useFrame((_, delta) => {
     if (!groupRef.current) return
+    // El objetivo puede venir de un REF vivo (arrastre con la mano, que cambia
+    // ~20 veces/s): leerlo aquí evita re-renderizar el anillo entero por cada
+    // muestra de gesto. Con prop suelta, el carrusel solo se movía al soltar.
+    const target = targetRef ? targetRef.current : targetAngle
     // Damping pattern from the original CameraController, multiplied for a ~350ms settle.
     const k = 1 - Math.pow(0.005, delta)
     // Choose the shortest-path delta so we never spin the long way around.
-    const diff = wrapPi(targetAngle - angleRef.current)
+    const diff = wrapPi(target - angleRef.current)
     angleRef.current += diff * k * 6
     groupRef.current.rotation.y = angleRef.current
   })
@@ -1010,8 +1126,15 @@ function RingHologram({
       ref={groupRef}
       onClick={e => {
         e.stopPropagation()
-        if (isActive) onActivate(mode)
-        else onSelect(mode)
+        // Un clic de RATÓN sobre un slot lateral solo lo trae al frente (dos
+        // clics para entrar): es lo que se espera de un carrusel. El cursor de
+        // MANO entra directo — señalar el holograma y tocar es el gesto
+        // completo, y obligar a repetirlo es justo la fricción que sobraba.
+        // La marca la pone useGestureCursor en el evento nativo.
+        const byHand = (e.nativeEvent as { __gesture?: boolean }).__gesture === true
+        if (isActive) { onActivate(mode); return }
+        if (byHand) { onSelect(mode); onActivate(mode); return }
+        onSelect(mode)
       }}
       onPointerOver={e => { e.stopPropagation(); setHovered(true); document.body.style.cursor = 'pointer' }}
       onPointerOut={e => { e.stopPropagation(); setHovered(false); document.body.style.cursor = 'auto' }}
@@ -1050,6 +1173,23 @@ function RingController() {
       : MAIN_ANGLES[activeRingMode] ?? 0
   const targetAngle = activeSlot
 
+  // El anillo PRINCIPAL sigue `ringAngle` (slots → radianes), no el modo activo:
+  // es lo que hace que arrastrar con el puño mueva los hologramas MIENTRAS dura
+  // el gesto. Antes `ringAngle` lo escribía el arrastre y no lo leía NADIE — el
+  // carrusel se quedaba clavado y solo saltaba al soltar, que es justo lo que se
+  // sentía roto. Va por ref + suscripción imperativa porque durante el arrastre
+  // cambia ~20 veces/s y un selector re-renderizaría los seis hologramas.
+  const liveTargetRef = useRef(targetAngle)
+  useEffect(() => {
+    const read = (s: ReturnType<typeof useJarvisStore.getState>): number => {
+      if (s.ringLevel === 'house-sub') return SUB_ANGLES[s.activeRingMode as 'plan3d'|'space'|'plan2d'] ?? 0
+      if (s.ringLevel === 'utils-sub') return UTILS_ANGLES[s.activeRingMode as 'timer'|'chrono'] ?? 0
+      return s.ringAngle * TAU_MAIN
+    }
+    liveTargetRef.current = read(useJarvisStore.getState())
+    return useJarvisStore.subscribe((s) => { liveTargetRef.current = read(s) })
+  }, [])
+
   // Shared ref so each RingHologram reads the live container rotation
   // without a useThree traversal each frame.
   const containerAngleRef = useRef(targetAngle)
@@ -1073,6 +1213,7 @@ function RingController() {
     return (
       <HouseSubRing
         targetAngle={targetAngle}
+        targetRef={liveTargetRef}
         containerAngleRef={containerAngleRef}
         activeRingMode={activeRingMode}
         zoomedMode={zoomedMode}
@@ -1086,6 +1227,7 @@ function RingController() {
     return (
       <UtilsSubRing
         targetAngle={targetAngle}
+        targetRef={liveTargetRef}
         containerAngleRef={containerAngleRef}
         activeRingMode={activeRingMode}
         zoomedMode={zoomedMode}
@@ -1098,6 +1240,7 @@ function RingController() {
   return (
     <MainRing
       targetAngle={targetAngle}
+      targetRef={liveTargetRef}
       containerAngleRef={containerAngleRef}
       activeRingMode={activeRingMode}
       zoomedMode={zoomedMode}
@@ -1127,13 +1270,14 @@ function RingAngleProbe({ containerAngleRef }: { containerAngleRef: { current: n
 ───────────────────────────────────────────────────────────── */
 interface RingProps {
   targetAngle: number
+  targetRef?: { current: number }
   containerAngleRef: { current: number }
   activeRingMode: Mode
   zoomedMode: Mode | null
   onSelect: (mode: Mode) => void
   onActivate: (mode: Mode) => void
 }
-function MainRing({ targetAngle, containerAngleRef, activeRingMode, zoomedMode, onSelect, onActivate }: RingProps) {
+function MainRing({ targetAngle, targetRef, containerAngleRef, activeRingMode, zoomedMode, onSelect, onActivate }: RingProps) {
   const geoFor = (mode: Mode, active: boolean): React.ReactNode => {
     switch (mode) {
       case 'home':   return <NeuralFireGeo active={active} />
@@ -1141,12 +1285,13 @@ function MainRing({ targetAngle, containerAngleRef, activeRingMode, zoomedMode, 
       case 'system': return <HexDieGeo     active={active} />
       case 'cloud':  return <HexTorusGeo   active={active} />
       case 'utils':  return <UtilsGeo      active={active} />
+      case 'vault':  return <VaultGeo      active={active} />
       default:       return null
     }
   }
 
   return (
-    <RingGroup targetAngle={targetAngle}>
+    <RingGroup targetAngle={targetAngle} targetRef={targetRef}>
       <RingAngleProbe containerAngleRef={containerAngleRef} />
       {MAIN_ORDER.map(mode => {
         const isActive = activeRingMode === mode && !zoomedMode
@@ -1173,7 +1318,7 @@ function MainRing({ targetAngle, containerAngleRef, activeRingMode, zoomedMode, 
    Mounts only when ringLevel === 'house-sub'. Uses spring entrance
    (handled inside RingHologram via springTarget).
 ───────────────────────────────────────────────────────────── */
-function HouseSubRing({ targetAngle, containerAngleRef, activeRingMode, zoomedMode, onSelect, onActivate }: RingProps) {
+function HouseSubRing({ targetAngle, targetRef, containerAngleRef, activeRingMode, zoomedMode, onSelect, onActivate }: RingProps) {
   const geoFor = (mode: Mode, active: boolean): React.ReactNode => {
     switch (mode) {
       case 'plan3d': return <Plan3DGeo active={active} />
@@ -1184,7 +1329,7 @@ function HouseSubRing({ targetAngle, containerAngleRef, activeRingMode, zoomedMo
   }
 
   return (
-    <RingGroup targetAngle={targetAngle}>
+    <RingGroup targetAngle={targetAngle} targetRef={targetRef}>
       <RingAngleProbe containerAngleRef={containerAngleRef} />
       {SUB_ORDER.map(mode => {
         const isActive = activeRingMode === mode && !zoomedMode
@@ -1211,7 +1356,7 @@ function HouseSubRing({ targetAngle, containerAngleRef, activeRingMode, zoomedMo
    UtilsSubRing — timer / chrono holograms inside a RingGroup.
    Mounts only when ringLevel === 'utils-sub'.
 ───────────────────────────────────────────────────────────── */
-function UtilsSubRing({ targetAngle, containerAngleRef, activeRingMode, zoomedMode, onSelect, onActivate }: RingProps) {
+function UtilsSubRing({ targetAngle, targetRef, containerAngleRef, activeRingMode, zoomedMode, onSelect, onActivate }: RingProps) {
   const geoFor = (mode: Mode, active: boolean): React.ReactNode => {
     switch (mode) {
       case 'timer':  return <TimerGeo  active={active} />
@@ -1221,7 +1366,7 @@ function UtilsSubRing({ targetAngle, containerAngleRef, activeRingMode, zoomedMo
   }
 
   return (
-    <RingGroup targetAngle={targetAngle}>
+    <RingGroup targetAngle={targetAngle} targetRef={targetRef}>
       <RingAngleProbe containerAngleRef={containerAngleRef} />
       {UTILS_SUB_ORDER.map(mode => {
         const isActive = activeRingMode === mode && !zoomedMode

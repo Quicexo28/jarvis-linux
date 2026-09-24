@@ -2,7 +2,7 @@ import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
 import QRCode from 'qrcode'
-import { notifyJarvis } from './cloudStorage.js'
+import { notifyJarvis, telegramDisabled } from './cloudStorage.js'
 import { listReminders, cancelReminder } from './reminders.js'
 
 const PORT = process.env.PORT ?? '8788'
@@ -244,6 +244,10 @@ let running = false
 let offset = 0
 
 export function startPolling() {
+  if (telegramDisabled()) {
+    console.warn('[telegramBot] JARVIS_TELEGRAM_DISABLED=1 — Jarvis bot polling disabled')
+    return
+  }
   const token = process.env.TELEGRAM_BOT_TOKEN_JARVIS
   if (!token) {
     console.warn('[telegramBot] TELEGRAM_BOT_TOKEN_JARVIS not set — Jarvis bot polling disabled')

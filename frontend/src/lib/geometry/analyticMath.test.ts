@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   freeSymbols, sampleCurve3D, sampleGraph1D, sampleSurface,
   planeBasis, spanLatticeLines, vectorsToR3,
+  bestFitPlane, orderOnPlane, projectToPlane, toPlaneCoords,
 } from './analyticMath'
 
 describe('freeSymbols', () => {
@@ -117,5 +118,89 @@ describe('vectorsToR3', () => {
       expect(p.length).toBe(3)
       for (const c of p) expect(isFinite(c)).toBe(true)
     }
+  })
+})
+
+describe('bestFitPlane', () => {
+  const rand = (seed: number) => {
+    let x = seed
+    return () => { x = (x * 1103515245 + 12345) % 2147483648; return x / 2147483648 - 0.5 }
+  }
+
+  it('recovers the plane of coplanar points exactly', () => {
+    const pts: [number, number, number][] = [[1, 2, 5], [-3, 4, 5], [0, -2, 5], [4, 1, 5]]
+    const plane = bestFitPlane(pts)
+    expect(Math.abs(plane.normal[2])).toBeCloseTo(1, 9)
+    expect(plane.rms).toBeCloseTo(0, 9)
+    expect(plane.centroid[2]).toBeCloseTo(5, 9)
+  })
+
+  it('handles a tilted plane the axis-aligned formulation would botch', () => {
+    // z = x + y — cada determinante por separado está mal condicionado.
+    const pts: [number, number, number][] = [[0, 0, 0], [1, 0, 1], [0, 1, 1], [2, 1, 3], [-1, 2, 1]]
+    const plane = bestFitPlane(pts)
+    const n = plane.normal
+    // Normal ∝ (1, 1, -1)/√3
+    expect(Math.abs(n[0])).toBeCloseTo(1 / Math.sqrt(3), 6)
+    expect(Math.abs(n[1])).toBeCloseTo(1 / Math.sqrt(3), 6)
+    expect(Math.abs(n[2])).toBeCloseTo(1 / Math.sqrt(3), 6)
+    expect(plane.rms).toBeCloseTo(0, 6)
+  })
+
+  it('is robust to noise off the plane', () => {
+    const r = rand(7)
+    const pts: [number, number, number][] = []
+    for (let i = 0; i < 40; i++) pts.push([r() * 10, r() * 10, r() * 0.02])
+    const plane = bestFitPlane(pts)
+    expect(Math.abs(plane.normal[2])).toBeGreaterThan(0.99)
+    expect(plane.rms).toBeLessThan(0.02)
+  })
+
+  it('degenerates safely with fewer than three points', () => {
+    const plane = bestFitPlane([[0, 0, 0], [1, 1, 1]])
+    expect(plane.normal.every(Number.isFinite)).toBe(true)
+    expect(plane.u.every(Number.isFinite)).toBe(true)
+    expect(plane.rms).toBe(0)
+  })
+
+  it('the basis is orthonormal and spans the plane', () => {
+    const plane = bestFitPlane([[0, 0, 0], [1, 0, 1], [0, 1, 1]])
+    const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    expect(dot(plane.u, plane.v)).toBeCloseTo(0, 9)
+    expect(dot(plane.u, plane.normal)).toBeCloseTo(0, 9)
+    expect(dot(plane.u, plane.u)).toBeCloseTo(1, 9)
+  })
+})
+
+describe('orderOnPlane', () => {
+  it('turns a bow tie into a simple ring', () => {
+    // Orden anatómico de cuatro puntas: dos diagonales cruzadas.
+    const bowtie: [number, number, number][] = [[0, 0, 0], [1, 0, 1], [1, 0, 0], [0, 0, 1]]
+    const plane = bestFitPlane(bowtie)
+    const ring = orderOnPlane(bowtie, plane)
+    // Recorriendo el anillo ordenado, el ángulo alrededor del centroide crece.
+    const angles = ring.map((p) => {
+      const [u, v] = toPlaneCoords(p, plane)
+      return Math.atan2(v, u)
+    })
+    for (let i = 1; i < angles.length; i++) expect(angles[i]).toBeGreaterThan(angles[i - 1])
+    // Y los lados pasan a ser todos iguales (el cuadrado real).
+    const side = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+    for (let i = 0; i < 4; i++) {
+      expect(side(ring[i], ring[(i + 1) % 4])).toBeCloseTo(1, 9)
+    }
+  })
+})
+
+describe('projectToPlane', () => {
+  it('flattens a warped quad onto its best-fit plane', () => {
+    const warped: [number, number, number][] = [[0, 0, 0.1], [2, 0, -0.1], [2, 2, 0.1], [0, 2, -0.1]]
+    const plane = bestFitPlane(warped)
+    const flat = projectToPlane(warped, plane)
+    const after = bestFitPlane(flat)
+    expect(after.rms).toBeCloseTo(0, 9)
+    // Y no se mueven en el plano: el centroide se conserva.
+    expect(after.centroid[0]).toBeCloseTo(plane.centroid[0], 9)
+    expect(after.centroid[1]).toBeCloseTo(plane.centroid[1], 9)
   })
 })

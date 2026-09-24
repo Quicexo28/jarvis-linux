@@ -14,6 +14,9 @@ let stream: MediaStream | null = null
 let lastVideoTime = -1
 let scaleCanvas: HTMLCanvasElement | null = null
 let scaleCtx: CanvasRenderingContext2D | null = null
+let scaleDisabled = false
+let probeCanvas: HTMLCanvasElement | null = null
+let probeCtx: CanvasRenderingContext2D | null = null
 
 /** El <video> vivo del pipeline (para GestureDebugView y capture_photo). */
 export function getGestureVideo(): HTMLVideoElement | null {
@@ -75,13 +78,18 @@ export function nextFrame(): HTMLVideoElement | null {
  * Los landmarks salen normalizados, así que reescalar no cambia nada aguas abajo.
  */
 export function inferenceSource(v: HTMLVideoElement): HTMLVideoElement | HTMLCanvasElement {
-  if (!INFER_MAX_WIDTH || v.videoWidth <= INFER_MAX_WIDTH) return v
+  if (!INFER_MAX_WIDTH || scaleDisabled || v.videoWidth <= INFER_MAX_WIDTH) return v
 
   const w = INFER_MAX_WIDTH
   const h = Math.round((v.videoHeight / v.videoWidth) * w)
   if (!scaleCanvas) {
     scaleCanvas = document.createElement('canvas')
-    scaleCtx = scaleCanvas.getContext('2d', { alpha: false, desynchronized: true })
+    // SIN `desynchronized`: pide un buffer de baja latencia cuyo contenido, leído
+    // desde OTRO contexto (el WebGL con el que tasks-vision sube la textura),
+    // no está garantizado. Un canvas negro entra al modelo como una imagen
+    // válida y sale con CERO manos — el pipeline parece sano (corre, mide ms,
+    // reporta fps) y simplemente no ve nada.
+    scaleCtx = scaleCanvas.getContext('2d', { alpha: false })
   }
   if (!scaleCtx) return v
   if (scaleCanvas.width !== w || scaleCanvas.height !== h) {
@@ -90,6 +98,42 @@ export function inferenceSource(v: HTMLVideoElement): HTMLVideoElement | HTMLCan
   }
   scaleCtx.drawImage(v, 0, 0, w, h)
   return scaleCanvas
+}
+
+/**
+ * Brillo medio (0..255) de lo que se le está pasando al modelo. Existe porque el
+ * modo de fallo que importa es MUDO: si el frame llega negro, `detectForVideo`
+ * responde igual de rápido y con cero manos, así que el síntoma («no detecta»)
+ * no distingue una cámara tapada de un canvas vacío. -1 = no medible.
+ */
+export function probeBrightness(src: HTMLVideoElement | HTMLCanvasElement): number {
+  if (!probeCanvas) {
+    probeCanvas = document.createElement('canvas')
+    probeCanvas.width = 32
+    probeCanvas.height = 18
+    probeCtx = probeCanvas.getContext('2d', { alpha: false, willReadFrequently: true })
+  }
+  if (!probeCtx || !probeCanvas) return -1
+  try {
+    probeCtx.drawImage(src, 0, 0, probeCanvas.width, probeCanvas.height)
+    const { data } = probeCtx.getImageData(0, 0, probeCanvas.width, probeCanvas.height)
+    let sum = 0
+    for (let i = 0; i < data.length; i += 4) sum += (data[i] + data[i + 1] + data[i + 2]) / 3
+    return sum / (data.length / 4)
+  } catch {
+    return -1
+  }
+}
+
+/** Deja de reescalar y pasa el <video> tal cual (cuesta más textura, pero VE). */
+export function disableScaling(): void {
+  scaleDisabled = true
+  scaleCanvas = null
+  scaleCtx = null
+}
+
+export function isScalingDisabled(): boolean {
+  return scaleDisabled
 }
 
 export function closeCamera(): void {
@@ -104,5 +148,7 @@ export function closeCamera(): void {
   }
   scaleCanvas = null
   scaleCtx = null
+  probeCanvas = null
+  probeCtx = null
   lastVideoTime = -1
 }

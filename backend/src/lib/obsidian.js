@@ -629,3 +629,91 @@ export async function getPersonalization(speakerName) {
     return null
   }
 }
+
+// --- Productividad: tareas del día y marcarlas como hechas ---
+
+function normTask(s) {
+  return String(s || '')
+    .replace(/_\([^)]*\)_\s*$/, '')          // la marca "_(hh:mm:ss · voice)_" que añade writeTask
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Open and done tasks of today's daily note, plus how many are still open in
+ * the previous six days (tasks carried over).
+ */
+export function tasksForToday() {
+  const empty = { open: [], done: [], carriedOver: 0 }
+  if (!isConfigured()) return empty
+  const dir = join(getVaultPath(), '05-Daily')
+  if (!existsSync(dir)) return empty
+  try {
+    const today = `${todayIso()}.md`
+    const out = { open: [], done: [], carriedOver: 0 }
+    const files = readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f)).sort().reverse().slice(0, 7)
+    for (const f of files) {
+      const content = readFileSync(join(dir, f), 'utf-8')
+      for (const m of content.matchAll(/^- \[( |x|X)\] (.+)$/gm)) {
+        const text = m[2].replace(/\s*_\([^)]*\)_\s*$/, '').trim()
+        if (f === today) (m[1] === ' ' ? out.open : out.done).push(text)
+        else if (m[1] === ' ') out.carriedOver++
+      }
+    }
+    return out
+  } catch {
+    return empty
+  }
+}
+
+/**
+ * Tick the open task (last 7 daily notes, newest first) that best matches
+ * `text`: exact normalized match, else the one that contains it, else the one
+ * it contains. Ambiguity is reported instead of guessed — ticking the wrong
+ * task is worse than asking.
+ */
+export async function completeTask(text) {
+  if (!isConfigured()) return { ok: false, error: 'not_configured' }
+  const want = normTask(text)
+  if (!want) return { ok: false, error: 'text_requerido' }
+  const dir = join(getVaultPath(), '05-Daily')
+  if (!existsSync(dir)) return { ok: false, error: 'sin_tareas' }
+  const files = readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f)).sort().reverse().slice(0, 7)
+  const candidates = []
+  for (const f of files) {
+    const lines = readFileSync(join(dir, f), 'utf-8').split('\n')
+    lines.forEach((line, i) => {
+      const m = line.match(/^- \[ \] (.+)$/)
+      if (m) candidates.push({ file: f, line: i, text: m[1], norm: normTask(m[1]) })
+    })
+  }
+  const pick = (pred) => candidates.filter(pred)
+  let hits = pick((c) => c.norm === want)
+  if (!hits.length) hits = pick((c) => c.norm.includes(want))
+  if (!hits.length) hits = pick((c) => want.includes(c.norm))
+  if (!hits.length) return { ok: false, error: 'no_encontrada', open: candidates.slice(0, 10).map((c) => normTask(c.text)) }
+  const distinct = [...new Set(hits.map((h) => h.norm))]
+  if (distinct.length > 1) return { ok: false, error: 'ambigua', matches: distinct.slice(0, 5) }
+  const h = hits[0]
+  const path = join(dir, h.file)
+  const lines = readFileSync(path, 'utf-8').split('\n')
+  lines[h.line] = lines[h.line].replace('- [ ]', '- [x]')
+  writeFileSync(path, lines.join('\n'), 'utf-8')
+  return { ok: true, task: h.text.replace(/\s*_\([^)]*\)_\s*$/, '').trim(), file: h.file }
+}
+
+/** One line per check-in in 04-Habitos/<Hábito>.md (the SQLite log is the source of truth). */
+export function appendHabitEntry(label, note) {
+  if (!isConfigured()) return
+  const name = String(label || '').trim().replace(/[\\/:*?"<>|]/g, '').slice(0, 60)
+  if (!name) return
+  try {
+    const dir = join(getVaultPath(), '04-Habitos')
+    if (!ensureDir(dir)) return
+    const title = name.charAt(0).toUpperCase() + name.slice(1)
+    const file = join(dir, `${title}.md`)
+    if (!existsSync(file)) {
+      writeFileSync(file, `---\naliases: [${name.toLowerCase()}]\ntags: [habito]\n---\n\n# ${title}\n\nRegistro de hábito llevado por Jarvis.\n\n`, 'utf-8')
+    }
+    appendFileSync(file, `- ${todayIso()} ${timeHms().slice(0, 5)}${note ? ` · ${String(note).replace(/\n/g, ' ')}` : ''}\n`, 'utf-8')
+  } catch {}
+}

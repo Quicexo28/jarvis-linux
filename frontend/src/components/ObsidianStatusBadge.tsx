@@ -49,10 +49,8 @@ export function ObsidianStatusBadge() {
   }
 
   return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ fontSize: 9, letterSpacing: '2px', color: 'var(--cyan, #00e5ff)', opacity: 0.7, marginBottom: 6 }}>
-        OBSIDIAN
-      </div>
+    // El título lo pone la PanelSection de arriba ("BÓVEDA").
+    <div>
       <div style={{
         display: 'flex',
         alignItems: 'center',

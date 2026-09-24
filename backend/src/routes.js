@@ -1,5 +1,6 @@
 import { json } from './lib/http.js'
 import { authorize } from './lib/webAuth.js'
+import { checkToolRisk } from './lib/toolRisk.js'
 import { existsSync, readdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -8,7 +9,8 @@ import { handleModules } from './handlers/modules.js'
 import { handleDeviceAction, handleJarvisTurn, handleJarvisWake, handleJarvisTts, handleFillerWav, handleAgentHealth } from './handlers/jarvis.js'
 import { handleTelemetry } from './handlers/telemetry.js'
 import { handleSttTranscribe } from './handlers/stt.js'
-import { handleProcessSpeech, handleConverse, handleSpeculative } from './handlers/speech.js'
+import { handleVisionScreen, handleVisionCamera } from './handlers/vision.js'
+import { handleProcessSpeech, handleConverse, handleSpeculative, handleTurnStats, handleMemoryList, handleMemoryForget, handleProactiveRun, handleProactiveStatus } from './handlers/speech.js'
 import {
   handleSpeakerIdList,
   handleSpeakerIdUpload,
@@ -37,6 +39,8 @@ import {
   handleCtxSleep, handleCtxPresence, handleCtxCurrent, handleCtxSummary,
 } from './handlers/mobileContext.js'
 import { handleObsidianStatus } from './handlers/obsidian.js'
+import { handleVaultGraph } from './handlers/knowledge.js'
+import { handleVaultIngest } from './handlers/vaultIngest.js'
 import { handleSystemConfig } from './handlers/config.js'
 import { handleWakeDetected, handleWakeCalibrate, handleWakeStatus } from './handlers/wakeWord.js'
 import { handleUiState, handleGestureToggle, handleGestureStatus } from './handlers/uiState.js'
@@ -52,11 +56,15 @@ import {
   handleVoiceToggle, handleClapToggle, handlePttStart, handlePttStop,
   handleObsidianTaskCreate, handleObsidianNoteCreate, handleObsidianTaskList,
   handleObsidianNoteSearch, handleObsidianPersonalize,
-  handleDisplayShow, handleDisplayHide, handlePickFile,
-  handleModel3dShow, handleModel3dHide,
+  handleVaultFocus,
+  handleDisplayShow, handleDisplayHide,
+  handleSpeechSay, handlePickFile,
+  handleModel3dShow, handleModel3dHide, handleModel3dSim,
   handleCloudSave, handleCloudList,
   handleModel3dAdd,
+  handleRgbSet, handleRgbPreset, handleRgbPresets, handleRgbState,
   handleRunCommand, handleCodeCheckpoint, handleCodeRollback, handleRestartBackend,
+  handleCodeTask, handleCodeTaskStatus, handleCodeTaskCancel,
 } from './handlers/skillTools.js'
 import {
   handlePcWindows, handlePcActiveWindow, handlePcReadUi, handlePcLaunch,
@@ -65,8 +73,12 @@ import {
 } from './handlers/pcControl.js'
 import { handleAppLaunch, handleRunTerminal } from './handlers/systemExec.js'
 import { handleSystemPower, handleSystemVolume, handleSystemBluetooth, handleSystemProcess } from './handlers/systemControl.js'
+import { handleClipboard, handleMedia, handleWindow, handleDnd } from './handlers/desktopControl.js'
+import { handleStudySession, handleStudyCards, handleHabit, handleDayBrief, handleMorningBriefing, handleTaskDone } from './handlers/productivity.js'
 import { handleSecurityStatus, handleSecurityUnlock } from './handlers/security.js'
-import { handleAgentsList, handleAgentRpc, handleAgentEvent, handleAgentWake } from './handlers/agents.js'
+import { handleAgentsList, handleAgentRpc, handleAgentsControl, handleAgentEvent, handleAgentWake } from './handlers/agents.js'
+import { handleRemoteDesktop, handleDesktopPair } from './handlers/remoteDesktop.js'
+import { handleProjectorStatus, handleProjectorOn, handleProjectorOff } from './handlers/projector.js'
 
 export const routes = [
   { method: 'GET',  path: '/health',                   handler: handleHealth },
@@ -89,6 +101,11 @@ export const routes = [
   { method: 'POST', path: '/api/jarvis/stt',           handler: handleSttTranscribe },
   { method: 'POST', path: '/api/jarvis/process-speech', handler: handleProcessSpeech },
   { method: 'POST', path: '/api/jarvis/converse',       handler: handleConverse },
+  { method: 'GET',  path: '/api/jarvis/stats',          handler: handleTurnStats },
+  { method: 'GET',  path: '/api/jarvis/memory',         handler: handleMemoryList },
+  { method: 'POST', path: '/api/jarvis/memory/forget',  handler: handleMemoryForget },
+  { method: 'GET',  path: '/api/jarvis/proactive',      handler: handleProactiveStatus },
+  { method: 'POST', path: '/api/jarvis/proactive/run',  handler: handleProactiveRun },
   { method: 'POST', path: '/api/jarvis/speculative',    handler: handleSpeculative },
   { method: 'GET',  path: '/api/speaker-id/samples',   handler: handleSpeakerIdList },
   { method: 'POST', path: '/api/speaker-id/samples',   handler: handleSpeakerIdUpload },
@@ -122,6 +139,10 @@ export const routes = [
   { method: 'GET',  path: '/api/mobile/ctx/summary',   handler: handleCtxSummary },
 
   { method: 'GET',  path: '/api/obsidian/status',      handler: handleObsidianStatus },
+
+  // "Compartir → Jarvis" desde el móvil. Escribe en Clippings/ y deja que
+  // pdfWatcher haga la conversión a markdown (OCR incluido).
+  { method: 'POST', path: '/api/vault/ingest',         handler: handleVaultIngest },
 
   // Skill tools — HTTP bridge for the MCP server. Each route maps to a
   // skillBus verb (renderer state) or a backend service (reminders/notify).
@@ -161,6 +182,16 @@ export const routes = [
   { method: 'POST', path: '/api/skills/system/volume',    handler: handleSystemVolume },
   { method: 'POST', path: '/api/skills/system/bluetooth', handler: handleSystemBluetooth },
   { method: 'POST', path: '/api/skills/system/process',   handler: handleSystemProcess },
+  { method: 'POST', path: '/api/skills/system/clipboard', handler: handleClipboard },
+  { method: 'POST', path: '/api/skills/system/media',     handler: handleMedia },
+  { method: 'POST', path: '/api/skills/system/window',    handler: handleWindow },
+  { method: 'POST', path: '/api/skills/system/dnd',       handler: handleDnd },
+  { method: 'POST', path: '/api/skills/study/session',    handler: handleStudySession },
+  { method: 'POST', path: '/api/skills/study/cards',      handler: handleStudyCards },
+  { method: 'POST', path: '/api/skills/habit',            handler: handleHabit },
+  { method: 'GET',  path: '/api/skills/day/brief',        handler: handleDayBrief },
+  { method: 'POST', path: '/api/skills/day/briefing',     handler: handleMorningBriefing },
+  { method: 'POST', path: '/api/skills/obsidian/task/done', handler: handleTaskDone },
   { method: 'POST', path: '/api/skills/voice/toggle',   handler: handleVoiceToggle },
   { method: 'POST', path: '/api/skills/voice/ptt-start', handler: handlePttStart },
   { method: 'POST', path: '/api/skills/voice/ptt-stop',  handler: handlePttStop },
@@ -173,30 +204,66 @@ export const routes = [
   { method: 'POST', path: '/api/skills/obsidian/search',      handler: handleObsidianNoteSearch },
   { method: 'POST', path: '/api/skills/obsidian/personalize', handler: handleObsidianPersonalize },
 
+  // Grafo de conocimiento (bóveda + memoria SQLite + conversaciones) para el
+  // modo `vault` del visor 3D. `graph` solo lee; `focus` mueve la cámara del
+  // renderer, así que pasa por el skill bus (y por eso vive en skillTools.js).
+  { method: 'GET',  path: '/api/skills/vault/graph',          handler: handleVaultGraph },
+  { method: 'POST', path: '/api/skills/vault/focus',          handler: handleVaultFocus },
+
   // Display / picker skill tools
   { method: 'POST', path: '/api/skills/display/show',  handler: handleDisplayShow },
   { method: 'POST', path: '/api/skills/display/hide',  handler: handleDisplayHide },
+  { method: 'POST', path: '/api/skills/speech/say',    handler: handleSpeechSay },
+  { method: 'POST', path: '/api/skills/vision/screen',  handler: handleVisionScreen },
+  { method: 'POST', path: '/api/skills/vision/camera',  handler: handleVisionCamera },
   { method: 'POST', path: '/api/skills/file/pick',     handler: handlePickFile },
 
   // 3D model viewer skill tools
   { method: 'POST', path: '/api/skills/model3d/show',  handler: handleModel3dShow },
   { method: 'POST', path: '/api/skills/model3d/add',   handler: handleModel3dAdd },
   { method: 'POST', path: '/api/skills/model3d/hide',  handler: handleModel3dHide },
+  { method: 'POST', path: '/api/skills/model3d/sim',   handler: handleModel3dSim },
+
 
   // Cloud skill tools
   { method: 'POST', path: '/api/skills/cloud/save',           handler: handleCloudSave },
   { method: 'GET',  path: '/api/skills/cloud/list',           handler: handleCloudList },
+
+  // RGB skill tools — exec de rgb_ctl.py en el PC remoto vía hub de agentes.
+  { method: 'POST', path: '/api/skills/rgb/set',              handler: handleRgbSet },
+  { method: 'POST', path: '/api/skills/rgb/preset',           handler: handleRgbPreset },
+  { method: 'GET',  path: '/api/skills/rgb/presets',          handler: handleRgbPresets },
+  { method: 'GET',  path: '/api/skills/rgb/state',            handler: handleRgbState },
+
+  // Escritorio remoto — enlace a pc-remote y a Sunshine/Moonlight, que corren
+  // fuera de Jarvis. Solo lectura: devuelve URL y estado, no controla nada.
+  { method: 'GET',  path: '/api/skills/desktop/remote',        handler: handleRemoteDesktop },
+  // Emparejar Moonlight: la app manda el PIN y el backend lo teclea en la UI
+  // web de Sunshine de la maquina que emite (host validado contra la lista).
+  { method: 'POST', path: '/api/skills/desktop/pair',          handler: handleDesktopPair },
+
+  // Proyector como PANTALLA: enciende (comando externo), espera el arranque y
+  // deja Moonlight proyectando el escritorio de este portatil. No es local-only
+  // a proposito — controlar una lampara desde la tablet no abre ninguna puerta.
+  { method: 'GET',  path: '/api/skills/projector/status',      handler: handleProjectorStatus },
+  { method: 'POST', path: '/api/skills/projector/on',          handler: handleProjectorOn },
+  { method: 'POST', path: '/api/skills/projector/off',         handler: handleProjectorOff },
 
   // Self-code skill tools (autodesarrollo: run/checkpoint/rollback/restart)
   { method: 'POST', path: '/api/skills/code/run',             handler: handleRunCommand },
   { method: 'POST', path: '/api/skills/code/checkpoint',      handler: handleCodeCheckpoint },
   { method: 'POST', path: '/api/skills/code/rollback',        handler: handleCodeRollback },
   { method: 'POST', path: '/api/skills/code/restart',         handler: handleRestartBackend },
+  { method: 'POST', path: '/api/skills/code/task',            handler: handleCodeTask },
+  { method: 'POST', path: '/api/skills/code/task/status',     handler: handleCodeTaskStatus },
+  { method: 'POST', path: '/api/skills/code/task/cancel',     handler: handleCodeTaskCancel },
 
   // Distributed agents — bridge to the Rust hub sidecar (control API :8795).
   // remote_* MCP tools call these; the hub pushes proactive events to /event.
   { method: 'GET',  path: '/api/agents/list',   handler: handleAgentsList },
   { method: 'POST', path: '/api/agents/rpc',    handler: handleAgentRpc },
+  // Remote-safe subset (phone app): read-only ops + wake, token-gated.
+  { method: 'POST', path: '/api/agents/control', handler: handleAgentsControl },
   { method: 'POST', path: '/api/agents/wake',   handler: handleAgentWake },
   { method: 'POST', path: '/api/agents/event',  handler: handleAgentEvent },
 
@@ -239,6 +306,23 @@ export async function dispatch(req, res) {
   const auth = authorize(req)
   if (!auth.ok) {
     return json(res, auth.code, { ok: false, error: auth.error })
+  }
+
+  // Risk gate: WHO is asking. webAuth above answered WHERE the request came
+  // from; this answers whether the speaker the model is acting for is allowed to
+  // run something this dangerous. Only tagged model tool calls are affected —
+  // GUI and companion traffic passes through untouched.
+  const risk = checkToolRisk(req)
+  if (!risk.allowed) {
+    const tool = req.headers['x-jarvis-tool'] || '-'
+    console.warn(`[risk] BLOCKED ${tool} (${risk.risk}) for mode=${risk.mode}: ${risk.reason}`)
+    return json(res, 403, {
+      ok: false,
+      error: 'risk_denied',
+      reason: risk.reason,
+      risk: risk.risk,
+      detail: risk.spoken,
+    })
   }
 
   const pathname = req.url.split('?')[0]

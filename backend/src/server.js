@@ -16,6 +16,9 @@ import { handleWakeBusUpgrade } from './lib/wakeSignal.js'
 import { handlePttBusUpgrade } from './lib/pttBus.js'
 import { migrateStraySpeakers } from './lib/obsidian.js'
 import { startScheduler } from './lib/reminders.js'
+import { startProactiveLoop } from './lib/proactive.js'
+import { restoreStudy } from './lib/studySession.js'
+import { startBriefingLoop } from './lib/dayBrief.js'
 import { attachAgentBridge } from './agent/bridge.js'
 import { handleMobileGestureUpgrade } from './handlers/mobileGesture.js'
 import { startCloudflareTunnel } from './lib/cloudflareTunnel.js'
@@ -91,6 +94,12 @@ if (env.JARVIS_TUNNEL === 'cloudflare') startCloudflareTunnel(port)
 
 // Telegram reminder scheduler — fires due reminders even while DORMANT.
 startScheduler()
+
+// Proactive agent — decides on its own whether anything is worth saying, under
+// a hard budget (see lib/proactive.js).
+startProactiveLoop()
+restoreStudy()
+startBriefingLoop()
 
 await loadDynamicRoutes()
 server.listen(port, host, () => console.log(`Jarvis backend on http://${host}:${port}`))

@@ -95,6 +95,20 @@ async function displayShow(payload: any = {}): Promise<unknown> {
 }
 
 /** Hide the on-screen card. */
+/**
+ * Say something out loud through the renderer's TTS. This is what lets the
+ * BACKEND speak on its own initiative — proactive notices, and the verifier
+ * telling the truth after a turn claimed something that never happened. Without
+ * it every backend-side correction was silent.
+ */
+async function speakText(payload: any = {}): Promise<unknown> {
+  const text = String(payload?.text ?? '').trim()
+  if (!text) throw new Error('missing_text')
+  if (text.length > 600) throw new Error('text_too_long')
+  await speakThroughRenderer(text)
+  return { spoken: true, chars: text.length }
+}
+
 async function displayHide(): Promise<unknown> {
   useDisplayStore.getState().hide()
   return { hidden: true }
@@ -126,6 +140,39 @@ async function model3dAdd(payload: any = {}): Promise<unknown> {
   return { added: specs.length, total: useModel3dStore.getState().objects.length }
 }
 
+/** Transport control for a running simulation (play/pause/speed/reset).
+ *  Separate from show/add because it must NOT rebuild the scene: rebuilding
+ *  would restart the physics, which is the opposite of "pause it". */
+async function model3dSim(payload: any = {}): Promise<unknown> {
+  const store = useSimStore.getState()
+  switch (String(payload?.action ?? 'toggle')) {
+    case 'play': store.setPlaying(true); break
+    case 'pause': store.setPlaying(false); break
+    case 'reset': store.reset(); break
+    case 'speed': {
+      const v = Number(payload?.speed)
+      if (!isFinite(v) || v <= 0) throw new Error('invalid_speed')
+      store.setSpeed(v)
+      break
+    }
+    case 'toggle': store.toggle(); break
+    default: throw new Error('invalid_action')
+  }
+  const now = useSimStore.getState()
+  // `active` no puede salir solo del simStore de ESTA ventana: con el proyector
+  // encendido el visor se monta en la ventana `wall`, que tiene su propio store.
+  // El contenido sí se conoce aquí, así que la verdad sobre "¿hay simulación?"
+  // se lee del model3dStore, que es el que se espeja.
+  const m = useModel3dStore.getState()
+  const onScreen = m.open && m.objects.some((o) => o.kind === 'simulation')
+  return {
+    active: now.active || onScreen,
+    playing: now.playing,
+    speed: now.speed,
+    title: now.title || (onScreen ? 'Simulación' : ''),
+  }
+}
+
 /** Hide the 3D model viewer. */
 async function model3dHide(): Promise<unknown> {
   useModel3dStore.getState().hide()
@@ -137,10 +184,13 @@ async function pickFile(_payload: { title?: string; multiple?: boolean; director
 }
 
 import { useJarvisStore } from '../state/jarvisStore'
+import { useVaultGraphStore, resolveNodeRef } from '../state/vaultGraphStore'
+import { speakThroughRenderer } from './speakBridge'
 import { useTimerStore } from '../state/timerStore'
 import { useChronoStore } from '../state/chronoStore'
 import { useDisplayStore } from '../state/displayStore'
 import { useModel3dStore, MODEL3D_KINDS, type Model3DSpec } from '../state/model3dStore'
+import { useSimStore } from '../state/simStore'
 import type { Mode } from '../types'
 
 /** Open a mode panel/canvas. payload: { mode: Mode, subRing?: boolean } */
@@ -273,6 +323,7 @@ import { useGestureStore } from '../state/gestureStore'
 
 const VALID_MODES: ReadonlyArray<Mode> = [
   'home', 'house', 'plan2d', 'plan3d', 'space', 'cloud', 'system', 'mobile', 'utils', 'timer', 'chrono',
+  'vault',
 ]
 
 const VALID_OVERLAYS: ReadonlyArray<OverlayName> = [
@@ -316,6 +367,35 @@ async function viewCurrent(): Promise<unknown> {
     voiceEnabled: j.voiceEnabled,
     clapWakeEnabled: j.clapWakeEnabled,
   }
+}
+
+/**
+ * Enfoca un nodo del grafo de conocimiento.
+ *
+ * Abre la vista si hace falta y espera el grafo antes de resolver: pedir "enfoca
+ * la nota de física" con la vista cerrada tenía que funcionar igual, o el señor
+ * acabaría dando dos órdenes para una sola intención.
+ *
+ * Devuelve el nodo resuelto, no un `{ok:true}`: el verificador de turnos
+ * comprueba postcondiciones, y "enfoqué algo" sin decir QUÉ es indistinguible
+ * de haber enfocado el nodo equivocado.
+ */
+async function vaultFocus(payload: { node?: string } = {}): Promise<unknown> {
+  const ref = String(payload.node ?? '').trim()
+  if (!ref) throw new Error('missing_node')
+
+  await modeOpen({ mode: 'vault' })
+
+  const store = useVaultGraphStore.getState()
+  if (!store.data) await store.load()
+  const data = useVaultGraphStore.getState().data
+  if (!data) throw new Error('graph_unavailable')
+
+  const node = resolveNodeRef(data.nodes, ref)
+  if (!node) throw new Error('node_not_found')
+
+  useVaultGraphStore.getState().setFocused(node.id)
+  return { node: node.id, label: node.label, type: node.type, folder: node.folder, degree: node.degree }
 }
 
 async function ringRotate(payload: { direction?: 'left' | 'right'; steps?: number } = {}): Promise<unknown> {
@@ -405,19 +485,36 @@ async function gestureSet(payload: { enabled?: boolean } = {}): Promise<unknown>
  * llegando al store mientras alguien lo hace frente a la cámara. */
 async function gestureStatus(): Promise<unknown> {
   const g = useGestureStore.getState()
-  return { enabled: g.enabled, status: g.status, detail: g.statusDetail, fps: g.fps, output: g.output }
+  // `landmarks` es el health-check del canal único: cuántos consumidores lo
+  // piden y si de verdad está llegando algo. Sin esto, comprobar la captura por
+  // manos obligaba a mirar la pantalla.
+  return {
+    enabled: g.enabled,
+    status: g.status,
+    detail: g.statusDetail,
+    fps: g.fps,
+    landmarks: {
+      consumers: g.landmarkConsumers,
+      streaming: g.handsFrame !== null,
+      left: Boolean(g.handsFrame?.left),
+      right: Boolean(g.handsFrame?.right),
+    },
+    output: g.output,
+  }
 }
 
 const PRIMITIVES: Record<string, Primitive> = {
   enumerate_devices: enumerateDevices,
   capture_photo: capturePhoto,
   notify,
+  speak_text: speakText,
   display_show: displayShow,
   display_hide: displayHide,
   pick_file: pickFile,
   model3d_show: model3dShow,
   model3d_add: model3dAdd,
   model3d_hide: model3dHide,
+  model3d_sim: model3dSim,
   mode_open: modeOpen,
   timer_create: timerCreate,
   timer_pause: timerPause,
@@ -436,6 +533,7 @@ const PRIMITIVES: Record<string, Primitive> = {
   view_open: viewOpen,
   view_close: viewClose,
   view_current: viewCurrent,
+  vault_focus: vaultFocus,
   ring_rotate: ringRotate,
   overlay_open: overlayOpen,
   overlay_close: overlayClose,

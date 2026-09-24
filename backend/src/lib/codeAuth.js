@@ -62,6 +62,18 @@ export function lock() {
 export async function requireCodeAuth(res, reason = 'Autorice un cambio en el código de Jarvis.') {
   if (isUnlocked()) return false
 
+  // Trust-local mode: no password, authorize on the strength of the two gates
+  // that already apply to every /api/skills/code/* route — the request must come
+  // from a LOCAL socket (webAuth DANGEROUS_PATHS) and the speaker must be the
+  // OWNER (skillTools.ownerOnly). Opt-in, because it removes the last barrier
+  // between a misheard sentence and a real code change. Set a password with
+  // `node scripts/set-code-password.js` to go back to the strict path — a
+  // configured hash ALWAYS wins over this flag.
+  if (!process.env.JARVIS_CODE_PASSWORD_HASH && process.env.JARVIS_CODE_TRUST_LOCAL === '1') {
+    console.warn('[code-auth] trust-local: autorizado sin contraseña (JARVIS_CODE_TRUST_LOCAL=1)')
+    return false
+  }
+
   if (!process.env.JARVIS_CODE_PASSWORD_HASH) {
     json(res, 403, {
       ok: false, error: 'no_password_set',

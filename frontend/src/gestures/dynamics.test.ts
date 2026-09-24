@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from 'vitest'
-import { GrabTracker, PinchTracker, PointerTracker, DiscreteTracker } from './dynamics'
+import { GrabTracker, PinchTracker, PointerTracker, DiscreteTracker, TapTracker } from './dynamics'
 import type { FingerStates } from './types'
 import type { HandFeatures } from './features'
 
@@ -327,4 +327,119 @@ test('discreto: sep→close cuenta como release del sep', () => {
   d.update('peace_sep', true, 200)
   d.update('peace_close', true, 260)
   expect(d.click).toBe(true)
+})
+
+// ---------- TapTracker ----------
+
+const TAP_DOWN = 0.30   // pulgar en contacto con el índice
+const TAP_UP = 0.95     // apuntando con el pulgar recogido
+
+test('tap: contacto → down; separar → up (semántica de ratón)', () => {
+  const tap = new TapTracker()
+  tap.update(true, feat({ aperture: TAP_UP }), 0)
+  expect(tap.pressed).toBe(false)
+  tap.update(true, feat({ aperture: TAP_DOWN }), DT)
+  expect(tap.down).toBe(true)
+  expect(tap.pressed).toBe(true)
+  tap.update(true, feat({ aperture: TAP_DOWN }), DT * 2)
+  expect(tap.down).toBe(false)   // `down` es un pulso de un ciclo
+  expect(tap.pressed).toBe(true)
+  tap.update(true, feat({ aperture: TAP_UP }), DT * 3)
+  expect(tap.up).toBe(true)
+  expect(tap.pressed).toBe(false)
+})
+
+test('tap: histéresis — apertura intermedia NO suelta', () => {
+  const tap = new TapTracker()
+  tap.update(true, feat({ aperture: TAP_UP }), 0)
+  tap.update(true, feat({ aperture: TAP_DOWN }), DT)
+  expect(tap.pressed).toBe(true)
+  // Entre TAP_ENTER (0.45) y TAP_EXIT (0.62): zona muerta, sigue presionado.
+  for (let i = 2; i < 8; i++) tap.update(true, feat({ aperture: 0.52 }), DT * i)
+  expect(tap.pressed).toBe(true)
+})
+
+test('tap: presión de un parpadeo no cuenta como clic', () => {
+  const tap = new TapTracker()
+  tap.update(true, feat({ aperture: TAP_UP }), 0)
+  tap.update(true, feat({ aperture: TAP_DOWN }), 50)
+  expect(tap.pressed).toBe(true)
+  tap.update(true, feat({ aperture: TAP_UP }), 80)  // 30 ms < TAP_MIN_PRESS_MS
+  expect(tap.up).toBe(false)
+  expect(tap.pressed).toBe(false)
+})
+
+test('tap: sin la pose de apuntar no dispara (un puño también junta los dedos)', () => {
+  const tap = new TapTracker()
+  for (let i = 0; i < 5; i++) tap.update(false, feat({ aperture: TAP_DOWN }), DT * i)
+  expect(tap.pressed).toBe(false)
+  expect(tap.down).toBe(false)
+})
+
+test('tap: dropout breve NO suelta el botón a mitad de arrastre', () => {
+  const tap = new TapTracker()
+  tap.update(true, feat({ aperture: TAP_UP }), 0)
+  tap.update(true, feat({ aperture: TAP_DOWN }), DT)
+  expect(tap.pressed).toBe(true)
+  tap.update(true, null, DT * 2)          // mano perdida, dentro de la gracia
+  expect(tap.pressed).toBe(true)
+  tap.update(true, null, DT + 400)        // fuera de la gracia
+  expect(tap.pressed).toBe(false)
+  expect(tap.up).toBe(false)              // soltar por pérdida no es un clic
+})
+
+test('tap: cooldown bloquea el rebote inmediato', () => {
+  const tap = new TapTracker()
+  let t = 0
+  tap.update(true, feat({ aperture: TAP_UP }), t); t += DT
+  tap.update(true, feat({ aperture: TAP_DOWN }), t); t += DT * 3
+  tap.update(true, feat({ aperture: TAP_UP }), t)
+  expect(tap.up).toBe(true)
+  const upT = t
+  // Reintento dentro de TAP_COOLDOWN_MS (220 ms): ignorado.
+  tap.update(true, feat({ aperture: TAP_DOWN }), upT + 100)
+  expect(tap.down).toBe(false)
+  // Pasado el cooldown: vuelve a enganchar.
+  tap.update(true, feat({ aperture: TAP_DOWN }), upT + 300)
+  expect(tap.down).toBe(true)
+})
+
+// ---------- PointerTracker: velocidad y modo fino ----------
+
+test('puntero: publica velocidad con el signo del movimiento en pantalla', () => {
+  const pt = new PointerTracker()
+  let t = 0
+  for (let i = 0; i < 6; i++) { pt.update(true, feat({ indexTipImage: { x: 0.5, y: 0.5 } }), t); t += DT }
+  const v0 = pt.vx
+  expect(Math.abs(v0)).toBeLessThan(1e-3)
+  // Imagen sin espejar: x de imagen BAJA ⇒ pantalla a la DERECHA ⇒ vx > 0.
+  for (let i = 0; i < 6; i++) { pt.update(true, feat({ indexTipImage: { x: 0.5 - 0.02 * i, y: 0.5 } }), t); t += DT }
+  expect(pt.vx).toBeGreaterThan(0)
+})
+
+test('puntero: el modo fino recorta el movimiento anclado al punto de presión', () => {
+  const move = (fine: boolean) => {
+    const pt = new PointerTracker()
+    let t = 0
+    for (let i = 0; i < 8; i++) { pt.update(true, feat({ indexTipImage: { x: 0.5, y: 0.5 } }), t, false); t += DT }
+    const x0 = pt.screenX
+    for (let i = 0; i < 8; i++) { pt.update(true, feat({ indexTipImage: { x: 0.40, y: 0.5 } }), t, fine); t += DT }
+    return Math.abs(pt.screenX - x0)
+  }
+  const normal = move(false)
+  const fine = move(true)
+  expect(fine).toBeGreaterThan(0)
+  expect(fine).toBeLessThan(normal * 0.7)
+})
+
+test('puntero: dropout congela la posición y pone la velocidad a cero', () => {
+  const pt = new PointerTracker()
+  let t = 0
+  for (let i = 0; i < 6; i++) { pt.update(true, feat({ indexTipImage: { x: 0.5 - 0.02 * i, y: 0.5 } }), t); t += DT }
+  expect(pt.vx).not.toBe(0)
+  const frozen = pt.screenX
+  pt.update(true, null, t)
+  expect(pt.active).toBe(true)
+  expect(pt.screenX).toBe(frozen)
+  expect(pt.vx).toBe(0)
 })

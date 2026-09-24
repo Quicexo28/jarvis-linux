@@ -12,6 +12,10 @@ ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -S "$XDG_RUNTIME_DIR/$WAYLAN
 ExecStart=/home/santiago2/jarvis-linux/frontend/src-tauri/target/release/jarvis
 Restart=on-failure
 RestartSec=3
+# El ExecStartPre espera hasta 30 s por el socket Wayland, pero el manager de
+# usuario trae DefaultTimeoutStartSec=15s: systemd mataba el start-pre a los 15 s
+# y el servicio entraba en bucle de reinicios (32 seguidos el 2026-07-24 16:20).
+TimeoutStartSec=90
 Environment=WAYLAND_DISPLAY=wayland-1
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus

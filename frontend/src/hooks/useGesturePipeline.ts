@@ -17,14 +17,17 @@ import { useEffect } from 'react'
 import type { HandLandmarker } from '@mediapipe/tasks-vision'
 import { GestureEngine } from '../gestures/engine'
 import { createHandLandmarker } from '../gestures/landmarker'
-import { openCamera, nextFrame, closeCamera, getGestureVideo, inferenceSource } from '../gestures/cameraFeed'
+import {
+  openCamera, nextFrame, closeCamera, getGestureVideo, inferenceSource,
+  probeBrightness, disableScaling, isScalingDisabled,
+} from '../gestures/cameraFeed'
 import { useGestureStore } from '../state/gestureStore'
 import { useUiStore } from '../state/uiStore'
 import { DEFAULT_OUTPUT } from '../gestures/types'
 import type { HandFrame, DetectedHand, Vec3 } from '../gestures/types'
 import {
   FRAME_MIN_INTERVAL_MS, FRAME_MAX_INTERVAL_MS, PACE_FACTOR, LANDMARKER_MAX_RESTARTS,
-  IDLE_AFTER_MS, IDLE_FRAME_INTERVAL_MS,
+  IDLE_AFTER_MS, IDLE_FRAME_INTERVAL_MS, INFER_MAX_WIDTH,
 } from '../gestures/config'
 
 /**
@@ -64,7 +67,7 @@ export function useGesturePipeline(): void {
   useEffect(() => {
     if (!enabled) return
 
-    const { setOutput, setStatus, setFps, setDebugFrame } = useGestureStore.getState()
+    const { setOutput, setStatus, setFps, setHandsFrame } = useGestureStore.getState()
 
     let alive = true
     let landmarker: HandLandmarker | null = null
@@ -73,6 +76,14 @@ export function useGesturePipeline(): void {
     let timer: ReturnType<typeof setTimeout> | null = null
     let fpsWindow = { frames: 0, start: performance.now(), inferSum: 0 }
     let lastHandAt = performance.now()
+    // Sonda de imagen: el fallo "no detecta manos" es MUDO — con un frame negro
+    // detectForVideo responde igual de rápido y devuelve cero manos, así que el
+    // pipeline reporta 'running' y ms plausibles mientras no ve nada. Cada 5 s se
+    // mide el brillo de lo que entra al modelo y se deja en journald; si el
+    // canvas reescalado sale negro tres veces seguidas se deja de reescalar y se
+    // pasa el <video> tal cual (cuesta más textura, pero VE).
+    let lastProbeAt = 0
+    let darkStreak = 0
     const engine = new GestureEngine()
 
     const schedule = (delayMs: number) => {
@@ -94,7 +105,7 @@ export function useGesturePipeline(): void {
       console.warn(`[gestures] landmarker reiniciado (${reason}), intento ${restarts}/${LANDMARKER_MAX_RESTARTS}`)
       setStatus('starting', 'reiniciando modelo…')
       // forceCpu: si el runtime murió (p.ej. delegate GPU inestable), no volver a apostar por GPU.
-      createHandLandmarker(2, true)
+      createHandLandmarker(2, true, (msg) => { if (alive) setStatus('starting', msg) })
         .then((handle) => {
           if (!alive) { handle.landmarker.close(); return }
           landmarker = handle.landmarker
@@ -134,9 +145,26 @@ export function useGesturePipeline(): void {
       }
 
       const t0 = performance.now()
+      const source = inferenceSource(video)
+      if (t0 - lastProbeAt >= 5000) {
+        lastProbeAt = t0
+        const mean = probeBrightness(source)
+        const scaled = source !== video
+        console.log(`[gestures] sonda: brillo=${mean.toFixed(1)} fuente=${scaled ? `canvas ${INFER_MAX_WIDTH}px` : 'video'} ${video.videoWidth}x${video.videoHeight}`)
+        if (mean >= 0 && mean < 1 && scaled) {
+          darkStreak++
+          if (darkStreak >= 3) {
+            console.warn('[gestures] el canvas reescalado llega NEGRO → se pasa el <video> directo al modelo')
+            disableScaling()
+            darkStreak = 0
+          }
+        } else {
+          darkStreak = 0
+        }
+      }
       let result
       try {
-        result = landmarker.detectForVideo(inferenceSource(video), t0)
+        result = landmarker.detectForVideo(source, t0)
       } catch (e) {
         restartLandmarker(e instanceof Error ? e.message : String(e))
         return
@@ -164,9 +192,12 @@ export function useGesturePipeline(): void {
         : splitHands(hands)
       setOutput(engine.update(left, right, t0))
 
-      // Landmarks para el panel de debug — solo si está abierto (evita renders).
-      if (ui.gestureDebugOpen) {
-        setDebugFrame({ left: left?.image ?? null, right: right?.image ?? null })
+      // Canal único de landmarks: se publica solo si alguien los pidió
+      // (hoy el panel de debug). Sin copiar los
+      // arrays — son las mismas referencias que devolvió tasks-vision, así que
+      // con cero consumidores esto no cuesta nada.
+      if (useGestureStore.getState().landmarkConsumers > 0) {
+        setHandsFrame({ left, right, t: t0 })
       }
 
       fpsWindow.frames++
@@ -182,7 +213,8 @@ export function useGesturePipeline(): void {
         setFps(Math.round((fpsWindow.frames * 1000) / (now - fpsWindow.start)))
         setStatus(
           'running',
-          `${delegate} · main · ${Math.round(fpsWindow.inferSum / fpsWindow.frames)}ms${idle ? ' · reposo' : ''}`,
+          `${delegate} · main · ${Math.round(fpsWindow.inferSum / fpsWindow.frames)}ms`
+          + `${isScalingDisabled() ? ' · sin reescalar' : ''}${idle ? ' · reposo' : ''}`,
         )
         fpsWindow = { frames: 0, start: now, inferSum: 0 }
       }
@@ -208,7 +240,10 @@ export function useGesturePipeline(): void {
       // motivó forzar CPU era un WebKitGTK degradado pre-reboot; con WebGL sano
       // GPU asienta, y el withTimeout de landmarker.ts (GPU 4s → CPU 12s → error
       // visible) acota el downside al comportamiento CPU actual si vuelve a colgar.
-      const handle = await createHandLandmarker(2)
+      // El progreso se publica en el status: construir el grafo tarda ~1 min en
+      // esta máquina con la UI despierta, y un minuto de 'starting' mudo es
+      // indistinguible de un cuelgue (se diagnosticaba como pipeline muerto).
+      const handle = await createHandLandmarker(2, false, (msg) => { if (alive) setStatus('starting', msg) })
       if (!alive) { handle.landmarker.close(); return }
       landmarker = handle.landmarker
       delegate = handle.delegate
@@ -233,7 +268,7 @@ export function useGesturePipeline(): void {
       // Output limpio al apagar: sin esto, un grab/pinch 'active' rancio seguía
       // rotando escenas 3D con el pipeline apagado.
       setOutput(DEFAULT_OUTPUT)
-      setDebugFrame(null)
+      setHandsFrame(null)
       setStatus('off')
       setFps(0)
     }

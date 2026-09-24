@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2x2. minWidth/minHeight are the pre-API-31 sizing (70dp per cell − 30dp);
+     targetCellWidth/Height are exact on 31+. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:initialLayout="@layout/widget_jarvis"
+    android:previewImage="@drawable/holo_preview"
+    android:description="@string/widget_desc_jarvis"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

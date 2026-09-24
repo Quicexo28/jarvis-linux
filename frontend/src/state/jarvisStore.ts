@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { Mode, SceneEntity, SavedPlan, Viewpoint } from '../types'
+import { MAIN_RING, SUB_RING, SUB_RING_UTILS } from '../constants'
 
 export type RingLevel = 'main' | 'house-sub' | 'utils-sub'
 export type VoiceMode = 'off' | 'continuous' | 'wake_word' | 'ptt'
@@ -13,9 +14,6 @@ function loadVoiceMode(): VoiceMode {
   return 'continuous'
 }
 
-const MAIN_RING: Mode[] = ['home', 'house', 'system', 'cloud', 'utils']
-const SUB_RING: Mode[] = ['plan3d', 'space', 'plan2d']
-const SUB_RING_UTILS: Mode[] = ['timer', 'chrono']
 
 const SPEAKER_NAME_KEY = 'jarvis.speaker.name.v1'
 
@@ -64,8 +62,17 @@ interface JarvisState {
   ringLevel: RingLevel
   activeRingMode: Mode
   /** Continuous ring angle in slot units. Integer = at a slot. Updated while dragging. */
+  /** Posición del carrusel en UNIDADES DE SLOT (ver `state/ringSnap.ts`). Es la
+   *  FUENTE de la rotación del anillo principal: el renderer la sigue en vivo,
+   *  así que arrastrar mueve los hologramas mientras dura el gesto. */
   ringAngle: number
+  /** Puño cerrado arrastrando el carrusel. Mientras dure, `setActiveRingMode`
+   *  NO reescribe `ringAngle`: el resalte del slot que pasa por el frente se
+   *  actualiza en vivo y pisar el ángulo ahí convertiría el arrastre continuo
+   *  en saltos de slot en slot. */
+  ringDragging: boolean
   setRingAngle: (angle: number) => void
+  setRingDragging: (dragging: boolean) => void
 
   setMode: (mode: Mode) => void
   setZoomedMode: (mode: Mode | null) => void
@@ -118,6 +125,7 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
   ringLevel: 'main',
   activeRingMode: 'home',
   ringAngle: 0,
+  ringDragging: false,
 
   setMode: (mode) => set({ mode }),
   setZoomedMode: (zoomedMode) => set({ zoomedMode, ...(zoomedMode ? { mode: zoomedMode } : {}) }),
@@ -151,6 +159,9 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
   setRingLevel: (level) =>
     set({
       ringLevel: level,
+      // Volver a 'main' aterriza en 'house': el ángulo tiene que acompañar o el
+      // carrusel se queda donde lo dejó el nivel anterior.
+      ...(level === 'main' ? { ringAngle: Math.max(0, MAIN_RING.indexOf('house')) } : {}),
       // Reset focus to the entry-point of the new level so users land in a known slot.
       activeRingMode:
         level === 'house-sub' ? 'plan3d'
@@ -171,5 +182,15 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
 
   setRingAngle: (ringAngle) => set({ ringAngle }),
 
-  setActiveRingMode: (activeRingMode) => set({ activeRingMode }),
+  setRingDragging: (ringDragging) => set({ ringDragging }),
+
+  // `ringAngle` y `activeRingMode` describen LO MISMO, así que el store
+  // mantiene el invariante en vez de dejarlo a cada sitio de llamada: sin esto,
+  // tocar un holograma cambiaba el modo activo y el anillo (que ahora sigue a
+  // `ringAngle`) se quedaba quieto. Durante el arrastre manda el ángulo.
+  setActiveRingMode: (activeRingMode) => set((s) => {
+    if (s.ringDragging || s.ringLevel !== 'main') return { activeRingMode }
+    const idx = MAIN_RING.indexOf(activeRingMode)
+    return idx >= 0 ? { activeRingMode, ringAngle: idx } : { activeRingMode }
+  }),
 }))

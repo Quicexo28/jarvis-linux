@@ -623,6 +623,13 @@ class ClaudeSession {
     if (this.model === 'haiku') {
       childEnv['MAX_THINKING_TOKENS'] = process['env']['JARVIS_VOICE_THINKING_TOKENS'] || '2048'
     }
+    // Tool search OFF: with ~80 MCP tools the CLI defers their schemas and the
+    // model has to spend a whole round trip on ToolSearch before it can call
+    // anything. Traces (haiku, tool turns): first sentence p50 5.6 s with
+    // ToolSearch vs 4.4 s without. The schemas live in the cached prefix, so
+    // loading them all up front costs cache reads, not latency.
+    // JARVIS_TOOL_SEARCH=auto|true restores the CLI's behaviour.
+    childEnv['ENABLE_TOOL_SEARCH'] = process['env']['JARVIS_TOOL_SEARCH'] || 'false'
     const proc = spawn(CLAUDE_CMD, args, {
       cwd: this.cwd, env: childEnv, shell: true, windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],

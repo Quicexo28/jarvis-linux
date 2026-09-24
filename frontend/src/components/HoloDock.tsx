@@ -4,7 +4,7 @@ import { modeMeta } from '../constants'
 import type { Mode } from '../types'
 import { GlassPanel } from './GlassPanel'
 
-const DOCK_MODES: Mode[] = ['home', 'house', 'plan2d', 'plan3d', 'space', 'cloud', 'system']
+const DOCK_MODES: Mode[] = ['home', 'house', 'vault', 'plan2d', 'plan3d', 'space', 'cloud', 'system']
 
 const MODE_ICONS: Record<Mode, string> = {
   home:   '◎',
@@ -18,6 +18,7 @@ const MODE_ICONS: Record<Mode, string> = {
   utils:  '◐',
   timer:  '⏱',
   chrono: '⏲',
+  vault:  '⧉',
 }
 
 export function HoloDock() {

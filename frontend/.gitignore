@@ -30,3 +30,5 @@ public/jarvis-companion.apk
 public/jarvis-companion.ipa
 public/jarvis-source.json
 public/jarvis-icon.png
+public/textures/*.jpg
+public/textures/*.png

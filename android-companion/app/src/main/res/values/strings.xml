@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Spanish copy, like the rest of the Jarvis UI. -->
+<resources>
+    <string name="dot">●</string>
+
+    <!-- Widget picker -->
+    <string name="widget_label_jarvis">Jarvis</string>
+    <string name="widget_label_tailscale">Tailscale</string>
+    <string name="widget_label_desktop">Moonlight · máquinas</string>
+    <string name="widget_desc_jarvis">Holograma: toca y habla con Jarvis</string>
+    <string name="widget_desc_tailscale">Estado del túnel y encendido rápido</string>
+    <string name="widget_desc_desktop">Tus máquinas por Moonlight, en un toque</string>
+
+    <!-- Jarvis widget -->
+    <string name="widget_jarvis_desc">Holograma de Jarvis: toca para hablar</string>
+    <string name="widget_jarvis_ready">toca y habla</string>
+    <string name="widget_jarvis_offline">sin conexión</string>
+
+    <!-- Tailscale widget -->
+    <string name="widget_tailscale_title">TAILSCALE</string>
+    <string name="widget_ts_on">ACTIVO</string>
+    <string name="widget_ts_off">INACTIVO</string>
+    <string name="widget_ts_missing">NO INSTALADO</string>
+    <string name="widget_ts_no_ip">sin túnel</string>
+    <string name="widget_ts_sub_unknown">Jarvis · sin comprobar</string>
+    <string name="widget_ts_sub_online">Jarvis · en línea</string>
+    <string name="widget_ts_sub_offline">Jarvis · no responde</string>
+    <string name="widget_ts_toggle_desc">Activar o desactivar Tailscale</string>
+    <string name="widget_ts_not_installed_toast">Tailscale no está instalado</string>
+
+    <!-- Desktop widget: label shown before any machine has been discovered. -->
+    <string name="widget_desktop_title">Moonlight</string>
+
+    <!-- Voice overlay -->
+    <string name="voice_listening">Escuchando…</string>
+    <string name="voice_thinking">Pensando…</string>
+    <string name="voice_speaking">Jarvis responde</string>
+    <string name="voice_tap_again">Toca para hablar otra vez</string>
+    <string name="voice_no_speech">No se escuchó nada</string>
+    <string name="voice_no_mic">Falta el permiso de micrófono</string>
+    <string name="voice_no_recognizer">Este dispositivo no tiene reconocimiento de voz</string>
+    <string name="voice_no_network">Sin red para reconocer la voz</string>
+    <string name="voice_no_backend">Jarvis no responde</string>
+    <string name="voice_not_paired">Empareja la app con Jarvis primero</string>
+    <string name="voice_close">Cerrar</string>
+
+    <!-- Compartir → Jarvis -->
+    <string name="share_label">Enviar a Jarvis</string>
+    <string name="share_not_paired">Empareja la app con Jarvis primero</string>
+    <string name="share_empty">No había nada que enviar</string>
+    <string name="share_unreadable">No se pudo leer lo compartido</string>
+    <string name="share_sending_note">Enviando a la bóveda…</string>
+    <string name="share_ok_one">Guardado en la bóveda</string>
+    <string name="share_ok_many">%1$d archivos en la bóveda</string>
+    <string name="share_partial">%1$d de %2$d guardados</string>
+    <string name="share_failed">No se pudo guardar: %1$s</string>
+    <string name="share_err_ext">tipo de archivo no admitido</string>
+    <string name="share_err_size">archivo demasiado grande</string>
+    <string name="share_err_vault">la bóveda no está configurada</string>
+    <plurals name="share_sending">
+        <item quantity="one">Enviando a la bóveda…</item>
+        <item quantity="other">Enviando %1$d archivos…</item>
+    </plurals>
+</resources>

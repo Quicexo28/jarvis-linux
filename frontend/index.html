@@ -2,7 +2,11 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover no es decorativo: con targetSdk 35 Android fuerza
+         edge-to-edge, y sin esto `env(safe-area-inset-*)` vale 0, así que el
+         header quedaba bajo el reloj del sistema y la nav bajo la barra de
+         gestos. El resto del layout ya lee esas variables. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Jarvis</title>
     <link rel="manifest" href="./manifest.webmanifest" />
     <meta name="theme-color" content="#050510" />

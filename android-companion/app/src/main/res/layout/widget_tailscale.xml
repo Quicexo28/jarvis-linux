@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 4x2: identity + state on the top row, address + power on the bottom one.
+     Tapping the body opens Tailscale; only the round button toggles, so a
+     mis-tap never drops the tunnel. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ts_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_card"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <ImageView
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:src="@drawable/ic_tailscale"
+            android:contentDescription="@null" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="@string/widget_tailscale_title"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.18"
+            android:textColor="@color/jarvis_dim" />
+
+        <TextView
+            android:id="@+id/ts_dot"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/dot"
+            android:textSize="10sp"
+            android:textColor="@color/jarvis_ok" />
+
+        <TextView
+            android:id="@+id/ts_state"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="5dp"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.1"
+            android:textColor="@color/jarvis_text"
+            android:text="@string/widget_ts_on" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/ts_ip"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textSize="16sp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:textColor="@color/jarvis_text"
+                android:text="@string/widget_ts_no_ip" />
+
+            <TextView
+                android:id="@+id/ts_sub"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:textColor="@color/jarvis_faint"
+                android:text="@string/widget_ts_sub_unknown" />
+        </LinearLayout>
+
+        <FrameLayout
+            android:id="@+id/ts_power"
+            android:layout_width="46dp"
+            android:layout_height="46dp"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/widget_tile_accent">
+
+            <ImageView
+                android:id="@+id/ts_power_icon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_power"
+                android:contentDescription="@string/widget_ts_toggle_desc" />
+        </FrameLayout>
+    </LinearLayout>
+</LinearLayout>

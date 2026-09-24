@@ -19,6 +19,10 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.util.Log
+import com.jarvis.companion.widget.DesktopWidget
+import com.jarvis.companion.widget.JarvisWidget
+import com.jarvis.companion.widget.TailscaleWidget
+import com.jarvis.companion.widget.WidgetPrefs
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
@@ -39,6 +43,11 @@ class ReporterService : Service() {
         private const val CHANNEL_ID = "jarvis_reporter"
         private const val NOTIF_ID = 1
 
+        /** Read by the UI (and the JS bridge) to show whether reporting is live. */
+        @Volatile
+        var isRunning = false
+            private set
+
         fun start(ctx: Context) {
             ctx.startForegroundService(Intent(ctx, ReporterService::class.java))
         }
@@ -54,9 +63,19 @@ class ReporterService : Service() {
 
     private val tick = object : Runnable {
         override fun run() {
-            reportBattery()
+            val reachable = reportBattery()
             reportLocation()
             reportPresence(isScreenOn())
+            // Free health signal: the battery POST already proved whether the
+            // laptop answers, so the home-screen tiles ride along on this tick
+            // instead of probing on their own schedule.
+            WidgetPrefs.setBackendOnline(this@ReporterService, reachable)
+            JarvisWidget.refreshAll(this@ReporterService)
+            TailscaleWidget.refreshAll(this@ReporterService)
+            // Runs on the handler thread, so the blocking lookup is fine here —
+            // and it is how a newly woken machine shows up in the desktop pill
+            // without waiting for the widget's own 30 min tick.
+            DesktopWidget.discover(this@ReporterService)
             handler.postDelayed(this, Config.intervalMin(this@ReporterService) * 60_000L)
         }
     }
@@ -87,12 +106,14 @@ class ReporterService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification())
+        isRunning = true
         handler.removeCallbacks(tick)
         handler.post(tick)
         return START_STICKY
     }
 
     override fun onDestroy() {
+        isRunning = false
         handler.removeCallbacks(tick)
         runCatching { unregisterReceiver(eventReceiver) }
         thread.quitSafely()
@@ -104,11 +125,12 @@ class ReporterService : Service() {
 
     /* ----- reporters (run on handler thread) ----- */
 
-    private fun reportBattery() {
+    /** @return whether the backend accepted it (used as the reachability signal). */
+    private fun reportBattery(): Boolean {
         val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         val charging = bm.isCharging
-        Api.post(this, "/api/mobile/ctx/battery", JSONObject()
+        return Api.post(this, "/api/mobile/ctx/battery", JSONObject()
             .put("level", level)
             .put("charging", charging))
     }

@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react'
-import { tauriInvoke } from '../platform/tauri'
 import { useClapDetection } from '../hooks/useClapDetection'
 import { useBootStore } from '../state/bootStore'
 import { getApiBase } from '../api/client'
+import { tauriInvoke } from '../platform/tauri'
 
 const RECONNECT_DELAY_MS = 3000
+
 
 export function DormantLayer() {
   const bootState = useBootStore((s) => s.bootState)
@@ -13,10 +14,14 @@ export function DormantLayer() {
 
   useClapDetection({
     enabled: bootState === 'DORMANT',
+    // Despierta desde CUALQUIER workspace: un wake word que sólo funciona si ya
+    // estás mirando la pantalla de Jarvis no sirve de nada. Antes esto llamaba a
+    // `show_if_workspace(1)`, que devolvía false en cualquier otro workspace y
+    // dejaba el aplauso detectado sin efecto visible (parecía fallo del detector).
     onDoubleClap: () => {
-      tauriInvoke<boolean>('show_if_workspace', { workspace: 1 }).then((activated) => {
-        if (activated) setBootState('AWAKE')
-      }).catch(() => {})
+      tauriInvoke('focus_window')
+        .then(() => setBootState('AWAKE'))
+        .catch((err) => console.warn('[clap] focus_window falló', err))
     },
   })
 

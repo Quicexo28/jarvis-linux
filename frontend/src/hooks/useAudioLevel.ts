@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { acquireMic, releaseMic } from '../audio/micFeed'
 
 interface Options {
   enabled: boolean
@@ -12,7 +13,6 @@ export function useAudioLevel({ enabled, smoothing = 0.65 }: Options): number {
   useEffect(() => {
     if (!enabled) { setLevel(0); levelRef.current = 0; return }
 
-    let stream: MediaStream | null = null
     let audioCtx: AudioContext | null = null
     let analyser: AnalyserNode | null = null
     let raf = 0
@@ -34,11 +34,14 @@ export function useAudioLevel({ enabled, smoothing = 0.65 }: Options): number {
       raf = requestAnimationFrame(tick)
     }
 
-    navigator.mediaDevices
-      .getUserMedia({ audio: true, video: false })
+    // Micro COMPARTIDO (audio/micFeed.ts): este medidor se enciende en el MISMO
+    // tick que el STT al pasar a modo continuo — dos getUserMedia simultáneos
+    // eran el disparador del SIGSEGV de PipeWire en WebKitGTK.
+    let held = false
+    acquireMic()
       .then((s) => {
-        if (cancelled) { s.getTracks().forEach((t) => t.stop()); return }
-        stream = s
+        if (cancelled) { releaseMic(); return }
+        held = true
         audioCtx = new AudioContext()
         analyser = audioCtx.createAnalyser()
         analyser.fftSize = 256
@@ -50,7 +53,7 @@ export function useAudioLevel({ enabled, smoothing = 0.65 }: Options): number {
     return () => {
       cancelled = true
       if (raf) cancelAnimationFrame(raf)
-      stream?.getTracks().forEach((t) => t.stop())
+      if (held) releaseMic()   // compartido: no parar tracks ajenos
       audioCtx?.close()
     }
   }, [enabled, smoothing])

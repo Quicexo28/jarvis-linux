@@ -53,10 +53,9 @@ export function SpeakerIdPanel({ onOpenConfig }: { onOpenConfig: () => void }) {
   const noVoices = status != null && (!status.ready || (totalRefs === 0 && !status.owner_ready))
 
   return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 9, letterSpacing: '2px', color: 'var(--cyan, #00e5ff)', opacity: 0.7, marginBottom: 8 }}>
-        SPEAKER ID
-      </div>
+    // Sin encabezado propio: lo pone la PanelSection que envuelve a este
+    // componente ("HABLANTE"). Dos títulos para una sección es ruido.
+    <div>
 
       {unreachable && (
         <div style={{

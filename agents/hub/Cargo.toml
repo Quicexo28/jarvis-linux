@@ -21,3 +21,6 @@ tracing-subscriber = { workspace = true }
 axum = { version = "0.7", features = ["json"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
+# Wake-on-LAN necesita las broadcast dirigidas de cada interfaz, no solo
+# 255.255.255.255 (hay APs que no la cruzan de Wi-Fi a cable).
+if-addrs = "0.13"
