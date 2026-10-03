@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { planApply, extractSummary } from '../src/lib/devAgent.js'
 import { classifyIntent } from '../src/lib/intentClassifier.js'
 
@@ -118,5 +119,35 @@ describe('self_code intent', () => {
 
   it('does NOT fire on ordinary file commands', () => {
     expect(classifyIntent('mueve el archivo de descargas a documentos', ENGAGED_CTX).intentTag).not.toBe('self_code')
+  })
+})
+
+// "Learn to fulfil": the three pieces live in three files and only work
+// together. If one drifts (prompt names a param the tool lost, or the handler
+// stops forwarding it) the model asks for a follow-up that silently never runs.
+describe('followUp is wired end to end', () => {
+  const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf-8')
+
+  it('the tool exposes it, the handler forwards it, the prompt explains it', () => {
+    const mcp = read('../mcp-server/jarvis-mcp.js')
+    const tool = mcp.slice(mcp.indexOf("name: 'code_task',"), mcp.indexOf("name: 'code_task_status'"))
+    expect(tool).toMatch(/followUp:\s*\{/)
+
+    const handler = read('../src/handlers/skillTools.js')
+    const fn = handler.slice(handler.indexOf('export async function handleCodeTask('), handler.indexOf('export async function handleCodeTaskStatus('))
+    expect(fn).toMatch(/followUp:\s*body\.followUp/)
+    // Still behind the owner + code-auth gates.
+    expect(fn).toMatch(/ownerOnly\(res\)/)
+    expect(fn).toMatch(/requireCodeAuth\(/)
+
+    const speech = read('../src/handlers/speech.js')
+    expect(speech).toMatch(/followUp = la peticion ORIGINAL/)
+    expect(speech).toMatch(/destructiva o irreversible[^\n]*pregunta primero/)
+  })
+
+  it('the runner retries the request after the restart', () => {
+    const dev = read('../src/lib/devAgent.js')
+    expect(dev).toMatch(/export function resumeFollowUps/)
+    expect(read('../src/server.js')).toMatch(/resumeFollowUps\(\)/)
   })
 })

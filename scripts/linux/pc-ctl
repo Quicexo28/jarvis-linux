@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# pc-ctl — ojos y manos del agente de escritorio (lib/computerAgent.js).
+#
+# Una interfaz FIJA en vez de dejar que el agente improvise con grim/ydotool:
+# las coordenadas de la captura y las del clic tienen que vivir en el MISMO
+# sistema, y eso solo se garantiza si un único script hace las dos cosas.
+#
+#   pc-ctl shot [ruta]                 captura el monitor enfocado (nunca projmap)
+#   pc-ctl click X Y [left|right|middle|double]
+#   pc-ctl move X Y
+#   pc-ctl drag X1 Y1 X2 Y2
+#   pc-ctl scroll up|down [N]
+#   pc-ctl type "texto"
+#   pc-ctl key ctrl+l | enter | alt+tab ...
+#   pc-ctl windows                     ventanas abiertas (clase, título, workspace)
+#   pc-ctl cursor                      posición actual, en coords de la captura
+#
+# X/Y son píxeles DE LA ÚLTIMA CAPTURA (origen arriba-izquierda). El monitor de
+# esa captura se recuerda en $STATE, así un cambio de foco entre `shot` y
+# `click` no manda el clic a otra pantalla.
+#
+# Posicionar va por `hyprctl dispatch movecursor` (coordenadas lógicas exactas
+# del layout) y pulsar por ydotool: el movimiento absoluto de ydotool pasa por
+# la aceleración del puntero y no cae donde se pide.
+set -euo pipefail
+
+RUN="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+STATE="$RUN/pc-ctl.monitor"
+export YDOTOOL_SOCKET="${YDOTOOL_SOCKET:-$RUN/.ydotool_socket}"
+
+die() { echo "pc-ctl: $*" >&2; exit 1; }
+
+# Monitor enfocado como "nombre x y ancho_logico alto_logico escala", saltando
+# la salida headless del proyector (es una pared que nadie opera).
+focused_monitor() {
+  hyprctl monitors -j | python3 -c '
+import json, sys
+ms = [m for m in json.load(sys.stdin) if m["name"] != "projmap"]
+m = next((m for m in ms if m["focused"]), ms[0])
+s = m["scale"] or 1
+w, h = (m["height"], m["width"]) if m["transform"] % 2 else (m["width"], m["height"])
+print(m["name"], m["x"], m["y"], round(w / s), round(h / s), s)'
+}
+
+monitor() {
+  if [[ -s "$STATE" ]]; then cat "$STATE"; else focused_monitor; fi
+}
+
+# Coordenadas de la captura → coordenadas globales del layout de Hyprland.
+to_global() {
+  local x=$1 y=$2 name mx my w h s
+  read -r name mx my w h s < <(monitor)
+  [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]] || die "coordenadas no numéricas: $x $y"
+  (( x < w && y < h )) || die "($x,$y) fuera de la pantalla ${w}x${h}"
+  echo "$((mx + x)) $((my + y))"
+}
+
+move_to() {
+  local gx gy out
+  read -r gx gy < <(to_global "$1" "$2")
+  out=$(hyprctl dispatch movecursor "$gx" "$gy")
+  # hyprctl devuelve 0 aunque el dispatcher falle; el error viene en stdout.
+  [[ "$out" == "ok" ]] || die "movecursor: $out"
+}
+
+button_code() {
+  case "${1:-left}" in
+    left|double) echo 0xC0 ;;
+    right) echo 0xC1 ;;
+    middle) echo 0xC2 ;;
+    *) die "botón desconocido: $1" ;;
+  esac
+}
+
+# "ctrl+shift+t" → wtype -M ctrl -M shift -k t -m shift -m ctrl
+send_key() {
+  local combo=$1 IFS=+ parts=() args=() mods=() key
+  read -ra parts <<< "$combo"
+  key=${parts[-1]}
+  for m in "${parts[@]:0:${#parts[@]}-1}"; do
+    case "${m,,}" in
+      ctrl|control) mods+=(ctrl) ;;
+      shift) mods+=(shift) ;;
+      alt) mods+=(alt) ;;
+      super|win|meta|logo) mods+=(logo) ;;
+      *) die "modificador desconocido: $m" ;;
+    esac
+  done
+  case "${key,,}" in
+    enter|return) key=Return ;;
+    esc|escape) key=Escape ;;
+    tab) key=Tab ;;
+    space) key=space ;;
+    backspace) key=BackSpace ;;
+    delete|del|supr) key=Delete ;;
+    up) key=Up ;; down) key=Down ;; left) key=Left ;; right) key=Right ;;
+    home) key=Home ;; end) key=End ;;
+    pageup) key=Prior ;; pagedown) key=Next ;;
+    f[0-9]|f1[0-2]) key=${key^^} ;;
+  esac
+  for m in "${mods[@]}"; do args+=(-M "$m"); done
+  args+=(-k "$key")
+  for (( i=${#mods[@]}-1; i>=0; i-- )); do args+=(-m "${mods[i]}"); done
+  wtype "${args[@]}"
+}
+
+cmd=${1:-}; shift || true
+case "$cmd" in
+  shot)
+    out=${1:-$RUN/pc-ctl-shot.png}
+    mon=$(focused_monitor)
+    echo "$mon" > "$STATE"
+    read -r name mx my w h s <<< "$mon"
+    grim -c -o "$name" "$out"   # -c: el puntero sale en la imagen, así el agente ve dónde quedó
+    # A escala ≠ 1 grim da píxeles físicos; se reescala al tamaño lógico para
+    # que un píxel de la imagen sea un píxel de movecursor.
+    if [[ "$s" != "1" && "$s" != "1.0" ]]; then
+      magick "$out" -resize "${w}x${h}!" "$out"
+    fi
+    echo "$out ${w}x${h} monitor=$name"
+    ;;
+  click)
+    [[ $# -ge 2 ]] || die "uso: click X Y [left|right|middle|double]"
+    move_to "$1" "$2"
+    code=$(button_code "${3:-left}")
+    if [[ "${3:-left}" == double ]]; then
+      ydotool click --repeat 2 --next-delay 80 "$code" >/dev/null
+    else
+      ydotool click "$code" >/dev/null
+    fi
+    echo "ok click ${3:-left} $1,$2"
+    ;;
+  move)
+    [[ $# -ge 2 ]] || die "uso: move X Y"
+    move_to "$1" "$2"; echo "ok move $1,$2"
+    ;;
+  drag)
+    [[ $# -ge 4 ]] || die "uso: drag X1 Y1 X2 Y2"
+    move_to "$1" "$2"
+    ydotool click 0x40 >/dev/null          # botón izquierdo abajo
+    sleep 0.1
+    move_to "$3" "$4"
+    sleep 0.1
+    ydotool click 0x80 >/dev/null          # botón izquierdo arriba
+    echo "ok drag $1,$2 -> $3,$4"
+    ;;
+  scroll)
+    dir=${1:-down}; n=${2:-3}
+    [[ "$n" =~ ^[0-9]+$ ]] || die "N no numérico: $n"
+    case "$dir" in up) dy=$n ;; down) dy=-$n ;; *) die "uso: scroll up|down [N]" ;; esac
+    ydotool mousemove -w -x 0 -y "$dy" >/dev/null
+    echo "ok scroll $dir $n"
+    ;;
+  type)
+    [[ $# -ge 1 ]] || die "uso: type \"texto\""
+    wtype -d 8 -- "$*"; echo "ok type (${#1} caracteres)"
+    ;;
+  key)
+    [[ $# -ge 1 ]] || die "uso: key ctrl+l"
+    for combo in "$@"; do send_key "$combo"; done
+    echo "ok key $*"
+    ;;
+  windows)
+    hyprctl clients -j | python3 -c '
+import json, sys
+for c in json.load(sys.stdin):
+    if c["class"] == "jarvis": continue
+    ws, cls, title = c["workspace"]["name"], c["class"], c["title"][:80]
+    print(f"{ws:>6}  {cls:<24} {title}")'
+    ;;
+  cursor)
+    read -r name mx my w h s < <(monitor)
+    hyprctl cursorpos | tr -d ' ' | awk -F, -v mx="$mx" -v my="$my" '{print $1-mx, $2-my}'
+    ;;
+  *)
+    sed -n '4,17p' "$0" | sed 's/^# \{0,1\}//'
+    [[ -z "$cmd" ]] || exit 1
+    ;;
+esac

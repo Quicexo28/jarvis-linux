@@ -17,6 +17,7 @@ import { getCurrentState, getDevices, summarizeDay } from '../lib/mobileContext.
 import { notifyJarvis, saveToCloud, listCloudFiles } from '../lib/cloudStorage.js'
 import { runCommand, gitCheckpoint, gitRollback, scheduleRestart } from '../lib/selfCode.js'
 import { startDevJob, getDevJob, listDevJobs, getActiveJob, getDevJobLog, cancelDevJob } from '../lib/devAgent.js'
+import { startComputerJob, getComputerJob, listComputerJobs, getActiveComputerJob, getComputerJobLog, cancelComputerJob } from '../lib/computerAgent.js'
 import { getSpeakerMode } from '../lib/speakerContext.js'
 import { agentRpc } from './agents.js'
 import { requireCodeAuth } from '../lib/codeAuth.js'
@@ -785,6 +786,9 @@ export async function handleCodeTask(req, res) {
       instruction: body.instruction || body.task || '',
       model: body.model || undefined,
       requestedBy: body.requestedBy || 'mcp',
+      // The owner's original request, when the change exists to make it
+      // possible: it is retried automatically once the capability is applied.
+      followUp: body.followUp || body.follow_up || undefined,
     })
     return json(res, result.ok ? 200 : 409, result)
   }, res)
@@ -806,6 +810,39 @@ export async function handleCodeTaskStatus(req, res) {
       active: activeJob,
       recent: listDevJobs(Number(body.limit) || 5),
     })
+  }, res)
+}
+
+// --- Agente de escritorio (computerAgent.js) ---------------------------------
+// Sin ownerOnly propio: la ruta es local-only (webAuth) y destructive en
+// toolRisk, que ya exige voz del señor reciente cuando la pide el modelo.
+export async function handleComputerTask(req, res) {
+  return withBody(req, async (body) => {
+    const result = await startComputerJob({
+      task: body.task || body.instruction || '',
+      model: body.model || undefined,
+      requestedBy: body.requestedBy || 'mcp',
+    })
+    return json(res, result.ok ? 200 : 409, result)
+  }, res)
+}
+
+export async function handleComputerTaskStatus(req, res) {
+  return withBody(req, (body) => {
+    const id = String(body.id || '').trim()
+    if (id) {
+      const rec = getComputerJob(id)
+      if (!rec) return json(res, 404, { ok: false, error: 'unknown_job' })
+      return json(res, 200, { ok: true, job: rec, log: body.log ? getComputerJobLog(id) : undefined })
+    }
+    return json(res, 200, { ok: true, active: getActiveComputerJob(), recent: listComputerJobs(Number(body.limit) || 5) })
+  }, res)
+}
+
+export async function handleComputerTaskCancel(req, res) {
+  return withBody(req, () => {
+    const result = cancelComputerJob()
+    return json(res, result.ok ? 200 : 404, result)
   }, res)
 }
 

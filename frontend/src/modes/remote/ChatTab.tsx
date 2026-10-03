@@ -4,7 +4,19 @@ import { startDictation } from './native'
 
 export type ChatMessage = { id: number; role: 'user' | 'jarvis'; text: string }
 
-const SUGGESTIONS = ['¿Cómo está el PC?', 'Pon un timer de 10 minutos', 'Resumen del día']
+// Atajos SIEMPRE visibles (no solo con el chat vacío): desde el móvil lo
+// normal es mandar órdenes cortas al PC, y teclearlas cada vez es la fricción
+// que sobra. Son frases, no rutas: las que necesitan permisos locales (apagar,
+// abrir apps, mirar la pantalla) solo existen a través del cerebro.
+const SUGGESTIONS = [
+  '¿Qué hay en mi pantalla?',
+  'Bloquea el PC',
+  'Abre Firefox',
+  'Suspende el PC',
+  '¿Cómo está el PC?',
+  'Resumen del día',
+  'Pon un timer de 10 minutos',
+]
 
 function bubble(role: ChatMessage['role']): CSSProperties {
   const mine = role === 'user'
@@ -57,7 +69,7 @@ export function ChatTab({
         {messages.length === 0 && (
           <div style={{ ...S.card, textAlign: 'center', padding: '28px 18px' }}>
             <div style={{ fontSize: 16, marginBottom: 6 }}>Hola.</div>
-            <div style={S.hint}>Pregunta, ordena o dicta. Jarvis responde con las mismas herramientas del escritorio.</div>
+            <div style={S.hint}>Pregunta, ordena o dicta. Jarvis maneja el PC con las mismas herramientas que en el escritorio.</div>
           </div>
         )}
         {messages.map((m) => <div key={m.id} style={bubble(m.role)}>{m.text}</div>)}
@@ -65,18 +77,13 @@ export function ChatTab({
         <div ref={endRef} />
       </div>
 
-      {messages.length === 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-          {SUGGESTIONS.map((s) => (
-            <button key={s} style={{ ...S.btnGhost, fontSize: 12 }} onClick={() => submit(s)}>{s}</button>
-          ))}
-        </div>
-      )}
-
-      <div style={{
-        position: 'sticky', bottom: 0, display: 'flex', gap: 8,
-        background: T.bg, paddingTop: 8,
-      }}>
+      <div style={{ position: 'sticky', bottom: 0, background: T.bg, paddingTop: 8 }}>
+      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, scrollbarWidth: 'none' }}>
+        {SUGGESTIONS.map((q) => (
+          <button key={q} style={{ ...S.btnGhost, fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }} disabled={sending} onClick={() => submit(q)}>{q}</button>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
         <input
           style={S.input}
           value={input}
@@ -86,7 +93,7 @@ export function ChatTab({
           onKeyDown={(e) => { if (e.key === 'Enter') submit(input) }}
         />
         <button
-          style={{ ...S.btn, width: 48, padding: 0, color: listening ? T.accent : T.dim }}
+          style={{ ...(listening ? S.btnAccent : S.btn), width: 56, padding: 0, color: listening ? T.accent : T.text }}
           aria-label="Dictar"
           onClick={mic}
         >
@@ -99,6 +106,7 @@ export function ChatTab({
         <button style={{ ...S.btnAccent, width: 56, padding: 0 }} aria-label="Enviar" onClick={() => submit(input)} disabled={sending}>
           →
         </button>
+      </div>
       </div>
     </div>
   )

@@ -1,0 +1,19 @@
+[Unit]
+Description=Jarvis Embedding Service (memoria semantica, multilingual-e5-small)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-linux/backend/voice/python
+ExecStart=%h/jarvis-linux/backend/voice/python/.venv/bin/python embed_service.py
+Restart=on-failure
+RestartSec=5
+# CPU only: the 4 GB GPU belongs to whisper. Two threads so speaker-id (also
+# CPU, inside jarvis-stt) keeps its headroom. ~10 ms per query, ~450 MB RAM.
+# Optional for the backend: if this is down, recall falls back to BM25.
+Environment=EMBED_PORT=8797
+Environment=EMBED_THREADS=2
+Environment=HF_HUB_DISABLE_TELEMETRY=1
+
+[Install]
+WantedBy=default.target

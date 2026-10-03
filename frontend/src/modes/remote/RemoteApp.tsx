@@ -1,8 +1,9 @@
 /**
  * Jarvis Remote — the single app for phone and tablet.
  *
- * One shell, four tabs: chat with the brain, house control, the remote-PC
- * panel (distributed agents) and device/system status. The Android companion
+ * One shell, five tabs: chat with the brain, a direct PC remote (media,
+ * volume, windows, clipboard), the machines panel (distributed agents +
+ * remote desktop), house control and device/system status. The Android companion
  * loads exactly this page in a WebView, so features live here once and the APK
  * only adds what a WebView cannot do (background reporting, native dictation).
  */
@@ -12,17 +13,22 @@ import { ChatTab, type ChatMessage } from './ChatTab'
 import { HomeTab } from './HomeTab'
 import { PcTab } from './PcTab'
 import { StatusTab } from './StatusTab'
+import { MandoTab } from './MandoTab'
 import { useOnline, useTelemetry, useLocationReporting, usePresenceReporting } from './hooks'
 import { sendTurn } from './api'
+import { AuthSheet } from './AuthSheet'
 
-type TabId = 'chat' | 'casa' | 'pc' | 'estado'
+type TabId = 'chat' | 'mando' | 'pc' | 'casa' | 'estado'
 
 // Inline SVG paths, not emoji or box-drawing glyphs: the Android WebView font
 // stack renders several of those as tofu boxes.
 const TABS: { id: TabId; label: string; icon: string }[] = [
-  { id: 'chat',   label: 'Chat',   icon: 'M4 5h16v11H9l-5 4z' },
+  // Orden = frecuencia de uso desde el móvil: hablar con Jarvis y manejar el
+  // PC primero; equipos, casa y estado son consulta ocasional.
+  { id: 'chat',   label: 'Jarvis', icon: 'M4 5h16v11H9l-5 4z' },
+  { id: 'mando',  label: 'Mando',  icon: 'M6 8h12a4 4 0 0 1 0 8H6a4 4 0 0 1 0-8zM8 11v2M7 12h2M15.5 12h.01M17.5 12h.01' },
+  { id: 'pc',     label: 'Equipos', icon: 'M3 5h18v11H3zM8 20h8' },
   { id: 'casa',   label: 'Casa',   icon: 'M4 11 12 4l8 7v9H4z' },
-  { id: 'pc',     label: 'PC',     icon: 'M3 5h18v11H3zM8 20h8' },
   { id: 'estado', label: 'Estado', icon: 'M4 18a8 8 0 1 1 16 0M12 14l4-4' },
 ]
 
@@ -33,6 +39,8 @@ export function RemoteApp() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [sending, setSending]   = useState(false)
   const [notice, setNotice]     = useState<string | null>(null)
+  // Message whose turn hit the risk gate, waiting for fingerprint + password.
+  const [pendingAuth, setPendingAuth] = useState<string | null>(null)
 
   const online    = useOnline()
   const telemetry = useTelemetry()
@@ -49,17 +57,29 @@ export function RemoteApp() {
   const push = (role: ChatMessage['role'], text: string) =>
     setMessages((prev) => [...prev.slice(-19), { id: ++msgId, role, text }])
 
-  const onSend = useCallback(async (text: string) => {
-    push('user', text)
+  const onSend = useCallback(async (text: string, elevation?: string) => {
+    if (!elevation) push('user', text)
     setSending(true)
     try {
-      push('jarvis', await sendTurn(text))
+      const turn = await sendTurn(text, elevation)
+      push('jarvis', turn.reply)
+      // The risk gate refused a tool: offer step-up auth and resend the SAME
+      // message with a one-shot ticket. An elevated turn never re-prompts.
+      if (turn.authRequired && !elevation) setPendingAuth(text)
     } catch {
       push('jarvis', 'Sin respuesta del servidor.')
     } finally {
       setSending(false)
     }
   }, [])
+
+  const onTicket = (ticket: string) => {
+    const text = pendingAuth
+    setPendingAuth(null)
+    if (!text) return
+    push('user', `[autorizado] ${text}`)
+    onSend(text, ticket)
+  }
 
   const statusColor = online === null ? T.faint : online ? T.ok : T.bad
   const statusText  = online === null ? 'conectando' : online ? 'en línea' : 'sin conexión'
@@ -89,9 +109,12 @@ export function RemoteApp() {
         </div>
       )}
 
+      {pendingAuth && <AuthSheet message={pendingAuth} onTicket={onTicket} onCancel={() => setPendingAuth(null)} />}
+
       <main style={S.content}>
         <div style={S.column}>
-          {tab === 'chat'   && <ChatTab messages={messages} sending={sending} onSend={onSend} onNotice={setNotice} />}
+          {tab === 'chat'   && <ChatTab messages={messages} sending={sending} onSend={(t) => onSend(t)} onNotice={setNotice} />}
+          {tab === 'mando'  && <MandoTab onNotice={setNotice} />}
           {tab === 'casa'   && <HomeTab onNotice={setNotice} />}
           {tab === 'pc'     && <PcTab onNotice={setNotice} />}
           {tab === 'estado' && <StatusTab online={online} telemetry={telemetry} geo={geo} />}

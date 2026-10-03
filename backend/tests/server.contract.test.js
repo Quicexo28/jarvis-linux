@@ -2,6 +2,9 @@ import { test, expect, beforeAll, afterAll } from 'vitest'
 import { spawn } from 'child_process'
 import { execPath, cwd, env } from 'node:process'
 import { setTimeout as delay } from 'timers/promises'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const BASE = 'http://127.0.0.1:8788'
 let proc
@@ -11,7 +14,15 @@ beforeAll(async () => {
     cwd: cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
     // Don't spawn the real Claude CLI in contract tests — assert structure only.
-    env: { ...env, JARVIS_FAKE_CLAUDE: '1' },
+    // Own throwaway DB and no watchdog: when the production backend already holds
+    // 8788 this child dies with EADDRINUSE, and with the default DB path that
+    // crash (and its probes) landed in the REAL incident log.
+    env: {
+      ...env,
+      JARVIS_FAKE_CLAUDE: '1',
+      JARVIS_SELFHEAL: '0',
+      JARVIS_DB_PATH: join(mkdtempSync(join(tmpdir(), 'jarvis-contract-')), 'test.db'),
+    },
   })
   for (let i = 0; i < 40; i++) {
     try {

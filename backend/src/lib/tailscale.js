@@ -40,11 +40,24 @@ export function getTailscaleServeUrl(port = process.env.PORT ?? '8788') {
   return new Promise((resolve) => {
     execFile('tailscale', ['serve', 'status'], { timeout: 2000 }, (err, stdout) => {
       if (err || !stdout) return resolve(null)
-      const m = stdout.match(/https:\/\/[^\s/]+/)
-      if (m && stdout.includes(`:${port}`)) return resolve(m[0])
-      resolve(null)
+      resolve(parseServeUrl(stdout, port))
     })
   })
+}
+
+/**
+ * Pick the serve URL whose OWN block proxies to our port. `serve status`
+ * lists one block per published URL; with several (e.g. Vaultwarden on :443
+ * and Jarvis on :8443) the first URL in the output is not necessarily ours.
+ */
+export function parseServeUrl(stdout, port) {
+  let current = null
+  for (const line of stdout.split('\n')) {
+    const head = line.match(/^(https:\/\/[^\s/]+)/)
+    if (head) { current = head[1]; continue }
+    if (current && new RegExp(`proxy\\s+https?://[^\\s/]+:${port}\\b`).test(line)) return current
+  }
+  return null
 }
 
 export function getLanIp() {

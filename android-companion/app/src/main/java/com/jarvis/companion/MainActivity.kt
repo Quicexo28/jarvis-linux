@@ -284,6 +284,23 @@ class MainActivity : Activity() {
             main.post { Moonlight.launch(this@MainActivity) }
             return if (installed) "launched" else "store"
         }
+
+        /** Base64 SPKI of this device's Keystore key for risky actions; "" if unsupported. */
+        @JavascriptInterface
+        fun elevationKey(): String = Elevation.publicKey() ?: ""
+
+        /**
+         * Fingerprint/PIN prompt, then sign the backend's challenge with the
+         * Keystore key. Result arrives on window.__jarvisSigned(sig, error).
+         */
+        @JavascriptInterface
+        fun signChallenge(challengeB64: String) {
+            main.post {
+                Elevation.sign(this@MainActivity, challengeB64) { sig, err ->
+                    evalJs("window.__jarvisSigned && window.__jarvisSigned(${if (sig == null) "null" else JSONObject.quote(sig)}, ${if (err == null) "null" else JSONObject.quote(err)})")
+                }
+            }
+        }
     }
 
     /* ----- native dictation ----- */

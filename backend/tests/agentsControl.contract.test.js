@@ -14,7 +14,13 @@ const BASE = 'http://127.0.0.1:8788'
 let proc
 
 beforeAll(async () => {
-  proc = spawn(execPath, ['src/server.js'], { cwd: cwd(), stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(execPath, ['src/server.js'], {
+    cwd: cwd(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    // No watchdog in this child: when production already holds 8788 it dies with
+    // EADDRINUSE, and that crash must not land in the real incident log.
+    env: { ...process.env, JARVIS_SELFHEAL: '0' },
+  })
   for (let i = 0; i < 40; i++) {
     try {
       const r = await fetch(`${BASE}/health`)

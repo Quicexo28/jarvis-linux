@@ -94,15 +94,22 @@ export const ROT_INCREMENT_DEADZONE = 0.006
 /** Piso del intervalo entre inferencias. `detectForVideo` es SÍNCRONA aunque el
  * delegate sea GPU (bloquea hasta el readback): a 30 ms de piso con inferencias
  * de ~30 ms el main thread quedaba ~70% ocupado y TODO lo demás (rAF de R3F,
- * React) se sentía pesado. 50 ms (20 fps) baja la ocupación a ~50% sin latencia
- * perceptible, porque el consumer interpola entre muestras a 60 fps. El pacing
- * adaptativo sigue degradando bajo carga (inferMs·factor). */
-export const FRAME_MIN_INTERVAL_MS = 50
+ * React) se sentía pesado. Con el delegate GPU la inferencia bajó a 10-16 ms
+ * (medido 2026-09-24), así que 40 ms (25 fps) deja la ocupación en ~35%.
+ * Los fps importan para el TRACKING, no solo para la fluidez: en modo VIDEO el
+ * recorte de cada frame sale de los landmarks del anterior, y a 20 fps un
+ * movimiento rápido sacaba la mano de ese recorte → mano perdida → vuelta al
+ * detector de palma (las «pérdidas»). El pacing adaptativo sigue degradando
+ * bajo carga (inferMs·factor). */
+export const FRAME_MIN_INTERVAL_MS = 40
 /** Ancho al que se reescala el frame ANTES de la inferencia (0 = sin reescalar).
- * MediaPipe normaliza internamente a 192x192, así que el resto del ancho solo
- * paga subida de textura; 320 px conserva la precisión de landmarks y recorta
- * ese costo. Los landmarks salen normalizados (0..1) → nada aguas abajo cambia. */
-export const INFER_MAX_WIDTH = 320
+ * OJO: solo el detector de PALMA trabaja a 192x192; el modelo de LANDMARKS
+ * recorta la mano del frame de ENTRADA y la lleva a 224x224. A 320 px una mano
+ * a distancia de escritorio medía ~50-60 px y se AMPLIABA ×4 → landmarks
+ * borrosos, temblor y presencia baja (la mala detección). Con el delegate GPU
+ * la subida de textura de 640x360 es despreciable, así que va sin reescalar.
+ * Los landmarks salen normalizados (0..1) → nada aguas abajo cambia. */
+export const INFER_MAX_WIDTH = 0
 /** El intervalo se adapta a inferMs · factor — bajo carga degrada fps en vez de saturar. */
 export const PACE_FACTOR = 1.35
 export const FRAME_MAX_INTERVAL_MS = 200
@@ -112,9 +119,10 @@ export const FRAME_MAX_INTERVAL_MS = 200
  * ECAPA (speaker-id) del STT — se medía como latencia de voz, no como gestos
  * lentos. Tras IDLE_AFTER_MS sin mano se pasa a IDLE_FRAME_INTERVAL_MS; la
  * primera mano detectada vuelve al pacing normal, así que el único costo es
- * ≤IDLE_FRAME_INTERVAL_MS de latencia al levantar la mano. */
+ * ≤IDLE_FRAME_INTERVAL_MS de latencia al levantar la mano (a 400 ms la mano
+ * «tardaba» en aparecer; 200 ms × ~12 ms GPU = ~6% de un núcleo en reposo). */
 export const IDLE_AFTER_MS = 4000
-export const IDLE_FRAME_INTERVAL_MS = 400
+export const IDLE_FRAME_INTERVAL_MS = 200
 /** detectForVideo lanzando en runtime → recrear el landmarker sin tocar la cámara. */
 export const LANDMARKER_MAX_RESTARTS = 3
 

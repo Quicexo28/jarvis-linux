@@ -7,6 +7,9 @@ import { getAgentStatus } from '../agent/bridge.js'
 import { runClaude, sessionAsk } from '../lib/claudeCli.js'
 import { addUserMessage, addAssistantMessage, getConversationContext } from '../lib/conversationMemory.js'
 import { markInteraction } from '../lib/attentionState.js'
+import { splitForTts } from '../lib/ttsChunks.js'
+import { consumeTicket, elevationStatus, enrollDevice, issueChallenge, elevate } from '../lib/riskAuth.js'
+import { riskDeniedSince } from '../lib/toolRisk.js'
 
 const FILLER_DIR = join(import.meta.dirname, '..', '..', 'voice', 'cache', 'fillers')
 const FILLER_NAME_RE = /^filler-[a-z0-9-]{1,32}$/
@@ -158,8 +161,15 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
     // and sitting in RAM, so XTTS connection + first-token latency is hidden
     // behind N's playback instead of opening a fresh WS at each boundary (the
     // old serial model starved the pipe → audible gap between sentences).
-    const PREFETCH = 2
-    const jobs = []         // ordered: { text,lang,fx,speed, chunks:[], done, started, settled }
+    const PREFETCH = 3
+    // Two budgets: edge-tts time-to-first-audio on a cold connection reaches
+    // ~4-5 s (measured), so the first wait is generous; once audio flows, a
+    // gap that long means the stream really stalled.
+    const FIRST_AUDIO_MS = Number(process.env.JARVIS_TTS_FIRST_AUDIO_MS) || 10000
+    const STALL_MS = Number(process.env.JARVIS_TTS_STALL_MS) || 5000
+    const MAX_ATTEMPTS = 2
+    const SILENCE_ONLY_BYTES = 16000 // > pre-roll (80 ms f32 @24k = 7680 B)
+    const jobs = []         // ordered: { text,lang,fx,speed, chunks:[], done, started, attempts, audioBytes }
     let writeIdx = 0        // index of the job currently draining into the pipe
     let synthActive = 0     // open upstream connections
 
@@ -241,42 +251,90 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
     }
 
     // Open upstreams for not-yet-started jobs, up to PREFETCH concurrent.
+    //
+    // edge-tts hits the MS cloud and a single sentence sometimes stalls (no
+    // audio, or audio that stops mid-way). That failure must stay LOCAL to the
+    // sentence: forwarding the upstream {type:"error"} made the client reject
+    // and close the session, and closing kills the player — every sentence
+    // still buffered behind the stalled one was lost ("se corta", reply cut
+    // short). Now a per-attempt watchdog abandons a silent upstream after
+    // STALL_MS; a sentence that produced no real audio is retried once, one
+    // that stalled mid-way is dropped and the pump moves on to the next.
+    const attemptSynth = (job) => {
+      job.attempts++
+      synthActive++
+      const attempt = job.attempts
+      const upstream = new WsClient(upstreamUrl)
+      let finished = false
+      let watchdog = null
+      const armWatchdog = () => {
+        clearTimeout(watchdog)
+        const budget = job.audioBytes < SILENCE_ONLY_BYTES ? FIRST_AUDIO_MS : STALL_MS
+        watchdog = setTimeout(() => fail('stall'), budget)
+      }
+      const cleanup = () => {
+        finished = true
+        clearTimeout(watchdog)
+        synthActive--
+        try { upstream.terminate() } catch {}
+      }
+      const succeed = () => {
+        if (finished) return
+        cleanup()
+        job.done = true
+        if (aborted) return
+        pump()
+        schedule()
+      }
+      const fail = (why) => {
+        if (finished) return
+        cleanup()
+        if (aborted) return
+        // Python always sends ~80 ms of pre-roll silence first, so "no audio"
+        // means nothing beyond that — safe to retry without a duplicate.
+        const retry = job.audioBytes < SILENCE_ONLY_BYTES && attempt < MAX_ATTEMPTS
+        console.warn(`[tts] sentence ${why} (attempt ${attempt}, ${job.audioBytes}B) → ${retry ? 'retry' : 'skip'}: "${job.text.slice(0, 40)}"`)
+        if (!retry) job.done = true
+        pump()
+        if (retry) attemptSynth(job)
+        else schedule()
+      }
+      armWatchdog()
+      upstream.on('open', () => {
+        try {
+          upstream.send(JSON.stringify({
+            text: job.text, lang: job.lang, fx: job.fx,
+            ...(job.speed !== undefined ? { speed: job.speed } : {}),
+          }))
+        } catch {}
+      })
+      upstream.on('message', (data, isBinary) => {
+        if (aborted || finished) return
+        if (isBinary) {
+          job.audioBytes += data.length
+          job.chunks.push(data)
+          armWatchdog()
+          pump()
+          return
+        }
+        let msg
+        try { msg = JSON.parse(data.toString()) } catch { return }
+        if (msg.type === 'start') ensureStart()
+        else if (msg.type === 'end') succeed()
+        else if (msg.type === 'error') fail(msg.error || 'error')
+      })
+      // Closed without {type:"end"} = the synthesis did not complete.
+      upstream.on('close', () => fail('closed'))
+      upstream.on('error', () => fail('ws_error'))
+    }
+
     const schedule = () => {
       if (aborted) return
       for (const job of jobs) {
         if (synthActive >= PREFETCH) break
         if (job.started) continue
         job.started = true
-        synthActive++
-        const upstream = new WsClient(upstreamUrl)
-        const settle = () => {
-          if (job.settled) return
-          job.settled = true
-          job.done = true
-          synthActive--
-          if (aborted) return
-          pump()
-          schedule()
-        }
-        upstream.on('open', () => {
-          try {
-            upstream.send(JSON.stringify({
-              text: job.text, lang: job.lang, fx: job.fx,
-              ...(job.speed !== undefined ? { speed: job.speed } : {}),
-            }))
-          } catch {}
-        })
-        upstream.on('message', (data, isBinary) => {
-          if (aborted) return
-          if (isBinary) { job.chunks.push(data); pump() }
-          else {
-            const msg = JSON.parse(data.toString())
-            if (msg.type === 'start') ensureStart()
-            if (msg.type === 'error') sendJson(msg)
-          }
-        })
-        upstream.on('close', settle)
-        upstream.on('error', settle)
+        attemptSynth(job)
       }
     }
 
@@ -296,7 +354,9 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
         return
       }
       if (msg.text) {
-        jobs.push({ text: msg.text, lang: msg.lang ?? 'es', fx: msg.fx ?? false, speed: msg.speed, chunks: [], done: false, started: false, settled: false })
+        for (const text of splitForTts(msg.text)) {
+          jobs.push({ text, lang: msg.lang ?? 'es', fx: msg.fx ?? false, speed: msg.speed, chunks: [], done: false, started: false, attempts: 0, audioBytes: 0 })
+        }
         schedule()
       }
     })
@@ -358,6 +418,18 @@ export async function handleJarvisTurn(req, res) {
       userPrompt += `\n[Dispositivo en foco: ${focused.label}${focused.skillName ? `, skill: ${focused.skillName}` : ''}${inferredAction ? `, accion sugerida: ${inferredAction}` : ''}]`
     }
 
+    // Step-up: a ticket minted by /api/jarvis/elevate (tablet Keystore signature
+    // after fingerprint/PIN + the special password) authorises THIS turn only.
+    // An invalid or spent ticket is refused outright rather than silently
+    // running the turn unauthorised — the user believes they authorised it.
+    let elevated = false
+    if (body.elevation) {
+      elevated = consumeTicket(String(body.elevation))
+      if (!elevated) {
+        return json(res, 401, { ok: false, error: 'elevation_invalid', reply: 'La autorización caducó o ya se usó. Vuelve a autorizar.' })
+      }
+    }
+
     addUserMessage(message)
     const conversationContext = getConversationContext()
 
@@ -366,15 +438,23 @@ export async function handleJarvisTurn(req, res) {
     // so typed orders like "cambia el color de mi setup" got a friendly reply
     // and nothing happened. The session is already warm from boot.
     const { SPEECH_SYSTEM_PROMPT } = await import('./speech.js')
+    const turnStart = Date.now()
     const reply = await sessionAsk(userPrompt, {
       systemPromptText: SPEECH_SYSTEM_PROMPT,
       timeoutMs: 60000,
-      extraContext: conversationContext ? `Contexto reciente:\n${conversationContext}` : null,
+      extraContext: [
+        elevated ? '[Turno AUTORIZADO por el señor desde su tablet con huella y contraseña: puedes ejecutar acciones de riesgo pedidas en este mensaje.]' : null,
+        conversationContext ? `Contexto reciente:\n${conversationContext}` : null,
+      ].filter(Boolean).join('\n') || null,
       model: 'haiku',
       fallbackReply: 'No tengo respuesta en este momento.',
+      tag: elevated ? 'elevated' : null,
     })
 
     addAssistantMessage(reply)
+    // The risk gate refused a tool in this turn → tell the app, so it can offer
+    // fingerprint + password and resend instead of leaving a polite refusal.
+    const denial = elevated ? null : riskDeniedSince(turnStart)
 
     const actions = focused && inferredAction
       ? [{ type: 'device_action', targetId: focused.id, skillName: focused.skillName ?? null, action: inferredAction, status: 'proposed' }]
@@ -384,6 +464,8 @@ export async function handleJarvisTurn(req, res) {
       ok: true,
       reply,
       actions,
+      authRequired: denial ? { risk: denial.risk, reason: denial.reason } : null,
+      elevated,
       uiHints: {
         highlightEntityId: focused?.id ?? null,
         toast: focused ? `Foco: ${focused.label}` : null,
@@ -396,4 +478,48 @@ export async function handleJarvisTurn(req, res) {
   } catch (error) {
     return json(res, 400, { ok: false, error: 'invalid_json', detail: String(error) })
   }
+}
+
+// --- Step-up authorization for risky chat turns (lib/riskAuth.js) ------------
+// Token-authenticated like the chat itself (the tablet must reach them). They
+// are not DANGEROUS_PATHS: each one proves its own factor — enroll and elevate
+// need the special password, elevate also a fresh Keystore signature — and
+// riskAuth locks everything after repeated failures.
+
+const ELEVATE_ERRORS = {
+  no_password_set: 'Falta fijar la contraseña especial en el PC.',
+  locked: 'Demasiados intentos fallidos. Espera unos minutos.',
+  bad_public_key: 'Clave del dispositivo no válida.',
+  wrong_password: 'Contraseña incorrecta.',
+  bad_challenge: 'El reto caducó. Inténtalo otra vez.',
+  not_enrolled: 'Este dispositivo no está inscrito.',
+  bad_signature: 'La firma de la huella o el PIN no es válida.',
+}
+
+function elevateReply(res, result) {
+  if (result.ok) return json(res, 200, result)
+  const code = result.error === 'locked' ? 429 : result.error === 'no_password_set' ? 409 : 401
+  return json(res, code, { ...result, message: ELEVATE_ERRORS[result.error] ?? result.error })
+}
+
+export async function handleElevateStatus(req, res) {
+  const body = await readBody(req).catch(() => ({}))
+  return json(res, 200, elevationStatus(body?.publicKey))
+}
+
+export async function handleElevateEnroll(req, res) {
+  const body = await readBody(req).catch(() => ({}))
+  return elevateReply(res, enrollDevice({ publicKey: body?.publicKey, password: body?.password, label: body?.label }))
+}
+
+export async function handleElevateChallenge(req, res) {
+  return json(res, 200, issueChallenge())
+}
+
+export async function handleElevate(req, res) {
+  const body = await readBody(req).catch(() => ({}))
+  return elevateReply(res, elevate({
+    publicKey: body?.publicKey, challenge: body?.challenge,
+    signature: body?.signature, password: body?.password,
+  }))
 }

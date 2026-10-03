@@ -222,3 +222,59 @@ export async function createHandLandmarker(
     return raceAttempts({ vision, baseOpts, plan: [{ delegate: 'CPU', afterMs: 0 }], onProgress })
   }
 }
+
+// ── Caché de proceso ─────────────────────────────────────────────────────────
+// Construir el grafo cuesta 12-79 s en este equipo (journald, sep-2026), y el
+// pipeline lo pagaba ENTERO en cada activación: al apagar los gestos — o al
+// dormir la UI, que desmonta AwakeApp — hacía `close()` y el siguiente encendido
+// volvía a compilar el wasm y el grafo desde cero. Un HandLandmarker ocioso no
+// gasta nada (solo corre dentro de detectForVideo), así que se construye UNA vez
+// por proceso y sobrevive a los apagados. Solo se tira cuando muere en runtime
+// (`rebuildHandLandmarker`), que es el único caso en que ya no sirve.
+let shared: Promise<LandmarkerHandle> | null = null
+/** Progreso del init en vuelo: lo recibe quien esté esperando AHORA (o nadie). */
+let progressSink: ((msg: string) => void) | null = null
+
+function track(p: Promise<LandmarkerHandle>): Promise<LandmarkerHandle> {
+  shared = p
+  // Un init fallido no se queda cacheado: el siguiente encendido reintenta.
+  p.catch(() => { if (shared === p) shared = null })
+  return p
+}
+
+/**
+ * Landmarker compartido. Si ya existe (o se está construyendo por el
+ * precalentado) se reutiliza — NO cerrarlo al terminar: es de la caché.
+ */
+export function acquireHandLandmarker(onProgress?: (msg: string) => void): Promise<LandmarkerHandle> {
+  progressSink = onProgress ?? null
+  return shared ?? track(createHandLandmarker(2, false, (m) => progressSink?.(m)))
+}
+
+/** Deja de reenviar progreso (el pipeline se apagó mientras esperaba). */
+export function detachLandmarkerProgress(): void {
+  progressSink = null
+}
+
+/**
+ * El landmarker murió en runtime: cerrar el cacheado y construir otro. forceCpu
+ * porque si el runtime GPU se cayó no se vuelve a apostar por él.
+ */
+export function rebuildHandLandmarker(onProgress?: (msg: string) => void): Promise<LandmarkerHandle> {
+  const old = shared
+  shared = null
+  old?.then((h) => { try { h.landmarker.close() } catch { /* ya muerto */ } }, () => {})
+  progressSink = onProgress ?? null
+  return track(createHandLandmarker(2, true, (m) => progressSink?.(m)))
+}
+
+/**
+ * Construye el landmarker en segundo plano para que el primer «activar gestos»
+ * no espere. Idempotente. Se llama en el arranque de la UI, en DORMANT: sin el
+ * carrusel 3D compitiendo por el main thread el grafo se arma antes.
+ */
+export function prewarmHandLandmarker(): void {
+  if (shared) return
+  console.log('[gestures] precalentando landmarker…')
+  acquireHandLandmarker().catch((e) => console.warn('[gestures] precalentado falló (se reintenta al activar):', e))
+}

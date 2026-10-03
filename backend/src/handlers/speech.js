@@ -16,6 +16,7 @@ import { addUserMessage, addAssistantMessage, getConversationContext } from '../
 import { sessionAskStream, sessionAsk, warmSession, getCodeDir } from '../lib/claudeCli.js'
 import { recordTurn, setTurnVerdict, turnStats, allFacts, searchFacts, deleteFact } from '../lib/turnStore.js'
 import { recallContext, learnFromTurn } from '../lib/memory.js'
+import { invalidateVectors } from '../lib/semanticMemory.js'
 import { verifyTurn } from '../lib/verifier.js'
 import {
   runOnce as runProactiveOnce,
@@ -25,6 +26,7 @@ import {
 import { appendHistoryEntry, isConfigured as vaultConfigured } from '../lib/obsidian.js'
 import { handleSelfBuild } from './selfBuild.js'
 import { startDevJob } from '../lib/devAgent.js'
+import { noteTurn } from '../lib/selfHeal.js'
 import { activateSkill } from '../lib/skillRegistry.js'
 import { findSkillByText, invokeRoute } from '../lib/skillManifest.js'
 import { routes } from '../routes.js'
@@ -54,6 +56,11 @@ SIMBOLOS (CRITICO): Tu respuesta se lee en voz alta tal cual. NUNCA vocalices si
 INTERPRETACION FONETICA (IMPORTANTE): El texto que recibes viene de reconocimiento de voz y puede traer errores: palabras mal transcritas, nombres deformados o frases que el transcriptor "corrigio" a algo sin sentido. NO exijas coincidencia literal. Interpreta siempre la intencion mas probable segun como SUENA lo escrito — la orden o pregunta foneticamente mas cercana que tenga sentido en el contexto. Ej: "abre el plano dos de" probablemente es "abre el plano 2D", "pon un tem por izador" es "pon un temporizador". TU PROPIO NOMBRE se transcribe mal a menudo: "javier", "ya ves", "ya lo veis", "jarbis", "garbis", "garvis", "harvis" casi siempre son "Jarvis" — interpretalo como que te llaman a ti. Si lo que oiste es ambiguo entre dos cosas razonables, ejecuta la mas probable o pregunta breve; nunca respondas literalmente a un transcript sin sentido como si fuera la intencion real.
 
 NUMEROS: Notacion natural española. Decimales con "coma" ("uno coma cuatro"). Sin coma de miles. Nunca repitas la pregunta del señor.`
+
+// Agenda y correo: solo lectura (ICS + IMAP, ver lib/calendar.js y lib/mail.js).
+const AGENDA_PROMPT_SECTION = `
+
+AGENDA Y CORREO: Para "que tengo hoy", "mañana" o "esta semana" usa calendar_agenda (y day_brief si tambien pregunta por tareas o habitos). Di la hora y el titulo de forma natural, el primero y cuantos mas hay; no leas la lista entera si son muchos. Para el correo usa mail_inbox (por defecto los no leidos) y mail_read con el uid para leer uno: resume remitente (por su nombre) y de que trata, nunca leas direcciones de correo ni enlaces. Si una de estas herramientas responde que no esta configurada, dile al señor en una frase que falta configurarla. No puedes enviar correos ni crear eventos: si te lo pide, dilo y ofrece un recordatorio.`
 
 // Appended only when an Obsidian vault is configured. Gives the voice session
 // direct file access to the vault via the filesystem MCP server (read_text_file,
@@ -96,7 +103,14 @@ CODIGO PROPIO (AUTODESARROLLO): Puedes modificar tu propio codigo fuente. La reg
 - Si un cambio salio mal o el señor pide deshacerlo, confirma en voz una vez y llama code_rollback.
 - Para mirar el estado del repositorio o correr algo puntual (tests, git status) usa code_run. Para leer tu codigo y responder una pregunta sobre el sin cambiar nada, usa tus herramientas de archivos (list_allowed_directories, search_files, read_text_file) y responde: no lances code_task para una simple consulta.
 - Backend en backend/src (Node ESM), frontend en frontend/src (React y TypeScript), servicios de voz en backend/voice/python, herramientas MCP en backend/mcp-server/jarvis-mcp.js.
-- Nunca leas rutas ni codigo en voz alta; resume en lenguaje natural.`
+- Nunca leas rutas ni codigo en voz alta; resume en lenguaje natural.
+
+CAPACIDAD QUE TE FALTA (APRENDER PARA CUMPLIR): Si el señor te asigna una tarea concreta y NINGUNA de tus herramientas puede hacerla, no te quedes en "no puedo": llama code_task con instruction = la capacidad que hay que añadir, descrita como herramienta (que debe hacer, con que parametros, en que equipo), y followUp = la peticion ORIGINAL del señor, literal. El sistema construye la capacidad y, al terminar, reintenta la peticion solo. Dile en una frase que vas a aprender a hacerlo y que lo haras en cuanto quede listo.
+- Antes comprueba de verdad que no puedes con lo que ya tienes (run_terminal, archivos, herramientas remotas, launch_app, computer_task). Aprender es para lo que de verdad falta, no para ahorrarte una llamada.
+- Si la tarea es destructiva o irreversible (borrar datos, apagar, pagar, enviar mensajes o correos a terceros), pregunta primero en vez de lanzarlo.
+- Si falta una credencial o un dato que solo el señor tiene, no lances nada: dile que falta.
+
+AUTODIAGNOSTICO: Tienes un vigilante que detecta tus propios fallos (servicios caidos, el cerebro sin responder, errores repetidos), los reporta con un codigo como JRV-SVC-001 y aplica remedios seguros (reiniciar un servicio caido). Si el señor pregunta si algo falla, como estas o que errores hay, llama self_diagnose y resume en voz: que falla, el codigo (dilo con espacios) y que se hizo. Si el señor pide arreglar un incidente en el codigo, self_heal con su id y action fix; si pide ignorarlo, action dismiss.`
 
 // Appended when broad storage access is on (JARVIS_ALL_DRIVES=1 or
 // JARVIS_EXTRA_DIRS set). Grants whole-disk file access — with explicit safety
@@ -123,7 +137,7 @@ HERRAMIENTAS MENCIONADAS (OBLIGATORIO, SIN EXCEPCIÓN): cada vez que menciones e
 // Always available: 3D model viewer for geometric figures and N-D polytopes.
 const MODEL3D_PROMPT_SECTION = `
 
-VISOR 3D: usa show_3d; admite VARIAS figuras a la vez en objects:[...], cada una con kind, color hex, opacity (usa translucidez cuando una figura contiene o solapa a otra), position/rotation/scale en coordenadas matemáticas (z arriba). add_3d añade figuras sin borrar la escena; hide_3d cierra. scene:{axes:true,grid:true} pinta ejes etiquetados y rejilla — REGLA: NO los actives para figuras sueltas sin referencias posicionales exactas (el visor ya los enciende solo para gráficas, vectores, planos y rectas); actívalos únicamente cuando las coordenadas importan (posiciones/distancias explícitas, "a 3 unidades en x") o cuando el señor lo pida. KINDS: primitive (sólidos exactos shape=sphere|box|cylinder|cone|torus con radius/size/height — ideal para tangencias y figuras inscritas), parametric (x/y/z de u,v en mathjs con uRange/vRange), polytope (type=hypercube|cross, dimension=N; en 4D+ rota solo, colorea por la 4ª coordenada y muestra caras translúcidas; speed regula la animación), implicit (f(x,y,z), isoValue, bounds, brillouinZone fcc|bcc|sc — Fermi de cobre: f="-(cos(x)*cos(y)+cos(y)*cos(z)+cos(z)*cos(x))", isoValue=-0.5, bounds=[-3.1416,3.1416], brillouinZone="fcc"), graph (f de x → curva y=f(x); si f usa x e y → superficie z=f(x,y); xRange/yRange), curve (x,y,z de t con tRange), vectors (vectors=[[...]], labels, showSpan dibuja el span; dimensión >3 se proyecta), plane (normal+point o directores u,v), line (point+direction). EJEMPLOS: esferas concéntricas = objects:[{kind:"primitive",shape:"sphere",radius:1,opacity:0.55},{kind:"primitive",shape:"sphere",radius:1.6,opacity:0.3}]; cubo inscrito en cilindro (esquinas tocando: radio=(lado/2)*raíz de 2) = objects:[{kind:"primitive",shape:"cylinder",radius:1.4142,height:2,opacity:0.3},{kind:"primitive",shape:"box",size:[2,2,2],opacity:0.7}]; esferas tangentes: distancia entre centros = suma de radios (position); toro = parametric x="cos(u)*(2+cos(v))", y="sin(u)*(2+cos(v))", z="sin(v)", uRange=[0,6.28], vRange=[0,6.28]; teseracto = {kind:"polytope",type:"hypercube",dimension:4}. En voz, di brevemente qué vas a mostrar y llama show_3d. Nunca recites fórmulas ni números de coordenadas en voz. Si el señor pide cerrar, llama hide_3d.`
+VISOR 3D: si el señor pide ver, mostrar o graficar algo, llama show_3d SIEMPRE, aunque ya lo hayas mostrado antes en la conversacion: el visor pudo cerrarse y pedirlo otra vez es querer verlo otra vez. No respondas "ya se lo mostre" ni preguntes si quiere otra cosa. Usa show_3d; admite VARIAS figuras a la vez en objects:[...], cada una con kind, color hex, opacity (usa translucidez cuando una figura contiene o solapa a otra), position/rotation/scale en coordenadas matemáticas (z arriba). add_3d añade figuras sin borrar la escena; hide_3d cierra. scene:{axes:true,grid:true} pinta ejes etiquetados y rejilla — REGLA: NO los actives para figuras sueltas sin referencias posicionales exactas (el visor ya los enciende solo para gráficas, vectores, planos y rectas); actívalos únicamente cuando las coordenadas importan (posiciones/distancias explícitas, "a 3 unidades en x") o cuando el señor lo pida. KINDS: primitive (sólidos exactos shape=sphere|box|cylinder|cone|torus con radius/size/height — ideal para tangencias y figuras inscritas), parametric (x/y/z de u,v en mathjs con uRange/vRange), polytope (type=hypercube|cross, dimension=N; en 4D+ rota solo, colorea por la 4ª coordenada y muestra caras translúcidas; speed regula la animación), implicit (f(x,y,z), isoValue, bounds, brillouinZone fcc|bcc|sc — Fermi de cobre: f="-(cos(x)*cos(y)+cos(y)*cos(z)+cos(z)*cos(x))", isoValue=-0.5, bounds=[-3.1416,3.1416], brillouinZone="fcc"), graph (f de x → curva y=f(x); si f usa x e y → superficie z=f(x,y); xRange/yRange), curve (x,y,z de t con tRange), vectors (vectors=[[...]], labels, showSpan dibuja el span; dimensión >3 se proyecta), plane (normal+point o directores u,v), line (point+direction). EJEMPLOS: esferas concéntricas = objects:[{kind:"primitive",shape:"sphere",radius:1,opacity:0.55},{kind:"primitive",shape:"sphere",radius:1.6,opacity:0.3}]; cubo inscrito en cilindro (esquinas tocando: radio=(lado/2)*raíz de 2) = objects:[{kind:"primitive",shape:"cylinder",radius:1.4142,height:2,opacity:0.3},{kind:"primitive",shape:"box",size:[2,2,2],opacity:0.7}]; esferas tangentes: distancia entre centros = suma de radios (position); toro = parametric x="cos(u)*(2+cos(v))", y="sin(u)*(2+cos(v))", z="sin(v)", uRange=[0,6.28], vRange=[0,6.28]; teseracto = {kind:"polytope",type:"hypercube",dimension:4}. En voz, di brevemente qué vas a mostrar y llama show_3d. Nunca recites fórmulas ni números de coordenadas en voz. Si el señor pide cerrar, llama hide_3d.`
 
 // Auto mode: terminal + lanzador de apps. El brain ya corre con permisos
 // elevados; esta sección le DICE que tiene autoridad total de sistema y cómo
@@ -173,6 +187,27 @@ PRODUCTIVIDAD DEL DIA:
 - "Ya hice X", "marca X como hecha": obsidian_task_done. Si X es un hábito (entrenar, leer, meditar, dormir temprano), usa habit log con un nombre estable; si es ambas cosas, las dos.
 - "Qué hice hoy" o revisión de la noche: day_brief, di lo logrado y lo pendiente, y pregunta si pasa lo pendiente a mañana.`
 
+// Agent Hub: agentes Claude Code sobre OTROS proyectos (el propio código va por
+// code_task). Avisar al terminar es opt-in: solo si el señor lo pide.
+const CLAUDE_AGENTS_PROMPT_SECTION = `
+
+AGENTES CLAUDE: El señor trabaja con varios agentes de programacion Claude a la vez; algunos los abre el en su terminal y otros los lanzas tu. Todos se ven en Agent Hub.
+- "Como van mis agentes", "que esta haciendo Claude", "cuanto uso me queda": claude_agents y resume en una o dos frases: cuantos trabajan, cuales terminaron o estan bloqueados y por que, y el uso si lo pidio. No leas identificadores.
+- "Pon a Claude a hacer X en el proyecto Y": claude_agent_launch con la instruccion completa y literal. Es asincrono: confirma que quedo lanzado y no esperes. Para cambios en TU propio codigo usa code_task, nunca esto.
+- Solo avisas del final de un agente si el señor lo pide ("avisame cuando termine"): claude_agent_watch, o notify=true al lanzarlo. Sin esa peticion no avises; el hub ya resalta los terminados.
+- "Dile al agente de X que...": claude_agent_send. "Para el agente de X": claude_agent_stop. "Muestrame los agentes" o "abre el agente de X": claude_agents_open.
+- Si una herramienta responde que hay varios agentes que coinciden, pregunta cual en una frase nombrando las opciones.`
+
+// Agente de escritorio (lib/computerAgent.js): tareas de interfaz gráfica de
+// varios pasos que el turno de voz no puede conducir (mirar→clic→mirar decenas
+// de veces). Mismo patrón asíncrono que code_task.
+const COMPUTER_PROMPT_SECTION = `
+
+MANEJAR EL EQUIPO (AGENTE DE ESCRITORIO): Cuando el señor pida algo que una persona haria con el raton y el teclado en este PC y que lleva VARIOS pasos de interfaz — rellenar un formulario, navegar una web hasta un sitio, configurar algo en una aplicacion, ordenar ventanas y operar en ellas — llama computer_task con la tarea COMPLETA y literal. Un agente aparte mira la pantalla, mueve el raton, hace clic y escribe hasta terminar.
+- Para lo que ya tiene herramienta directa (abrir una app, volumen, musica, ventanas, portapapeles, mirar la pantalla) usa esa herramienta, no computer_task.
+- computer_task es ASINCRONA y tarda minutos: confirma con naturalidad que te pones con ello y que avisas al terminar. NUNCA digas que ya esta hecho en el mismo turno.
+- Si pregunta como va, computer_task_status. Si pide que pares, computer_task_cancel.`
+
 const terminalAutoEnabled = process['env']['JARVIS_TERMINAL_AUTO'] !== '0'
 
 export const SPEECH_SYSTEM_PROMPT =
@@ -180,6 +215,9 @@ export const SPEECH_SYSTEM_PROMPT =
   DISPLAY_PROMPT_SECTION +
   MODEL3D_PROMPT_SECTION +
   STUDY_PROMPT_SECTION +
+  CLAUDE_AGENTS_PROMPT_SECTION +
+  COMPUTER_PROMPT_SECTION +
+  AGENDA_PROMPT_SECTION +
   (vaultConfigured() ? VAULT_PROMPT_SECTION : '') +
   (getCodeDir() ? CODE_PROMPT_SECTION : '') +
   (broadStorageEnabled ? STORAGE_PROMPT_SECTION : '') +
@@ -521,6 +559,9 @@ async function runSpeechTurn(body, { onSentence: onSentenceRaw = () => {} } = {}
         error: m?.toolErrors?.length ? m.toolErrors.join(' | ').slice(0, 500)
              : (m?.error ?? (m?.isError ? 'model_error' : null)),
       })
+      // Watchdog: a streak of fallback replies = dead brain; a tool that keeps
+      // failing the same way = a bug. Cheap, synchronous bookkeeping.
+      noteTurn({ reply: result.reply, meta: m })
       // Verification runs AFTER the reply left for TTS, so it costs the spoken
       // turn nothing, and after recordTurn so the verdict has a row to land on.
       if (ctx.meta) {
@@ -784,7 +825,7 @@ async function _runSpeechTurnInner(body, onSentence, ctx = { meta: null }) {
   const sentencer = makeSentencer((s) => { streamedAnything = true; onSentence(s) })
   // Long-term memory: whatever Jarvis already knows that relates to this
   // utterance. Local FTS5 lookup (sub-ms), so it costs tokens, not latency.
-  const memory = recallContext(text)
+  const memory = await recallContext(text)
   if (memory) console.log(`[memory] recalled ${memory.split('\n').filter((l) => l.startsWith('- ')).length} item(s)`)
 
   const reply = await sessionAskStream(text, {
@@ -896,7 +937,9 @@ export async function handleMemoryForget(req, res) {
     const body = await readBody(req)
     const id = Number(body?.id)
     if (!Number.isFinite(id)) return json(res, 400, { ok: false, error: 'missing_id' })
-    return json(res, 200, { ok: deleteFact(id) })
+    const ok = deleteFact(id)
+    invalidateVectors()
+    return json(res, 200, { ok })
   } catch (error) {
     return json(res, 500, { ok: false, error: 'memory_error', detail: String(error) })
   }

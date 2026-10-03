@@ -48,7 +48,7 @@ export function normalizeReply(text) {
 // The reply owns up to a failure. Deliberately broad: any honest phrasing counts,
 // because the point is to catch its OPPOSITE (claiming success over an error).
 const FAILURE_ADMISSION_RE =
-  /\bno\s+(?:pude|puedo|he\s+podido|se\s+pudo|esta\s+disponible|responde|logre)\b|\bfallo\b|\bfalla\b|\berror\b|\bno\s+funcion|\bimposible\b|\bsin\s+conexion\b|\bno\s+esta\s+(?:conectad|disponible|activ)|\bno\s+(?:se\s+)?(?:pudo|ha\s+podido)\b/
+  /\bno\s+(?:pude|puedo|he\s+podido|se\s+pudo|esta\s+disponible|responde|logre)\b|\bfallo\b|\bfalla\b|\berror\b|\bno\s+funcion|\bimposible\b|\bsin\s+conexion\b|\bno\s+esta\s+(?:conectad|disponible|activ|configurad)|\b(?:falta|sin)\s+configurar\b|\bno\s+(?:se\s+)?(?:pudo|ha\s+podido)\b/
 
 // A concrete claim that a state-changing action completed.
 //
@@ -76,7 +76,7 @@ const URL_IN_REPLY_RE = /\bhttps?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|d
 // so ordinary Spanish words don't false-fire.
 const NAMED_TOOL_RE = /\b(obsidian|notion|firefox|brave|chromium|chrome|spotify|telegram|whatsapp|discord|kitty|hyprland|vs\s?code|visual studio code|github|gitlab|figma|canva|photoshop|blender|davinci resolve|excel|powerpoint|google\s+(?:docs|drive|sheets|calendar|maps|keep)|gmail|outlook|slack|zoom|trello|todoist|anki|zotero|wolfram|perplexity|chatgpt|openai|gemini|copilot|tailscale|react|next\.?js|svelte|vue|tailwind|ffmpeg)\b/i
 
-/** MCP tools arrive namespaced (`mcp__jarvis__timer_start`); compare bare names. */
+/** MCP tools arrive namespaced (`mcp__jarvis__timer.start`); compare bare names. */
 export function bareToolName(name) {
   const s = String(name ?? '')
   const i = s.lastIndexOf('__')
@@ -142,25 +142,27 @@ const POSTCONDITIONS = {
       : `open_view pidió "${want}" pero la vista actual es "${got}"`
   },
 
-  async timer_start() {
+  // Timer and chrono are ONE tool each with an `action`; claudeCli records the
+  // call as "timer.start", "chrono.start", "timer.cancel"…
+  async 'timer.start'() {
     const list = await probe('timer_list')
     if (!list) return null
-    return countItems(list) > 0 ? null : 'timer_start no dejó ningún temporizador activo'
+    return countItems(list) > 0 ? null : 'timer start no dejó ningún temporizador activo'
   },
 
-  async chrono_start() {
+  async 'chrono.start'() {
     const list = await probe('chrono_list')
     if (!list) return null
-    return countItems(list) > 0 ? null : 'chrono_start no dejó ningún cronómetro activo'
+    return countItems(list) > 0 ? null : 'chrono start no dejó ningún cronómetro activo'
   },
 
-  async timer_cancel(input) {
+  async 'timer.cancel'(input) {
     // Only the "cancel everything" case has an unambiguous expected end state;
     // cancelling one label says nothing about the others.
     if (!input?.all) return null
     const list = await probe('timer_list')
     if (!list) return null
-    return countItems(list) === 0 ? null : 'timer_cancel(all) dejó temporizadores vivos'
+    return countItems(list) === 0 ? null : 'timer cancel(all) dejó temporizadores vivos'
   },
 
   async show_display(_input, ctx) {

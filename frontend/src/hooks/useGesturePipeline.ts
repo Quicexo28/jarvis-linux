@@ -16,7 +16,7 @@
 import { useEffect } from 'react'
 import type { HandLandmarker } from '@mediapipe/tasks-vision'
 import { GestureEngine } from '../gestures/engine'
-import { createHandLandmarker } from '../gestures/landmarker'
+import { acquireHandLandmarker, rebuildHandLandmarker, detachLandmarkerProgress } from '../gestures/landmarker'
 import {
   openCamera, nextFrame, closeCamera, getGestureVideo, inferenceSource,
   probeBrightness, disableScaling, isScalingDisabled,
@@ -95,7 +95,6 @@ export function useGesturePipeline(): void {
     /** El landmarker murió en runtime: recrearlo sin tocar la cámara. */
     const restartLandmarker = (reason: string) => {
       if (!alive) return
-      landmarker?.close()
       landmarker = null
       restarts++
       if (restarts > LANDMARKER_MAX_RESTARTS) {
@@ -104,10 +103,11 @@ export function useGesturePipeline(): void {
       }
       console.warn(`[gestures] landmarker reiniciado (${reason}), intento ${restarts}/${LANDMARKER_MAX_RESTARTS}`)
       setStatus('starting', 'reiniciando modelo…')
-      // forceCpu: si el runtime murió (p.ej. delegate GPU inestable), no volver a apostar por GPU.
-      createHandLandmarker(2, true, (msg) => { if (alive) setStatus('starting', msg) })
+      // Cierra el cacheado y construye otro en CPU: si el runtime murió (p.ej.
+      // delegate GPU inestable), no volver a apostar por GPU.
+      rebuildHandLandmarker((msg) => { if (alive) setStatus('starting', msg) })
         .then((handle) => {
-          if (!alive) { handle.landmarker.close(); return }
+          if (!alive) return  // queda en la caché para el próximo encendido
           landmarker = handle.landmarker
           delegate = handle.delegate
           setStatus('running', `${delegate} · ${Math.round(1000 / FRAME_MIN_INTERVAL_MS)} fps máx`)
@@ -243,8 +243,10 @@ export function useGesturePipeline(): void {
       // El progreso se publica en el status: construir el grafo tarda ~1 min en
       // esta máquina con la UI despierta, y un minuto de 'starting' mudo es
       // indistinguible de un cuelgue (se diagnosticaba como pipeline muerto).
-      const handle = await createHandLandmarker(2, false, (msg) => { if (alive) setStatus('starting', msg) })
-      if (!alive) { handle.landmarker.close(); return }
+      // Caché de proceso (landmarker.ts): tras el primer init — o el precalentado
+      // del arranque — esto resuelve al instante en vez de reconstruir el grafo.
+      const handle = await acquireHandLandmarker((msg) => { if (alive) setStatus('starting', msg) })
+      if (!alive) return  // NO cerrar: es de la caché
       landmarker = handle.landmarker
       delegate = handle.delegate
 
@@ -262,8 +264,10 @@ export function useGesturePipeline(): void {
     return () => {
       alive = false
       if (timer !== null) clearTimeout(timer)
-      landmarker?.close()
+      // El landmarker NO se cierra: vive en la caché de proceso y el próximo
+      // encendido lo reutiliza (cerrarlo costaba 12-79 s de reconstrucción).
       landmarker = null
+      detachLandmarkerProgress()
       closeCamera()
       // Output limpio al apagar: sin esto, un grab/pinch 'active' rancio seguía
       // rotando escenas 3D con el pipeline apagado.

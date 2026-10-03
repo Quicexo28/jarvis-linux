@@ -27,6 +27,7 @@ import { getCurrentState } from './mobileContext.js'
 import { loadReminders } from './reminders.js'
 import { hasClient, requestClient } from './skillBus.js'
 import { kvGet, kvSet, turnStats, allFacts, addFact } from './turnStore.js'
+import { agenda, calendarConfigured } from './calendar.js'
 
 const ENABLED = () => process['env']['JARVIS_PROACTIVE'] !== '0'
 const INTERVAL_MS = () => Number(process['env']['JARVIS_PROACTIVE_INTERVAL_MS'] || 30 * 60e3)
@@ -119,6 +120,17 @@ export async function gatherSignals() {
     })
     if (soon.length) out.remindersSoon = soon.map((r) => ({ text: r.text, when: r.when_iso ?? r.when }))
     out.remindersPending = pending.length
+  } catch {}
+
+  // Calendar: what starts within the hour. Only the near future — the decider
+  // must not narrate the whole day (the morning briefing does that).
+  try {
+    if (calendarConfigured()) {
+      const a = await agenda({ from: new Date().toISOString(), days: 1 })
+      const soon = a.events.filter((e) => !e.allDay && Date.parse(e.start) > Date.now() &&
+        Date.parse(e.start) - Date.now() < 60 * 60e3)
+      if (soon.length) out.eventsSoon = soon.map((e) => ({ title: e.title, start: e.start, location: e.location }))
+    }
   } catch {}
 
   try {

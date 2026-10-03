@@ -242,8 +242,14 @@ export async function handleWindow(req, res) {
 
   if (action === 'focus' || action === 'move' || action === 'close') {
     const target = String(b.target || '').trim()
+    // `address` = la ventana exacta que la app del móvil tocó en su lista; por
+    // nombre, dos Firefox serían indistinguibles.
+    const address = String(b.address || '').trim()
     let win = null
-    if (target) {
+    if (address) {
+      win = (await clients()).find((c) => c.address === address) || null
+      if (!win) return json(res, 404, { ok: false, error: 'ventana_no_encontrada', detail: 'Esa ventana ya no existe' })
+    } else if (target) {
       win = matchWindow(await clients(), target)
       if (!win) return json(res, 404, { ok: false, error: 'ventana_no_encontrada', detail: `No hay ninguna ventana de "${target}"` })
     } else if (action !== 'focus') {

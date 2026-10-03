@@ -23,6 +23,7 @@
 
 import { runClaude } from './claudeCli.js'
 import { addFact, searchFacts, searchTurns } from './turnStore.js'
+import { vectorSearch, factsByIds, rrf, scheduleIndex } from './semanticMemory.js'
 
 const RECALL_ENABLED = () => process['env']['JARVIS_MEMORY_RECALL'] !== '0'
 const LEARN_ENABLED = () => process['env']['JARVIS_MEMORY_LEARN'] !== '0'
@@ -30,17 +31,37 @@ const MAX_FACTS = Number(process['env']['JARVIS_MEMORY_FACTS'] ?? 6)
 const MAX_TURNS = Number(process['env']['JARVIS_MEMORY_TURNS'] ?? 2)
 
 /**
+ * Facts for a query: BM25 (shared words) fused with vector search (shared
+ * meaning) by reciprocal rank. Without the embedding service this is exactly
+ * the BM25 result — the vector half returns [] within its timeout.
+ * @returns {Promise<object[]>}
+ */
+export async function hybridFacts(query, limit = MAX_FACTS) {
+  const lexical = searchFacts(query, limit)
+  let semantic = []
+  try { semantic = await vectorSearch(query, limit) } catch {}
+  if (!semantic.length) return lexical
+  const ids = rrf([lexical.map((f) => Number(f.id)), semantic]).slice(0, limit)
+  return factsByIds(ids)
+}
+
+/**
  * Build the memory block to prepend to a turn, or '' when nothing is relevant.
  * Kept deliberately small — every line here is spent on every turn.
  * @param {string} text  what the user just said
- * @returns {string}
+ * @returns {Promise<string>}
  */
-export function recallContext(text) {
+export async function recallContext(text) {
   if (!RECALL_ENABLED()) return ''
-  const query = String(text ?? '').trim()
+  // The assistant's own name is in most utterances ("Jarvis, ¿a qué hora…?")
+  // and in a pile of stored facts ("Su asistente se llama Jarvis"). Left in, it
+  // dominates both rankers: measured, the eight nearest vectors to a question
+  // about exercise were all "…llamado Jarvis" facts. It carries no meaning for
+  // recall, so it goes.
+  const query = String(text ?? '').replace(/\bjarvis\b[,.:;\s]*/gi, ' ').trim()
   if (query.length < 4) return ''
   try {
-    const facts = searchFacts(query, MAX_FACTS)
+    const facts = await hybridFacts(query, MAX_FACTS)
     // Past turns are the weaker signal (they include Jarvis's own chatter), so
     // they only come along when facts didn't already fill the budget.
     const turns = facts.length >= MAX_FACTS ? [] : searchTurns(query, MAX_TURNS)
@@ -115,6 +136,7 @@ export function learnFromTurn({ text, reply, turnId = null, intent = '' } = {}) 
       const facts = parseFacts(out)
       if (!facts.length) return
       for (const f of facts) addFact({ ...f, source: turnId ? `turn:${turnId}` : 'turn' })
+      scheduleIndex()
       console.log(`[memory] learned ${facts.length}: ${facts.map((f) => f.text).join(' | ')}`)
     })
     .catch((e) => console.warn('[memory] learn failed —', e?.message))

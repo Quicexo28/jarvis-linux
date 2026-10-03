@@ -6,7 +6,7 @@
  * allowlist) and NOT /api/agents/rpc, which is local-only by design because it
  * can spawn processes on another machine.
  */
-import { request } from '../../api/client'
+import { request, getApiBase, getMobileToken } from '../../api/client'
 
 export type Machine = {
   name: string
@@ -177,16 +177,96 @@ export async function pairMoonlight(host: string, pin: string, name: string): Pr
   }
 }
 
+/* ----- mando del PC (acciones directas, sin pasar por el modelo) ----- */
+
+/**
+ * Las rutas de escritorio responden 404/502 con un `detail` en español que
+ * vale la pena enseñar ("No hay nada reproduciendo"); `request` lo tiraría
+ * por un "HTTP 404" genérico, así que aquí se lee el cuerpo siempre.
+ */
+async function desk<T>(path: string, payload: Record<string, unknown>): Promise<T & { ok: boolean; detail?: string }> {
+  const token = getMobileToken()
+  const res = await fetch(`${getApiBase()}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(payload),
+  })
+  let data: (T & { ok: boolean; detail?: string }) | null = null
+  try { data = await res.json() } catch { /* cuerpo vacío */ }
+  if (!data) throw new Error(`Sin respuesta (HTTP ${res.status}).`)
+  if (!data.ok) throw new Error(data.detail ?? 'No se pudo.')
+  return data
+}
+
+export type MediaState = { player: string; status: string; artist: string; title: string }
+export type MediaAction = 'status' | 'toggle' | 'next' | 'previous'
+export const media = (action: MediaAction) => desk<MediaState>('/api/skills/system/media', { action })
+
+export type VolumeState = { level: number | null; muted: boolean }
+export const volume = (action: 'get' | 'up' | 'down' | 'toggle' | 'set', value?: number) =>
+  desk<VolumeState>('/api/skills/system/volume', { action, ...(value != null ? { value } : {}) })
+
+export type PcWindow = { class: string; title: string; workspace?: string; address: string }
+export async function listWindows(): Promise<PcWindow[]> {
+  return (await desk<{ windows: PcWindow[] }>('/api/skills/system/window', { action: 'list' })).windows ?? []
+}
+export const windowAction = (action: 'focus' | 'close', address: string) =>
+  desk('/api/skills/system/window', { action, address })
+export const gotoWorkspace = (workspace: number) =>
+  desk('/api/skills/system/window', { action: 'workspace', workspace })
+
+export const clipboardGet = () => desk<{ text: string; mime?: string; empty?: boolean }>('/api/skills/system/clipboard', { action: 'get' })
+export const clipboardSet = (text: string) => desk('/api/skills/system/clipboard', { action: 'set', text })
+
+export const dnd = (action: 'status' | 'toggle') => desk<{ active: boolean }>('/api/skills/system/dnd', { action })
+
 /* ----- conversation + home ----- */
 
-export async function sendTurn(message: string): Promise<string> {
-  const res = await request<{ ok: boolean; reply: string }>('/api/jarvis/turn', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, context: { source: 'mobile' } }),
-  })
-  return res.reply ?? '...'
+export type TurnReply = {
+  reply: string
+  /** The risk gate refused a tool this turn: offer fingerprint + password and resend. */
+  authRequired: { risk: string; reason: string } | null
+  elevated: boolean
 }
+
+/** `elevation` = one-shot ticket from elevate(); authorises exactly this turn. */
+export async function sendTurn(message: string, elevation?: string): Promise<TurnReply> {
+  const res = await postJson<{ ok: boolean; reply?: string; authRequired?: TurnReply['authRequired']; elevated?: boolean }>(
+    '/api/jarvis/turn', { message, context: { source: 'mobile' }, ...(elevation ? { elevation } : {}) },
+  )
+  if (!res.ok && !res.reply) throw new Error('turn_failed')
+  return { reply: res.reply ?? '...', authRequired: res.authRequired ?? null, elevated: !!res.elevated }
+}
+
+/* ----- step-up authorisation for risky actions (backend lib/riskAuth.js) ----- */
+
+/**
+ * POST that returns the JSON body even on 4xx: the elevate endpoints answer
+ * 401/409/429 with a Spanish `message`, which `request` would throw away.
+ */
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const token = getMobileToken()
+  const res = await fetch(`${getApiBase()}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  })
+  try { return await res.json() as T } catch { throw new Error(`HTTP ${res.status}`) }
+}
+
+type ElevateResult = { ok: boolean; error?: string; message?: string }
+
+export const elevateStatus = (publicKey: string) =>
+  postJson<{ configured: boolean; enrolled: boolean; locked: boolean }>('/api/jarvis/elevate/status', { publicKey })
+
+export const elevateEnroll = (publicKey: string, password: string, label: string) =>
+  postJson<ElevateResult>('/api/jarvis/elevate/enroll', { publicKey, password, label })
+
+export const elevateChallenge = () =>
+  postJson<{ ok: boolean; challenge: string }>('/api/jarvis/elevate/challenge', {})
+
+export const elevate = (publicKey: string, challenge: string, signature: string, password: string) =>
+  postJson<ElevateResult & { ticket?: string }>('/api/jarvis/elevate', { publicKey, challenge, signature, password })
 
 export function deviceAction(entity: string, action: string): Promise<unknown> {
   return request('/api/jarvis/device-action', {

@@ -20,10 +20,11 @@ import { hasClient } from './skillBus.js'
 import { getAttentionState } from './attentionState.js'
 import { runClaude } from './claudeCli.js'
 import { deliver } from './proactive.js'
+import { agenda, calendarConfigured } from './calendar.js'
 
 const TZ = 'America/Bogota'
 
-export function dayBrief(now = Date.now()) {
+export async function dayBrief(now = Date.now()) {
   const today = localDay(now)
   let reminders = []
   try {
@@ -33,9 +34,19 @@ export function dayBrief(now = Date.now()) {
       .filter((r) => r.when && localDay(new Date(r.when).getTime()) === today)
   } catch { /* sin recordatorios */ }
   const cards = cardStats(now)
+  // Calendar events of today. A feed that's down must not take the brief down
+  // with it — the rest of the day is still worth saying.
+  let events
+  if (calendarConfigured()) {
+    try {
+      const a = await agenda({ from: new Date(now).toISOString(), days: 1 })
+      events = a.events.map((e) => ({ title: e.title, start: e.start, end: e.end, allDay: e.allDay, location: e.location }))
+    } catch { /* sin calendario */ }
+  }
   return {
     date: new Date(now).toLocaleDateString('es-CO', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' }),
     tasks: tasksForToday(),
+    events,
     reminders,
     flashcardsDue: cards.due,
     study: studySummary(now),
@@ -67,7 +78,7 @@ export function briefingBlock({ now = Date.now(), lastDay, awake, attention }) {
 }
 
 const BRIEF_PROMPT = `Eres Jarvis. Con los datos JSON del día de Santiago, redacta el saludo de la mañana que dirás EN VOZ ALTA.
-Reglas: español, dos a cuatro oraciones, trátalo de "señor", sin listas, símbolos, emojis ni rutas. Menciona solo lo que exista: tareas de hoy (cuántas y la más importante), recordatorios con su hora, tarjetas de repaso pendientes, hábitos con racha en juego. Si no hay nada, un saludo breve y ofrece planear el día. No inventes nada que no esté en los datos. Devuelve SOLO el texto a decir.`
+Reglas: español, dos a cuatro oraciones, trátalo de "señor", sin listas, símbolos, emojis ni rutas. Menciona solo lo que exista: eventos del calendario de hoy (el primero con su hora y cuántos más), tareas de hoy (cuántas y la más importante), recordatorios con su hora, tarjetas de repaso pendientes, hábitos con racha en juego. Si no hay nada, un saludo breve y ofrece planear el día. No inventes nada que no esté en los datos. Devuelve SOLO el texto a decir.`
 
 /** One check. Exported so it can be triggered on demand and tested. */
 export async function maybeMorningBriefing({ force = false, now = Date.now() } = {}) {
@@ -77,7 +88,7 @@ export async function maybeMorningBriefing({ force = false, now = Date.now() } =
   if (block) return { acted: false, reason: block }
   // Claim the day BEFORE the slow part, so two ticks can't both speak.
   kvSet(KV_KEY, localDay(now))
-  const data = dayBrief(now)
+  const data = await dayBrief(now)
   const text = (await runClaude(JSON.stringify(data), {
     systemPromptText: BRIEF_PROMPT,
     model: 'haiku',

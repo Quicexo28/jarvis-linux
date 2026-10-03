@@ -6,6 +6,8 @@ import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { kvGet, kvSet } from './turnStore.js'
 import { voiceDisallowedTools } from './voiceTools.js'
+import { setElevatedTurnProbe } from './toolRisk.js'
+import { reportIssue } from './incidentBus.js'
 
 // Which `claude` binary to spawn. Overridable because the npm-installed one can
 // be unusable on a given machine while a different build of the SAME version
@@ -568,8 +570,9 @@ class ClaudeSession {
     // Verified end-to-end: a fact stated in one process is recalled by a fresh
     // process resuming the same id. If a resume ever fails (corrupt or pruned
     // transcript), resumeBroken flips and we fall back to a clean session.
+    this.spawnedResume = false
     if (SESSION_RESUME()) {
-      if (this.hasSpawned && !this.resumeBroken) args.push('--resume', this.sessionId)
+      if (this.hasSpawned && !this.resumeBroken) { args.push('--resume', this.sessionId); this.spawnedResume = true }
       else args.push('--session-id', this.sessionId)
       // Bound the transcript so a session that lives for days compacts itself
       // instead of growing until it blows the context window. Only if the
@@ -655,7 +658,10 @@ class ClaudeSession {
     // would leave the voice permanently broken, so give up on resuming ONCE and
     // continue with a fresh session id.
     const upMs = Date.now() - this.spawnedAt
+    let retryFresh = false
     if (SESSION_RESUME() && !this.resumeBroken && upMs < 5000) {
+      // Only a failed RESUME is worth an immediate retry with the fresh id.
+      retryFresh = !!this.spawnedResume
       this.resumeBroken = true
       this.sessionId = randomUUID()
       persistSessionId(this.sessionKey, this.sessionId)
@@ -667,11 +673,56 @@ class ClaudeSession {
       console.warn(`[jarvis-session] ${this.model} exited after ${upMs}ms` +
         (this.errTail ? ` — stderr: ${this.errTail.trim().slice(-300)}` : ''))
     }
+    // An early death is a fault, not churn: hand it to the watchdog with the
+    // stderr that explains it. Before this, the explanation only ever reached
+    // journald and nobody was reading (the 2.1.220 `--autocompact` outage).
+    // A RESUME that dies early is the expected, self-healing case handled just
+    // above (new session id, next spawn is fresh) — unless the cause is a flag
+    // the CLI rejects, which would kill the fresh spawn too.
+    const err = (this.errTail || '').trim()
+    const flag = err.match(/unknown option ['"`]?(--[\w-]+)/i)
+    if (upMs < 5000 && !this.killedOnPurpose && (flag || !this.spawnedResume)) {
+      lastStderr = err || lastStderr
+      reportIssue(flag
+        ? {
+            code: 'JRV-CLI-002', source: 'claude-session', key: `cli:flag:${flag[1]}`,
+            message: `El CLI de Claude rechaza la opción ${flag[1]} que le pasa claudeCli.js`,
+            detail: err, ctx: { flag: flag[1], model: this.model, bin: CLAUDE_CMD },
+          }
+        : {
+            code: 'JRV-CLI-003', source: 'claude-session', key: `session:early-exit:${this.model}`,
+            message: `La sesión ${this.model} murió ${upMs} ms después de arrancar`,
+            detail: err || '(sin stderr)', ctx: { model: this.model, bin: CLAUDE_CMD },
+          })
+    }
+    this.killedOnPurpose = false
     if (this.current) {
       const c = this.current
       this.current = null
       clearTimeout(c.timer)
+      // The resume failed, not the request: run it again on the fresh session
+      // instead of answering with the fallback. Without this the boot warmup was
+      // simply lost, so the new id never got a transcript and — if no turn came
+      // before the next restart — that restart failed to resume it too ("No
+      // conversation found"), every boot, forever. Once only: the flag is
+      // already flipped, so the retry spawns with --session-id.
+      if (retryFresh && !c.retried && !this.killedOnPurpose) {
+        c.retried = true
+        console.log(`[jarvis-session] ${this.model} resume failed — retrying the request on a fresh session`)
+        c.acc = ''; c.tools = []; c.toolCalls = []; c.toolErrors = []; c.toolNames = new Map()
+        this.queue.unshift(c)
+        this._pump()
+        return
+      }
       c.resolve(c.fallbackReply)
+    } else if (retryFresh && !this.queue.length) {
+      // The usual shape of a failed resume: the CLI prints an error `result`
+      // (which already resolved the in-flight request, typically the boot
+      // warmup) and THEN exits, so there is nothing left to retry. Prime the
+      // fresh session ourselves — otherwise it stays cold and its new id never
+      // gets a transcript, so the NEXT restart fails to resume it too.
+      console.log(`[jarvis-session] ${this.model} resume failed — priming a fresh session`)
+      this.ask('hola', 30000, '').catch(() => {})
     }
   }
 
@@ -707,12 +758,13 @@ class ClaudeSession {
         if (Array.isArray(blocks)) {
           for (const b of blocks) {
             if (b?.type === 'tool_use' && b.name) {
-              this.current.tools.push(b.name)
+              const name = qualifiedToolName(b.name, b.input)
+              this.current.tools.push(name)
               // The INPUT is what makes a postcondition checkable: knowing
               // open_view ran says nothing, knowing it ran with {view:'plan3d'}
               // lets us ask the renderer whether plan3d is actually on screen.
-              this.current.toolCalls.push({ name: b.name, input: b.input ?? null })
-              if (b.id) this.current.toolNames.set(b.id, b.name)
+              this.current.toolCalls.push({ name, input: b.input ?? null })
+              if (b.id) this.current.toolNames.set(b.id, name)
             }
           }
         }
@@ -738,6 +790,10 @@ class ClaudeSession {
         this.current = null
         clearTimeout(c.timer)
         const resultText = typeof msg.result === 'string' ? msg.result.trim() : ''
+        // Computed for EVERY result, with or without a listener: the boot warmup
+        // has no onMeta, and skipping it billed the warmup's cost to the first
+        // real turn.
+        const turnCost = this._turnCost(msg.total_cost_usd)
         // The CLI reports the real session id it used (a resume can hand back a
         // different one after a fork); persist it so the NEXT spawn resumes the
         // conversation that actually exists.
@@ -755,7 +811,7 @@ class ClaudeSession {
               toolCalls: c.toolCalls,
               toolErrors: c.toolErrors,
               isError: !!msg.is_error,
-              costUsd: typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : null,
+              costUsd: turnCost,
               durationMs: msg.duration_ms ?? null,
               ttftMs: msg.ttft_ms ?? null,
               numTurns: msg.num_turns ?? null,
@@ -771,10 +827,25 @@ class ClaudeSession {
     }
   }
 
-  ask(message, timeoutMs, fallbackReply, onText = null, onMeta = null) {
+  /**
+   * `total_cost_usd` in the CLI's result event is CUMULATIVE for the process,
+   * not the cost of the turn (seen in the traces: 0.89, 0.92, 0.95… growing
+   * every turn). Stored as-is, every sum over `turns.cost_usd` was inflated —
+   * an eval run of 33 turns reported $27. This returns the turn's own share.
+   */
+  _turnCost(total) {
+    if (typeof total !== 'number') return null
+    const pid = this.proc?.pid ?? null
+    const prev = this.costPid === pid ? (this.costSoFar || 0) : 0
+    this.costSoFar = total
+    this.costPid = pid
+    return Math.max(0, total - prev)
+  }
+
+  ask(message, timeoutMs, fallbackReply, onText = null, onMeta = null, tag = null) {
     return new Promise((resolve) => {
       this.queue.push({
-        message, timeoutMs, fallbackReply, resolve, timer: null, onText, onMeta,
+        message, timeoutMs, fallbackReply, resolve, timer: null, onText, onMeta, tag,
         acc: '', tools: [], toolCalls: [], toolErrors: [], toolNames: new Map(),
       })
       this._pump()
@@ -816,6 +887,40 @@ class ClaudeSession {
 }
 
 const sessions = new Map()
+let lastStderr = ''
+
+// The consolidated tools (timer, chrono) take an `action`. Recording it in the
+// name ("mcp__jarvis__timer.start") keeps traces, /api/jarvis/stats, the eval
+// harness and the verifier's postconditions able to tell WHICH operation ran —
+// otherwise "timer" alone would hide start vs cancel.
+const ACTION_TOOL_RE = /(?:^|__)(timer|chrono)$/
+
+/** Exported for tests. */
+export function qualifiedToolName(name, input) {
+  const action = input && typeof input.action === 'string' ? input.action.trim().toLowerCase() : ''
+  return action && ACTION_TOOL_RE.test(String(name)) ? `${name}.${action}` : name
+}
+
+/** Last stderr a dying session left behind (for the watchdog's incident detail). */
+export function lastSessionStderr() {
+  return lastStderr
+}
+
+/**
+ * Kill every persistent session. Each one respawns on its next ask (with
+ * --resume, so the conversation survives). Used by the watchdog when the
+ * brain keeps answering with the fallback. Returns how many were killed.
+ */
+export function resetSessions() {
+  let n = 0
+  for (const sess of sessions.values()) {
+    if (!sess.proc) continue
+    sess.killedOnPurpose = true
+    try { sess.proc.kill() } catch {}
+    n++
+  }
+  return n
+}
 
 /**
  * Ask Claude through a persistent per-system-prompt session (reused process).
@@ -844,8 +949,27 @@ export function sessionAsk(userMessage, opts = {}) {
   let sess = sessions.get(key)
   if (!sess) { sess = new ClaudeSession(systemPromptText, model, key); sessions.set(key, sess) }
   const message = extraContext ? `${extraContext}\n\nUsuario: ${userMessage}` : userMessage
-  return sess.ask(message, timeoutMs, fallbackReply, null, opts.onMeta ?? null)
+  return sess.ask(message, timeoutMs, fallbackReply, null, opts.onMeta ?? null, opts.tag ?? null)
 }
+
+/**
+ * True when the ONLY turn in flight, across every session, carries `tag`.
+ * The MCP server cannot say which turn a tool call belongs to, but each session
+ * runs one turn at a time — so if exactly one turn is running and it is the
+ * tagged one, the call is its. A concurrent turn in another session (e.g. a
+ * voice turn routed to sonnet) makes this false, so it can never ride along.
+ * @param {string} tag
+ */
+export function onlyTurnInFlightTagged(tag) {
+  let tagged = false
+  for (const s of sessions.values()) {
+    if (!s.current) continue
+    if (s.current.tag !== tag) return false
+    tagged = true
+  }
+  return tagged
+}
+setElevatedTurnProbe(() => onlyTurnInFlightTagged('elevated'))
 
 /**
  * Like sessionAsk, but invokes onText(deltaString) for each incremental text

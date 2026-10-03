@@ -295,15 +295,30 @@ html, #root { background: transparent; }
 
 /* --- Hologram label (drei Html) --- */
 .hologram-label {
-  font-family: 'Space Grotesk', sans-serif;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: 'JetBrains Mono', 'Space Grotesk', monospace;
   font-size: 9px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.28em;
   text-transform: uppercase;
-  color: rgba(0,240,255,0.7);
-  text-shadow: 0 0 8px rgba(0,240,255,0.5);
+  color: var(--hue-info);
+  text-shadow: 0 0 8px rgba(0,240,255,0.65);
   pointer-events: none;
   white-space: nowrap;
-  padding: 2px 6px;
+  padding: 3px 10px 3px 4px;
+  background: linear-gradient(90deg, rgba(0,240,255,0.14), rgba(0,89,255,0.04) 70%, transparent);
+  border-left: 2px solid var(--hue-info);
+  /* Esquina recortada: placa de HUD, no píldora. */
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 0 100%);
+}
+.hologram-label__code {
+  font-size: 8px;
+  padding: 1px 4px;
+  color: #03080d;
+  background: var(--hue-info);
+  text-shadow: none;
+  letter-spacing: 0.08em;
 }
 
 /* --- Voice: mini dot (non-core screens, top-right below HUD toggles) --- */

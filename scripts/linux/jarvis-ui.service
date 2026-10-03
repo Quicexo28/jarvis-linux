@@ -9,6 +9,12 @@ Type=simple
 # antes de que Hyprland cree wayland-1 y Tauri hace panic (exit 101) — se veía
 # como "el binario ni arranca" con restart counter 2-3 en cada boot.
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && exit 0; sleep 0.5; done; echo "wayland socket timeout" >&2; exit 1'
+# Antiparpadeo de la cámara a 60 Hz (red eléctrica de Colombia). Venía en
+# 50 Hz de fábrica: bajo luz LED/fluorescente a 60 Hz eso mete bandas de brillo
+# que cambian frame a frame y el modelo de manos pierde la mano. El control no
+# persiste entre reconexiones USB, por eso se fija en cada arranque. «-» = no
+# bloquear la UI si la cámara no está.
+ExecStartPre=-/usr/bin/v4l2-ctl -d /dev/v4l/by-id/usb-SunplusIT_Inc_HD_User_Facing-video-index0 -c power_line_frequency=2
 ExecStart=/home/santiago2/jarvis-linux/frontend/src-tauri/target/release/jarvis
 Restart=on-failure
 RestartSec=3
@@ -22,6 +28,14 @@ Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=DISPLAY=:1
 Environment=GDK_BACKEND=wayland
 Environment=WEBKIT_DISABLE_DMABUF_RENDERER=1
+# Portátil híbrido (Intel UHD + RTX 3050): tras la actualización del 2026-09-29
+# (nvidia 615, webkit2gtk 2.52.6) glvnd pasó a darle a WebKitWebProcess la EGL
+# de NVIDIA (renderD129) mientras Hyprland compone en la Intel. Cada frame
+# cruzaba de GPU pasando por CPU: lag, zoom raro y `WebGLRenderer: Context Lost`.
+# Forzar la EGL de Mesa deja todo en la iGPU (comprobar: fds de WebKitWebProcess
+# → renderD128, y `nvidia-smi` sin WebKit).
+Environment=__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+Environment=__GLX_VENDOR_LIBRARY_NAME=mesa
 Environment=WEBKIT_INSPECTOR_SERVER=127.0.0.1:9222
 
 [Install]

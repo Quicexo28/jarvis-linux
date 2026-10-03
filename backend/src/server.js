@@ -23,6 +23,11 @@ import { attachAgentBridge } from './agent/bridge.js'
 import { handleMobileGestureUpgrade } from './handlers/mobileGesture.js'
 import { startCloudflareTunnel } from './lib/cloudflareTunnel.js'
 import { startPdfWatcher } from './lib/pdfWatcher.js'
+import { startSelfHeal } from './lib/selfHeal.js'
+import { reportIssue } from './lib/incidentBus.js'
+import { lastSessionStderr } from './lib/claudeCli.js'
+import { resumeFollowUps } from './lib/devAgent.js'
+import { scheduleIndex } from './lib/semanticMemory.js'
 
 const port = Number(env.PORT ?? 8788)
 const host = env.HOST ?? '0.0.0.0'
@@ -35,6 +40,13 @@ const server = http.createServer(async (req, res) => {
     await dispatch(req, res)
   } catch (err) {
     console.error('unhandled', err)
+    const route = `${req.method} ${String(req.url || '').split('?')[0]}`
+    reportIssue({
+      code: 'JRV-ROUTE-001', source: 'http',
+      key: `route:${route}:${String(err?.message || err).slice(0, 80)}`,
+      message: `${route} lanzó: ${String(err?.message || err).slice(0, 200)}`,
+      detail: String(err?.stack || err), ctx: { route },
+    })
     if (!res.headersSent) {
       res.statusCode = 500
       res.setHeader('Content-Type', 'application/json')
@@ -76,6 +88,10 @@ server.on('upgrade', (req, socket, head) => {
   }
 })
 
+// Self-healing watchdog FIRST: it installs the process-level crash handlers,
+// so anything that blows up during the rest of boot is already caught.
+startSelfHeal({ sessionStderr: lastSessionStderr })
+
 // Start warming the persistent Claude session immediately at boot (app launch,
 // even while DORMANT) so the first voice turn doesn't pay the cold-start.
 warmupSpeechSession()
@@ -100,6 +116,12 @@ startScheduler()
 startProactiveLoop()
 restoreStudy()
 startBriefingLoop()
+// A self-code job that was building a missing capability restarted us to apply
+// it: now run the task the owner originally asked for.
+resumeFollowUps()
+// Embed any fact that has no vector yet (first run, or the embedding service
+// was down when it was learned). Background; recall works without it.
+scheduleIndex(15000)
 
 await loadDynamicRoutes()
 server.listen(port, host, () => console.log(`Jarvis backend on http://${host}:${port}`))

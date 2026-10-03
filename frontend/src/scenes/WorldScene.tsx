@@ -9,6 +9,7 @@ import { getTtsLevel, isTtsSpeaking, isTtsThinking, isHoloAwake } from '../audio
 import { PINCH_SCALE_MULTIPLIER, PINCH_APPROACH_DISTANCE, PINCH_DISSOLVE_START } from '../gestures/config'
 import { modeMeta, MAIN_RING, SUB_RING, SUB_RING_UTILS } from '../constants'
 import { FOLDER_HUE, HUE } from '../lib/theme'
+import { HoloClock, HoloBase, HoloReticle, HoloFloor, Glow, HoloMaterial, useHoloMaterial, getGlowTexture } from './holoKit'
 import type { Mode } from '../types'
 
 /* ─────────────────────────────────────────────────────────────
@@ -110,6 +111,14 @@ export function NeuralFireGeo({ active }: { active: boolean }) {
   // Voice-reactive breathing: compact while idle, inflating with the real TTS
   // envelope while Jarvis speaks (level comes from ttsLevelBus, not state).
   const breath   = useRef(0.10)
+  // Cáscara fresnel: el borde de la esfera brilla y el centro queda limpio.
+  // Magenta mientras Jarvis habla — `voice` es el rol "voz activa" del tema,
+  // así que el color dice algo, no decora.
+  const shellMat = useHoloMaterial({ rim: 2.8, fill: 0.015, intensity: 0.9, opacity: 0.6 })
+  const shellRef = useRef<THREE.Mesh>(null)
+  const voiceCol = useMemo(() => new THREE.Color(HUE.voice), [])
+  const infoCol  = useMemo(() => new THREE.Color(HUE.info), [])
+  const shellCol = useMemo(() => new THREE.Color(HUE.info), [])
 
   const tokensWindow5h = useSystemStore(s => s.tokensWindow5h)
   const activeModel    = useSystemStore(s => s.activeModel)
@@ -188,6 +197,12 @@ export function NeuralFireGeo({ active }: { active: boolean }) {
     groupRef.current.scale.setScalar(breath.current)
     instRef.current.visible = awake
     edgeLinesObj.visible = awake
+    if (shellRef.current) {
+      shellRef.current.visible = awake
+      shellCol.lerp(speaking ? voiceCol : infoCol, Math.min(1, delta * 4))
+      shellMat.setColor(shellCol)
+      shellMat.intensity = 0.8 + lvl * 1.4 + (active ? 0.3 : 0)
+    }
     if (glowRef.current) {
       const gmat = glowRef.current.material as THREE.MeshBasicMaterial
       // Boot: the glow IS the point — bigger relative scale + steadier opacity
@@ -239,6 +254,7 @@ export function NeuralFireGeo({ active }: { active: boolean }) {
 
       if (isFiring) {
         color.setRGB(0.5 + 0.5 * fireFrac, 1.0, 1.0)
+        if (speaking) color.lerp(voiceCol, 0.55 * fireFrac)
       } else {
         color.setRGB(0.03, 0.28 + localZ * 0.04, 0.38 + localZ * 0.05)
       }
@@ -260,6 +276,10 @@ export function NeuralFireGeo({ active }: { active: boolean }) {
         <sphereGeometry args={[0.15, 16, 16]} />
         <meshBasicMaterial color="#00f0ff" transparent opacity={0.18} />
       </mesh>
+      <mesh ref={shellRef} material={shellMat}>
+        <icosahedronGeometry args={[1.34, 4]} />
+      </mesh>
+      <Glow scale={1.6} opacity={0.45} />
     </group>
   )
 }
@@ -270,6 +290,7 @@ export function NeuralFireGeo({ active }: { active: boolean }) {
 ───────────────────────────────────────────────────────────── */
 function HouseGeoFallback({ active }: { active: boolean }) {
   const groupRef = useRef<THREE.Group>(null)
+  const bodyMat = useHoloMaterial({ rim: 1.6, fill: 0.04, intensity: 0.9 })
   const win1 = useRef<THREE.Mesh>(null)
   const win2 = useRef<THREE.Mesh>(null)
 
@@ -282,6 +303,9 @@ function HouseGeoFallback({ active }: { active: boolean }) {
 
   return (
     <group ref={groupRef}>
+      <mesh material={bodyMat}>
+        <boxGeometry args={[2.8, 1.6, 2.0]} />
+      </mesh>
       <mesh>
         <boxGeometry args={[2.8, 1.6, 2.0]} />
         <meshBasicMaterial color="#00f0ff" wireframe transparent opacity={0.45} />
@@ -292,11 +316,11 @@ function HouseGeoFallback({ active }: { active: boolean }) {
       </mesh>
       <mesh ref={win1} position={[-0.6, 0.2, 1.01]}>
         <planeGeometry args={[0.55, 0.45]} />
-        <meshStandardMaterial emissive="#00aaff" emissiveIntensity={1.5} color="#001830" transparent opacity={0.9} side={THREE.DoubleSide} />
+        <meshStandardMaterial emissive="#00aaff" emissiveIntensity={1.5} color="#001830" transparent opacity={0.9} side={THREE.DoubleSide} toneMapped={false} />
       </mesh>
       <mesh ref={win2} position={[0.6, 0.2, 1.01]}>
         <planeGeometry args={[0.55, 0.45]} />
-        <meshStandardMaterial emissive="#00aaff" emissiveIntensity={1.5} color="#001830" transparent opacity={0.9} side={THREE.DoubleSide} />
+        <meshStandardMaterial emissive="#00aaff" emissiveIntensity={1.5} color="#001830" transparent opacity={0.9} side={THREE.DoubleSide} toneMapped={false} />
       </mesh>
     </group>
   )
@@ -313,7 +337,7 @@ function TowerGeoInner({ active }: { active: boolean }) {
 
   const { cloned, materials } = useMemo(() => {
     const cloned    = scene.clone(true)
-    const materials: THREE.MeshStandardMaterial[] = []
+    const materials: HoloMaterial[] = []
 
     const box    = new THREE.Box3().setFromObject(cloned)
     const size   = box.getSize(new THREE.Vector3())
@@ -325,13 +349,16 @@ function TowerGeoInner({ active }: { active: boolean }) {
 
     cloned.traverse(obj => {
       if (obj instanceof THREE.Mesh) {
-        const mat = new THREE.MeshStandardMaterial({
-          emissive:          new THREE.Color('#00aaff'),
-          emissiveIntensity: 1.8,
-          color:             new THREE.Color('#001a30'),
-          transparent:       true,
-          opacity:           0.88,
-        })
+        // Fresnel + scanlines + banda de escaneo: la torre se lee como
+        // proyección, no como maqueta de plástico brillante. Uno por malla
+        // porque el disolvido del pinch muta `.opacity` por material.
+        // Las mallas PLANAS del modelo (el suelo bajo la torre) se ven casi
+        // siempre de canto: fresnel máximo en toda su superficie, una losa
+        // sólida que tapaba la torre. Van tenues.
+        obj.geometry.computeBoundingBox()
+        const bb = obj.geometry.boundingBox!.getSize(new THREE.Vector3())
+        const flat = Math.min(bb.x, bb.y, bb.z) < Math.max(bb.x, bb.y, bb.z) * 0.02
+        const mat = new HoloMaterial({ rim: 1.7, fill: 0.05, intensity: 1.0, opacity: flat ? 0.12 : 1 })
         obj.material = mat
         materials.push(mat)
       }
@@ -341,13 +368,16 @@ function TowerGeoInner({ active }: { active: boolean }) {
 
   useFrame((state, delta) => {
     if (groupRef.current) groupRef.current.rotation.y += 0.005 * delta * 60
-    const pulse = 1.8 + Math.sin(state.clock.elapsedTime * 1.8) * 0.6 + (active ? 1.2 : 0)
-    materials.forEach(m => { m.emissiveIntensity = pulse })
+    const pulse = 0.9 + Math.sin(state.clock.elapsedTime * 1.8) * 0.15 + (active ? 0.45 : 0)
+    materials.forEach(m => { m.intensity = pulse })
   })
+
+  useEffect(() => () => { materials.forEach(m => m.dispose()) }, [materials])
 
   return (
     <group ref={groupRef}>
       <primitive object={cloned} />
+      <Glow scale={2.2} opacity={0.3} />
     </group>
   )
 }
@@ -379,6 +409,7 @@ function TowerGeo({ active }: { active: boolean }) {
 function Plan2DGeo({ active }: { active: boolean }) {
   const gridGeoRef = useRef<THREE.BufferGeometry>(null)
   const groupRef   = useRef<THREE.Group>(null)
+  const sweepRef   = useRef<THREE.Mesh>(null)
   const N = 18
 
   const basePositions = useMemo(() => {
@@ -399,6 +430,12 @@ function Plan2DGeo({ active }: { active: boolean }) {
     if (groupRef.current) groupRef.current.rotation.y += 0.004 * delta * 60
 
     const t = state.clock.elapsedTime
+    if (sweepRef.current) {
+      // Cabezal de escaneo: cruza el plano de lado a lado, como un escáner.
+      const k = (t * (active ? 0.4 : 0.22)) % 1
+      sweepRef.current.position.x = (k - 0.5) * 4.4
+      ;(sweepRef.current.material as THREE.MeshBasicMaterial).opacity = Math.sin(k * Math.PI) * 0.55
+    }
     const amp = active ? 0.22 : 0.12
     for (let i = 0; i < N * N; i++) {
       const x = basePositions[i * 3]
@@ -430,6 +467,11 @@ function Plan2DGeo({ active }: { active: boolean }) {
         <pointsMaterial color="#00f0ff" size={0.055} transparent opacity={0.7} sizeAttenuation />
       </points>
       {wallLines.map((ln, i) => <primitive key={i} object={ln} />)}
+      <mesh ref={sweepRef} position={[0, 0.25, 0]} rotation={[0, Math.PI / 2, 0]}>
+        <planeGeometry args={[4.4, 0.5]} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.4} side={THREE.DoubleSide}
+          blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
+      </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[4.5, 4.5]} />
         <meshBasicMaterial color="#00f0ff" wireframe transparent opacity={0.08} />
@@ -438,7 +480,7 @@ function Plan2DGeo({ active }: { active: boolean }) {
         <mesh key={i} position={pos as [number,number,number]}
           rotation={[0, i < 2 ? Math.PI / 2 : 0, 0]}>
           <boxGeometry args={[4.5, 0.02, 0.02]} />
-          <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={1.5} color="#000" />
+          <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={1.5} color="#000" toneMapped={false} />
         </mesh>
       ))}
     </group>
@@ -450,6 +492,7 @@ function Plan2DGeo({ active }: { active: boolean }) {
 ───────────────────────────────────────────────────────────── */
 function Plan3DGeo({ active }: { active: boolean }) {
   const groupRef   = useRef<THREE.Group>(null)
+  const slabMat    = useHoloMaterial({ rim: 1.4, fill: 0.08, intensity: 1.1 })
   const wallsRef   = useRef<THREE.Group>(null)
   const scaleRef   = useRef(0)
 
@@ -477,9 +520,8 @@ function Plan3DGeo({ active }: { active: boolean }) {
     <group ref={groupRef}>
       {floors.map((y, i) => (
         <group key={i}>
-          <mesh position={[0, y, 0]}>
+          <mesh position={[0, y, 0]} material={slabMat}>
             <boxGeometry args={[2.4, 0.06, 1.8]} />
-            <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={0.6} color="#001520" transparent opacity={0.7} />
           </mesh>
           <mesh position={[0, y, 0]}>
             <boxGeometry args={[2.4, 0.07, 1.8]} />
@@ -491,7 +533,7 @@ function Plan3DGeo({ active }: { active: boolean }) {
         {[[-1.17, 0.9], [1.17, 0.9], [-1.17, -0.9 + 0.03], [1.17, -0.9 + 0.03]].map(([x, z], i) => (
           <mesh key={i} position={[x as number, 0.9, z as number]}>
             <boxGeometry args={[0.06, 1.86, 0.06]} />
-            <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={1} color="#001520" />
+            <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={1} color="#001520" toneMapped={false} />
           </mesh>
         ))}
         {[
@@ -546,7 +588,7 @@ function SpaceGeo({ active }: { active: boolean }) {
     <group rotation={[0.25, 0, 0]}>
       <mesh ref={ringRef}>
         <torusGeometry args={[1.1, 0.065, 20, 140]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={3} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={3} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <circleGeometry args={[1.03, 64]} />
@@ -556,13 +598,15 @@ function SpaceGeo({ active }: { active: boolean }) {
         <circleGeometry args={[0.6, 32]} />
         <meshBasicMaterial color="#00f0ff" transparent opacity={0.06} side={THREE.DoubleSide} />
       </mesh>
+      <Glow color={HUE.deep} scale={3.2} opacity={0.55} />
+      <Glow scale={1.4} opacity={0.35} />
       <mesh ref={arcRef}>
         <torusGeometry args={[0.95, 0.008, 8, 80]} />
         <meshBasicMaterial color="#0059ff" transparent opacity={0.5} />
       </mesh>
       <instancedMesh ref={instRef} args={[undefined, undefined, 60]}>
         <sphereGeometry args={[0.022, 6, 6]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={5} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={5} color="#001520" toneMapped={false} />
       </instancedMesh>
       {[0, Math.PI / 2].map((rot, i) => (
         <mesh key={i} rotation={[0, 0, rot]}>
@@ -579,6 +623,7 @@ function SpaceGeo({ active }: { active: boolean }) {
    Two hexagonal-section tori + orbital particle bands + nodes.
 ───────────────────────────────────────────────────────────── */
 function HexTorusGeo({ active }: { active: boolean }) {
+  const coreMat  = useHoloMaterial({ rim: 2.2, fill: 0.03, intensity: 1.0 })
   const ring1Ref = useRef<THREE.Mesh>(null)
   const ring2Ref = useRef<THREE.Mesh>(null)
   const instRef  = useRef<THREE.InstancedMesh>(null)
@@ -623,9 +668,13 @@ function HexTorusGeo({ active }: { active: boolean }) {
 
   return (
     <group>
+      <mesh material={coreMat}>
+        <icosahedronGeometry args={[0.42, 3]} />
+      </mesh>
+      <Glow scale={1.5} opacity={0.4} />
       <mesh ref={ring1Ref}>
         <torusGeometry args={[0.9, 0.06, 6, 24]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={active ? 3.5 : 2.0} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={active ? 3.5 : 2.0} color="#001520" toneMapped={false} />
       </mesh>
       <mesh ref={ring2Ref} rotation={[Math.PI / 3, 0, 0]}>
         <torusGeometry args={[0.65, 0.03, 6, 18]} />
@@ -634,12 +683,12 @@ function HexTorusGeo({ active }: { active: boolean }) {
       {nodePos.map((pos, i) => (
         <mesh key={i} position={pos}>
           <octahedronGeometry args={[0.06, 0]} />
-          <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.2} color="#001520" />
+          <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.2} color="#001520" toneMapped={false} />
         </mesh>
       ))}
       <instancedMesh ref={instRef} args={[undefined, undefined, N_PART]}>
         <octahedronGeometry args={[1, 0]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={4.5} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={4.5} color="#001520" toneMapped={false} />
       </instancedMesh>
     </group>
   )
@@ -651,6 +700,7 @@ function HexTorusGeo({ active }: { active: boolean }) {
    reads as "tools / utilities" without competing with the others.
 ───────────────────────────────────────────────────────────── */
 function UtilsGeo({ active }: { active: boolean }) {
+  const coreMat = useHoloMaterial({ rim: 1.8, fill: 0.05, intensity: 1.0 })
   const r1 = useRef<THREE.Mesh>(null)
   const r2 = useRef<THREE.Mesh>(null)
   const r3 = useRef<THREE.Mesh>(null)
@@ -671,8 +721,12 @@ function UtilsGeo({ active }: { active: boolean }) {
     <group>
       <mesh ref={coreRef}>
         <icosahedronGeometry args={[0.4, 0]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" wireframe />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" wireframe toneMapped={false} />
       </mesh>
+      <mesh material={coreMat}>
+        <icosahedronGeometry args={[0.38, 0]} />
+      </mesh>
+      <Glow scale={1.3} opacity={0.4} />
       <mesh ref={r1}>
         <torusGeometry args={[0.85, 0.014, 8, 60]} />
         <meshBasicMaterial color="#00f0ff" transparent opacity={0.55} />
@@ -694,6 +748,7 @@ function UtilsGeo({ active }: { active: boolean }) {
    Bezel of tick marks + a single radial line rotating at variable speed.
 ───────────────────────────────────────────────────────────── */
 function TimerGeo({ active }: { active: boolean }) {
+  const arcRef  = useRef<THREE.Mesh>(null)
   const handRef = useRef<THREE.Mesh>(null)
   const ringRef = useRef<THREE.Mesh>(null)
 
@@ -713,6 +768,7 @@ function TimerGeo({ active }: { active: boolean }) {
   useFrame((state, delta) => {
     const spd = active ? 1.6 : 0.7
     if (handRef.current) handRef.current.rotation.z -= 0.5 * spd * delta
+    if (arcRef.current) arcRef.current.rotation.z -= 0.35 * spd * delta
     if (ringRef.current) {
       const mat = ringRef.current.material as THREE.MeshStandardMaterial
       mat.emissiveIntensity = (active ? 3.5 : 2.0) + Math.sin(state.clock.elapsedTime * 2.5) * 0.4
@@ -723,20 +779,26 @@ function TimerGeo({ active }: { active: boolean }) {
     <group rotation={[0.15, 0, 0]}>
       <mesh ref={ringRef}>
         <torusGeometry args={[1.0, 0.05, 12, 64]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <circleGeometry args={[0.95, 64]} />
         <meshBasicMaterial color="#00f0ff" transparent opacity={0.07} side={THREE.DoubleSide} />
       </mesh>
       {tickLines.map((ln, i) => <primitive key={i} object={ln} />)}
+      <mesh ref={arcRef}>
+        <ringGeometry args={[1.22, 1.3, 96, 1, 0, Math.PI * 1.35]} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.5} side={THREE.DoubleSide}
+          blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <Glow scale={1.1} opacity={0.5} />
       <mesh ref={handRef}>
         <boxGeometry args={[0.05, 0.85, 0.02]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={4.5} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={4.5} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <sphereGeometry args={[0.08, 16, 16]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={4} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={4} color="#001520" toneMapped={false} />
       </mesh>
     </group>
   )
@@ -746,6 +808,7 @@ function TimerGeo({ active }: { active: boolean }) {
    CHRONO — Stopwatch with split rings and a fast-spinning hand.
 ───────────────────────────────────────────────────────────── */
 function ChronoGeo({ active }: { active: boolean }) {
+  const crownRef = useRef<THREE.Group>(null)
   const handRef = useRef<THREE.Mesh>(null)
   const innerRef = useRef<THREE.Mesh>(null)
 
@@ -765,6 +828,7 @@ function ChronoGeo({ active }: { active: boolean }) {
   useFrame((state, delta) => {
     const spd = active ? 3.5 : 1.4
     if (handRef.current) handRef.current.rotation.z -= 2.4 * spd * delta
+    if (crownRef.current) crownRef.current.rotation.z += 0.3 * spd * delta
     if (innerRef.current) {
       const mat = innerRef.current.material as THREE.MeshStandardMaterial
       mat.emissiveIntensity = (active ? 4.0 : 2.2) + Math.sin(state.clock.elapsedTime * 4) * 0.6
@@ -775,24 +839,34 @@ function ChronoGeo({ active }: { active: boolean }) {
     <group rotation={[0.15, 0, 0]}>
       <mesh position={[0, 1.1, 0]}>
         <boxGeometry args={[0.25, 0.18, 0.05]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" toneMapped={false} />
       </mesh>
       <mesh ref={innerRef}>
         <torusGeometry args={[0.95, 0.06, 12, 64]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={3} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={3} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <torusGeometry args={[1.05, 0.012, 6, 64]} />
         <meshBasicMaterial color="#00f0ff" transparent opacity={0.45} />
       </mesh>
       {subTicks.map((ln, i) => <primitive key={i} object={ln} />)}
+      <group ref={crownRef}>
+        {[0, 1, 2, 3].map(i => (
+          <mesh key={i} rotation={[0, 0, i * Math.PI / 2]}>
+            <ringGeometry args={[1.18, 1.26, 48, 1, 0, Math.PI * 0.38]} />
+            <meshBasicMaterial color={HUE.info} transparent opacity={0.45} side={THREE.DoubleSide}
+              blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
+          </mesh>
+        ))}
+      </group>
+      <Glow color="#ff8a00" scale={0.9} opacity={0.55} />
       <mesh ref={handRef}>
         <boxGeometry args={[0.04, 0.78, 0.02]} />
-        <meshStandardMaterial emissive="#ff8a00" emissiveIntensity={5} color="#1a0a00" />
+        <meshStandardMaterial emissive="#ff8a00" emissiveIntensity={5} color="#1a0a00" toneMapped={false} />
       </mesh>
       <mesh>
         <sphereGeometry args={[0.07, 16, 16]} />
-        <meshStandardMaterial emissive="#ff8a00" emissiveIntensity={4} color="#1a0a00" />
+        <meshStandardMaterial emissive="#ff8a00" emissiveIntensity={4} color="#1a0a00" toneMapped={false} />
       </mesh>
     </group>
   )
@@ -808,6 +882,7 @@ function HexDieGeo({ active }: { active: boolean }) {
   const ring1Ref = useRef<THREE.Mesh>(null)
   const ring2Ref = useRef<THREE.Mesh>(null)
   const microRef = useRef<THREE.InstancedMesh>(null)
+  const packetRef = useRef<THREE.InstancedMesh>(null)
   const dummy    = useMemo(() => new THREE.Object3D(), [])
 
   const hexFrames = useMemo(() => [0.65, 1.05, 1.45].map((r, i) => {
@@ -853,13 +928,28 @@ function HexDieGeo({ active }: { active: boolean }) {
       }
       microRef.current.instanceMatrix.needsUpdate = true
     }
+
+    if (packetRef.current) {
+      // Dos paquetes por pin, del borde hacia el die: datos entrando al núcleo.
+      const t = state.clock.elapsedTime * (active ? 0.9 : 0.5)
+      for (let i = 0; i < 12; i++) {
+        const angle = ((i % 6) / 6) * Math.PI * 2
+        const k = (t + (i < 6 ? 0 : 0.5) + (i % 6) * 0.13) % 1
+        const r = 1.4 * (1 - k) + 0.4 * k
+        dummy.position.set(Math.cos(angle) * r, 0, Math.sin(angle) * r)
+        dummy.scale.setScalar(0.5 + Math.sin(k * Math.PI) * 0.7)
+        dummy.updateMatrix()
+        packetRef.current.setMatrixAt(i, dummy.matrix)
+      }
+      packetRef.current.instanceMatrix.needsUpdate = true
+    }
   })
 
   return (
     <group ref={groupRef} rotation={[Math.PI / 8, 0, 0]}>
       <mesh ref={dieRef}>
         <cylinderGeometry args={[0.38, 0.38, 0.07, 6]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <cylinderGeometry args={[0.40, 0.40, 0.085, 6]} />
@@ -867,9 +957,14 @@ function HexDieGeo({ active }: { active: boolean }) {
       </mesh>
       {hexFrames.map((ln, i) => <primitive key={i} object={ln} />)}
       {pinLines.map((ln, i) => <primitive key={i} object={ln} />)}
+      <instancedMesh ref={packetRef} args={[undefined, undefined, 12]}>
+        <sphereGeometry args={[0.035, 8, 8]} />
+        <meshBasicMaterial color="#ffffff" toneMapped={false} />
+      </instancedMesh>
+      <Glow scale={1.4} opacity={0.5} />
       <instancedMesh ref={microRef} args={[undefined, undefined, 12]}>
         <boxGeometry args={[0.07, 0.07, 0.07]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={3} color="#001520" />
+        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={3} color="#001520" toneMapped={false} />
       </instancedMesh>
       <mesh ref={ring1Ref}>
         <torusGeometry args={[1.1, 0.012, 6, 48]} />
@@ -972,7 +1067,7 @@ function VaultGeo({ active }: { active: boolean }) {
           RingHologram dibuja en el origen del grupo. */}
       <mesh ref={coreRef}>
         <icosahedronGeometry args={[0.2, 1]} />
-        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={1.4} color="#001520" wireframe />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={1.4} color="#001520" wireframe toneMapped={false} />
       </mesh>
 
       <lineSegments geometry={edgeGeom}>
@@ -980,10 +1075,13 @@ function VaultGeo({ active }: { active: boolean }) {
       </lineSegments>
 
       {nodes.map((n, i) => (
-        <mesh key={i} position={n.pos}>
-          <icosahedronGeometry args={[n.size, 1]} />
-          <meshBasicMaterial color={n.hue} transparent opacity={active ? 0.95 : 0.7} toneMapped={false} />
-        </mesh>
+        <group key={i} position={n.pos}>
+          <mesh>
+            <icosahedronGeometry args={[n.size, 1]} />
+            <meshBasicMaterial color={n.hue} transparent opacity={active ? 0.95 : 0.7} toneMapped={false} />
+          </mesh>
+          <Glow color={n.hue} scale={n.size * 7} opacity={active ? 0.7 : 0.45} />
+        </group>
       ))}
     </group>
   )
@@ -1038,13 +1136,21 @@ interface RingHologramProps {
   onSelect: (mode: Mode) => void
   onActivate: (mode: Mode) => void
   isActive: boolean
+  /** Posición en su anillo: da el código de slot de la etiqueta y siembra el pedestal. */
+  index: number
   children: React.ReactNode
 }
 function RingHologram({
   mode, slotAngle, containerAngleRef,
-  springEntrance, onSelect, onActivate, isActive, children,
+  springEntrance, onSelect, onActivate, isActive, index, children,
 }: RingHologramProps) {
   const groupRef = useRef<THREE.Group>(null)
+  // Foco vivo (0 lateral → 1 de frente) para el kit holográfico: se escribe
+  // aquí cada frame y lo leen pedestal, retícula y halo sin re-render.
+  const focusRef = useRef(0)
+  const activeRef = useRef(isActive)
+  activeRef.current = isActive
+  const glowRef = useRef<THREE.Sprite>(null)
   const matRef = useRef<{ scale: number }>({ scale: springEntrance ? 0.1 : 0.65 })
   const [hovered, setHovered] = useState(false)
   const pinchZoomProgress = useJarvisStore(s => s.pinchZoomProgress)
@@ -1061,6 +1167,11 @@ function RingHologram({
     const worldSlotAngle = wrapPi(slotAngle - containerAngleRef.current)
     const angleFromFront = Math.abs(worldSlotAngle)
     const focus = Math.max(0, Math.cos(angleFromFront))
+    focusRef.current = focus
+    if (glowRef.current) {
+      const gm = glowRef.current.material as THREE.SpriteMaterial
+      gm.opacity = 0.05 + 0.2 * focus * focus + (isActive ? 0.08 : 0)
+    }
     const r = R_IDLE + (R_ACTIVE - R_IDLE) * focus
     let targetScale = 0.65 + 0.55 * focus
     const visible = angleFromFront < (100 * Math.PI / 180)
@@ -1139,12 +1250,24 @@ function RingHologram({
       onPointerOver={e => { e.stopPropagation(); setHovered(true); document.body.style.cursor = 'pointer' }}
       onPointerOut={e => { e.stopPropagation(); setHovered(false); document.body.style.cursor = 'auto' }}
     >
+      {/* Halo de fondo: el "bloom" falso del kit (ver holoKit.tsx). */}
+      <sprite ref={glowRef} scale={4.6} raycast={() => null}>
+        <spriteMaterial map={getGlowTexture()} color={HUE.deep} transparent opacity={0.1}
+          blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
+      </sprite>
+      <HoloBase focusRef={focusRef} activeRef={activeRef} seed={index} />
+      <HoloReticle focusRef={focusRef} activeRef={activeRef} />
       <Float speed={0.9} floatIntensity={0.28} rotationIntensity={0.04}>
         {children}
       </Float>
-      <Html center distanceFactor={10} zIndexRange={[0, 0]}
+      {/* Bajo el pedestal, no en el origen: en el centro tapaba el holograma
+          (y el núcleo de VaultGeo la tapaba a ella). */}
+      <Html center position={[0, -1.95, 0]} distanceFactor={10} zIndexRange={[0, 0]}
         style={{ pointerEvents: 'none', opacity: isActive || hovered ? 1 : 0, transition: 'opacity 0.18s' }}>
-        <span className="hologram-label">{modeMeta[mode].label}</span>
+        <span className="hologram-label">
+          <span className="hologram-label__code">{String(index + 1).padStart(2, '0')}</span>
+          {modeMeta[mode].label}
+        </span>
       </Html>
     </group>
   )
@@ -1293,7 +1416,7 @@ function MainRing({ targetAngle, targetRef, containerAngleRef, activeRingMode, z
   return (
     <RingGroup targetAngle={targetAngle} targetRef={targetRef}>
       <RingAngleProbe containerAngleRef={containerAngleRef} />
-      {MAIN_ORDER.map(mode => {
+      {MAIN_ORDER.map((mode, index) => {
         const isActive = activeRingMode === mode && !zoomedMode
         return (
           <RingHologram
@@ -1302,6 +1425,7 @@ function MainRing({ targetAngle, targetRef, containerAngleRef, activeRingMode, z
             slotAngle={MAIN_ANGLES[mode]}
             containerAngleRef={containerAngleRef}
             isActive={isActive}
+            index={index}
             onSelect={onSelect}
             onActivate={onActivate}
           >
@@ -1331,7 +1455,7 @@ function HouseSubRing({ targetAngle, targetRef, containerAngleRef, activeRingMod
   return (
     <RingGroup targetAngle={targetAngle} targetRef={targetRef}>
       <RingAngleProbe containerAngleRef={containerAngleRef} />
-      {SUB_ORDER.map(mode => {
+      {SUB_ORDER.map((mode, index) => {
         const isActive = activeRingMode === mode && !zoomedMode
         return (
           <RingHologram
@@ -1340,6 +1464,7 @@ function HouseSubRing({ targetAngle, targetRef, containerAngleRef, activeRingMod
             slotAngle={SUB_ANGLES[mode as 'plan3d'|'space'|'plan2d']}
             containerAngleRef={containerAngleRef}
             isActive={isActive}
+            index={index}
             springEntrance
             onSelect={onSelect}
             onActivate={onActivate}
@@ -1368,7 +1493,7 @@ function UtilsSubRing({ targetAngle, targetRef, containerAngleRef, activeRingMod
   return (
     <RingGroup targetAngle={targetAngle} targetRef={targetRef}>
       <RingAngleProbe containerAngleRef={containerAngleRef} />
-      {UTILS_SUB_ORDER.map(mode => {
+      {UTILS_SUB_ORDER.map((mode, index) => {
         const isActive = activeRingMode === mode && !zoomedMode
         return (
           <RingHologram
@@ -1377,6 +1502,7 @@ function UtilsSubRing({ targetAngle, targetRef, containerAngleRef, activeRingMod
             slotAngle={UTILS_ANGLES[mode as 'timer'|'chrono']}
             containerAngleRef={containerAngleRef}
             isActive={isActive}
+            index={index}
             springEntrance
             onSelect={onSelect}
             onActivate={onActivate}
@@ -1395,7 +1521,9 @@ function UtilsSubRing({ targetAngle, targetRef, containerAngleRef, activeRingMod
 function SceneContent() {
   return (
     <>
+      <HoloClock />
       <CosmicBackground />
+      <HoloFloor />
       <ambientLight color="#00f0ff" intensity={0.12} />
       <pointLight position={[0, 8, -4]} color="#0059ff" intensity={1.2} />
       <pointLight position={[0, -5, -8]} color="#00f0ff" intensity={0.4} />

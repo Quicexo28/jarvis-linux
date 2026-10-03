@@ -107,7 +107,7 @@ export async function handleHabit(req, res) {
 }
 
 export async function handleDayBrief(_req, res) {
-  return json(res, 200, { ok: true, ...dayBrief() })
+  return json(res, 200, { ok: true, ...(await dayBrief()) })
 }
 
 export async function handleMorningBriefing(req, res) {

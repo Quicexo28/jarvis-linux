@@ -21,6 +21,10 @@ export type NativeBridge = {
   battery(): string
   /** Bring the Moonlight app to the front. "launched" | "store" | "error". */
   openMoonlight?(): string
+  /** Base64 SPKI of the Keystore key for risky actions; "" if unsupported. */
+  elevationKey?(): string
+  /** Fingerprint/PIN prompt, then sign; result on window.__jarvisSigned. */
+  signChallenge?(challengeB64: string): void
 }
 
 declare global {
@@ -28,7 +32,38 @@ declare global {
     JarvisNative?: NativeBridge
     __jarvisVoiceResult?: (text: string) => void
     __jarvisVoiceError?: (reason: string) => void
+    __jarvisSigned?: (signature: string | null, error: string | null) => void
   }
+}
+
+/**
+ * Public key of this device's hardware-backed key for risky actions, or null
+ * in a browser / an APK older than this bridge / Android < 11.
+ */
+export function elevationKey(): string | null {
+  try {
+    const key = nativeBridge()?.elevationKey?.()
+    return key ? key : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Ask for fingerprint or device PIN and sign `challengeB64` with the Keystore
+ * key. Rejects with a Spanish reason (cancelled, no biometrics, …).
+ */
+export function signChallenge(challengeB64: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const bridge = nativeBridge()
+    if (!bridge?.signChallenge) { reject(new Error('Esta app no admite autorización con huella. Actualiza el APK.')); return }
+    window.__jarvisSigned = (signature, error) => {
+      window.__jarvisSigned = undefined
+      if (signature) resolve(signature)
+      else reject(new Error(error || 'Autorización cancelada.'))
+    }
+    try { bridge.signChallenge(challengeB64) } catch { reject(new Error('No se pudo abrir la huella.')) }
+  })
 }
 
 export function nativeBridge(): NativeBridge | null {

@@ -49,7 +49,7 @@ export const S: Record<string, CSS> = {
   column: { width: '100%', maxWidth: 620, margin: '0 auto', padding: '16px 16px 24px', flex: 1, display: 'flex', flexDirection: 'column' },
   bar: { width: '100%', maxWidth: 620, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
   nav: { borderTop: `1px solid ${T.lineSoft}`, background: T.surface, paddingBottom: 'env(safe-area-inset-bottom)' },
-  navInner: { width: '100%', maxWidth: 620, margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' },
+  navInner: { width: '100%', maxWidth: 620, margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)' },
   navItem: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
     padding: '10px 0 8px', background: 'none', border: 'none', cursor: 'pointer',

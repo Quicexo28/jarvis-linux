@@ -34,7 +34,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, append
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { runCommand, gitCheckpoint, scheduleRestart } from './selfCode.js'
-import { getCodeDir } from './claudeCli.js'
+import { getCodeDir, sessionAsk } from './claudeCli.js'
 import { notifyJarvis } from './cloudStorage.js'
 import { requestClient as skillBusRequest, hasClient as skillBusHasClient } from './skillBus.js'
 
@@ -371,6 +371,7 @@ async function runJob(rec) {
       rec.error = res.error
       rec.endedAt = new Date().toISOString()
       writeJob(rec)
+      if (rec.incidentId) reportFixResult(rec, false)
       await announce(`⚠️ Autodesarrollo fallido (${rec.error}).\n${rec.instruction.slice(0, 200)}\n${rec.summary || ''}`)
       return rec
     }
@@ -383,7 +384,11 @@ async function runJob(rec) {
     else rec.applied = []
 
     rec.status = rec.applyError ? 'failed' : 'done'
+    // A capability built for a pending request: run that request now if nothing
+    // needs a restart, otherwise after the restart (resumeFollowUps at boot).
+    if (rec.followUp && rec.status === 'done') rec.followUpPending = true
     writeJob(rec)
+    if (rec.incidentId) reportFixResult(rec, rec.status === 'done')
 
     const files = rec.changedFiles.length
     await announce(
@@ -396,6 +401,7 @@ async function runJob(rec) {
     // Backend restart LAST: it kills this process (systemd Restart=on-failure
     // brings it back). The record is already on disk, so status survives.
     if (rec.restartPending && !FAKE()) scheduleRestart(1500)
+    else if (rec.followUpPending) await runFollowUp(rec)
     return rec
   } catch (e) {
     rec.status = 'failed'
@@ -415,8 +421,19 @@ async function runJob(rec) {
  *
  * @param {{ instruction: string, model?: string, requestedBy?: string }} opts
  */
-export async function startDevJob({ instruction, model, requestedBy } = {}) {
-  const text = String(instruction || '').trim()
+export async function startDevJob({ instruction, model, requestedBy, followUp, incidentId } = {}) {
+  const followUpText = String(followUp || '').trim()
+  const base = String(instruction || '').trim()
+  // When the change exists to make a pending request possible, the agent must
+  // know the request — and that it will be retried through the VOICE tools, so
+  // the capability has to land where the voice brain can reach it.
+  const text = base && followUpText
+    ? `${base}\n\nPARA QUÉ: el señor pidió "${followUpText}" y Jarvis no tenía forma de hacerlo. ` +
+      'En cuanto termines, el sistema reintentará esa petición AUTOMÁTICAMENTE desde la sesión de voz, ' +
+      'así que la capacidad tiene que quedar expuesta como herramienta MCP en backend/mcp-server/jarvis-mcp.js ' +
+      '(con su ruta en backend/src/routes.js), clasificada en backend/src/lib/toolRisk.js si no es una simple escritura, ' +
+      'y con un test. No ejecutes tú la petición del señor: solo construye la capacidad.'
+    : base
   if (!text) return { ok: false, error: 'empty_instruction', spoken: 'No entendí qué debo cambiar en mi código, señor.' }
   if (active) {
     return {
@@ -452,6 +469,8 @@ export async function startDevJob({ instruction, model, requestedBy } = {}) {
     changedFiles: [],
     applied: [],
     error: null,
+    followUp: followUpText || null,
+    incidentId: incidentId ?? null,
   }
   writeJob(rec)
   appendLog(rec.id, `# ${rec.startedAt} model=${rec.model} checkpoint=${rec.checkpoint}\n# ${text}\n`)
@@ -465,8 +484,71 @@ export async function startDevJob({ instruction, model, requestedBy } = {}) {
     jobId: rec.id,
     checkpoint: rec.checkpoint,
     model: rec.model,
-    spoken: 'Me pongo con ello, señor. Le aviso en cuanto termine y lo deje aplicado.',
+    spoken: followUpText
+      ? 'Todavía no sé hacer eso, señor, así que voy a aprender. En cuanto quede listo lo hago yo solo.'
+      : 'Me pongo con ello, señor. Le aviso en cuanto termine y lo deje aplicado.',
   }
+}
+
+// --- follow-ups and incident results ----------------------------------------
+
+function reportFixResult(rec, ok) {
+  import('./selfHeal.js')
+    .then((m) => m.onFixJobDone(rec.incidentId, { ok, summary: rec.summary || rec.error, jobId: rec.id }))
+    .catch(() => {})
+}
+
+const FOLLOW_UP_MAX_AGE_MS = 2 * 3600e3
+
+/**
+ * Retry the request the capability was built for, through the normal voice
+ * session (same prompt, same MCP tools, same risk gate), and say the result.
+ * Claims the job BEFORE asking, so a crash loop can't run it twice.
+ */
+async function runFollowUp(rec) {
+  rec.followUpPending = false
+  rec.followUpAt = new Date().toISOString()
+  writeJob(rec)
+  try {
+    // Dynamic: speech.js imports this module, so a static import is a cycle.
+    const { SPEECH_SYSTEM_PROMPT } = await import('../handlers/speech.js')
+    const { deliver } = await import('./proactive.js')
+    const msg =
+      `[TAREA PENDIENTE] Hace un rato el señor pidió: "${rec.followUp}". No tenías forma de hacerlo, ` +
+      `así que se modificó tu código para añadir la capacidad (resumen del cambio: ${rec.summary || 'sin resumen'}). ` +
+      'Hazlo AHORA con tus herramientas. Responde en una o dos frases qué hiciste; si aun así no se puede, dilo con franqueza.'
+    const reply = await sessionAsk(msg, {
+      systemPromptText: SPEECH_SYSTEM_PROMPT,
+      timeoutMs: 90000,
+      fallbackReply: '',
+    })
+    rec.followUpReply = reply || null
+    writeJob(rec)
+    const text = reply
+      ? `Ya aprendí a hacer lo que me pidió. ${reply}`
+      : 'Terminé de añadir la capacidad que me pidió, señor, pero al intentarlo no obtuve respuesta. Pídamelo de nuevo cuando quiera.'
+    await deliver(text)
+  } catch (e) {
+    rec.followUpError = String(e?.message || e)
+    writeJob(rec)
+    console.warn('[devAgent] follow-up failed —', rec.followUpError)
+  }
+}
+
+/** At boot: run follow-ups whose job finished by restarting the backend. */
+export function resumeFollowUps(delayMs = 25000) {
+  if (FAKE()) return
+  const pending = listDevJobs(10).filter((j) =>
+    j.followUpPending && j.status === 'done' && j.endedAt &&
+    Date.now() - Date.parse(j.endedAt) < FOLLOW_UP_MAX_AGE_MS)
+  if (!pending.length) return
+  // Let the warmup prime the voice session first; the queue would serialize
+  // anyway, but this keeps the first real turn from waiting behind it.
+  const t = setTimeout(() => {
+    for (const rec of pending) runFollowUp(rec).catch(() => {})
+  }, delayMs)
+  t.unref?.()
+  console.log(`[devAgent] ${pending.length} tarea(s) pendiente(s) tras autodesarrollo — se ejecutan en ${Math.round(delayMs / 1000)} s`)
 }
 
 /** Kill the running job. The checkpoint stays, so a rollback is still possible. */

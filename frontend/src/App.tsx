@@ -18,6 +18,7 @@ console.log('[boot] label=', getWindowLabel(), 'search=', window.location.search
 import { DormantLayer } from './components/DormantLayer'
 import { RadialTransition } from './components/RadialTransition'
 import { AwakeApp } from './AwakeApp'
+import { prewarmHandLandmarker } from './gestures/landmarker'
 import { MobileClient } from './modes/MobileClient'
 import { isNativeApp, openNativeSettings } from './modes/remote/native'
 import {
@@ -31,6 +32,12 @@ import {
 import './App.css'
 
 type MobileState = 'checking' | 'mobile' | 'expired' | 'desktop'
+
+/** Touch-first and narrow: a phone (or a small tablet) held in the hand. */
+function isPhone(): boolean {
+  const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false
+  return coarse && Math.min(window.screen.width, window.screen.height) < 820
+}
 
 function hasMobileSignal(): boolean {
   const urlToken = new URLSearchParams(window.location.search).get('token')
@@ -53,7 +60,20 @@ export default function App() {
   )
   // Modo web completo: ?ui=full en la URL del token persiste la GUI de
   // escritorio (AwakeApp) para este navegador remoto; ?ui=mobile la revierte.
-  const [fullUi, setFullUi] = useState(() => localStorage.getItem('jarvis.ui.mode') === 'full')
+  // Un teléfono NUNCA recibe la GUI de escritorio aunque tenga `full`
+  // guardado: el anillo 3D no se maneja con el dedo, y un enlace `ui=full`
+  // abierto una vez dejaba el móvil atascado ahí para siempre.
+  const [fullUi, setFullUi] = useState(() => localStorage.getItem('jarvis.ui.mode') === 'full' && !isPhone())
+
+  // Precalentar el modelo de gestos: construir el grafo de MediaPipe cuesta
+  // 12-79 s y antes se pagaba al pulsar «activar gestos». Solo en el escritorio
+  // Tauri (la GUI remota/móvil no usa gestos), y con margen para que el arranque
+  // de la UI termine antes de ocupar el main thread.
+  useEffect(() => {
+    if (!isTauri() || mobileState !== 'desktop') return
+    const t = setTimeout(prewarmHandLandmarker, 8000)
+    return () => clearTimeout(t)
+  }, [mobileState])
 
   useEffect(() => {
     if (mobileState !== 'checking') return
@@ -67,7 +87,7 @@ export default function App() {
         setApiBase(window.location.origin)
         setMobileToken(urlToken)
         const uiParam = new URLSearchParams(window.location.search).get('ui')
-        if (uiParam === 'full') {
+        if (uiParam === 'full' && !isPhone()) {
           localStorage.setItem('jarvis.ui.mode', 'full')
           setFullUi(true)
         } else if (uiParam === 'mobile') {

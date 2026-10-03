@@ -30,7 +30,11 @@ export function hashPassword(plain, saltHex) {
 }
 
 function verifyPassword(plain) {
-  const stored = process.env.JARVIS_CODE_PASSWORD_HASH
+  return verifyScrypt(plain, process.env.JARVIS_CODE_PASSWORD_HASH)
+}
+
+/** Check `plain` against a "scrypt$<salt>$<hash>" string. Timing-safe; false on any malformed input. */
+export function verifyScrypt(plain, stored) {
   if (!stored) return false
   const parts = stored.split('$')
   if (parts.length !== 3 || parts[0] !== 'scrypt') return false

@@ -22,116 +22,50 @@ import {
 
 const BACKEND = process['env']['JARVIS_BACKEND_URL'] || 'http://localhost:8788'
 
+/** Backend route for an action of a consolidated tool (timer/chrono). */
+function actionRoute(kind, action) {
+  const a = String(action || '').toLowerCase()
+  const actions = kind === 'timer'
+    ? ['start', 'add', 'pause', 'resume', 'reset', 'cancel', 'list']
+    : ['start', 'pause', 'resume', 'reset', 'lap', 'cancel', 'list']
+  if (!actions.includes(a)) throw new Error(`acción inválida para ${kind}: ${action} (usa ${actions.join(', ')})`)
+  return a === 'list'
+    ? { method: 'GET', path: `/api/skills/${kind}/list` }
+    : { method: 'POST', path: `/api/skills/${kind}/${a}` }
+}
+
 const TOOLS = [
+  // Timer and chrono are ONE tool each with an `action` (they were 7 + 7). Fewer,
+  // broader tools make the model's choice easier and shrink the catalogue; the
+  // backend routes stay the same, `route` picks one per action.
   {
-    name: 'timer_start',
-    description: 'Inicia un temporizador (cuenta regresiva con alarma local). Para "5 minutos" pasa seconds=300.',
+    name: 'timer',
+    description: 'Temporizadores (cuenta regresiva con alarma local). action: start (requiere seconds; "5 minutos" = 300), add (suma seconds a uno activo), pause, resume, reset (vuelve a su duración original), cancel (all=true cancela todos), list. label es opcional y distingue entre varios ("pasta").',
     inputSchema: {
       type: 'object',
       properties: {
-        seconds: { type: 'integer', minimum: 1, description: 'Duración en segundos enteros' },
-        label:   { type: 'string',  description: 'Etiqueta opcional (objeto/actividad, ej "pasta")' },
+        action:  { type: 'string', enum: ['start', 'add', 'pause', 'resume', 'reset', 'cancel', 'list'] },
+        seconds: { type: 'integer', minimum: 1, description: 'Duración (start) o tiempo a sumar (add), en segundos enteros' },
+        label:   { type: 'string', description: 'Etiqueta opcional (objeto/actividad)' },
+        all:     { type: 'boolean', description: 'Solo con cancel: cancela todos' },
       },
-      required: ['seconds'],
+      required: ['action'],
     },
-    method: 'POST', path: '/api/skills/timer/start',
+    route: (a) => actionRoute('timer', a.action),
   },
   {
-    name: 'timer_pause',
-    description: 'Pausa un temporizador activo. Si hay varios, indica label.',
-    inputSchema: { type: 'object', properties: { label: { type: 'string' } } },
-    method: 'POST', path: '/api/skills/timer/pause',
-  },
-  {
-    name: 'timer_resume',
-    description: 'Reanuda un temporizador pausado.',
-    inputSchema: { type: 'object', properties: { label: { type: 'string' } } },
-    method: 'POST', path: '/api/skills/timer/resume',
-  },
-  {
-    name: 'timer_add',
-    description: 'Agrega tiempo a un temporizador activo. seconds = cuánto sumar.',
+    name: 'chrono',
+    description: 'Cronómetros (cuenta progresiva con vueltas). action: start, pause, resume, reset (a cero), lap (marca vuelta), cancel (all=true cancela todos), list. label opcional distingue entre varios.',
     inputSchema: {
       type: 'object',
       properties: {
-        seconds: { type: 'integer', minimum: 1 },
-        label:   { type: 'string' },
+        action: { type: 'string', enum: ['start', 'pause', 'resume', 'reset', 'lap', 'cancel', 'list'] },
+        label:  { type: 'string' },
+        all:    { type: 'boolean', description: 'Solo con cancel: cancela todos' },
       },
-      required: ['seconds'],
+      required: ['action'],
     },
-    method: 'POST', path: '/api/skills/timer/add',
-  },
-  {
-    name: 'timer_cancel',
-    description: 'Cancela temporizador. all=true para cancelar todos.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        label: { type: 'string' },
-        all:   { type: 'boolean' },
-      },
-    },
-    method: 'POST', path: '/api/skills/timer/cancel',
-  },
-  {
-    name: 'timer_reset',
-    description: 'Reinicia un temporizador a su duración original.',
-    inputSchema: { type: 'object', properties: { label: { type: 'string' } } },
-    method: 'POST', path: '/api/skills/timer/reset',
-  },
-  {
-    name: 'timer_list',
-    description: 'Lista los temporizadores activos.',
-    inputSchema: { type: 'object', properties: {} },
-    method: 'GET', path: '/api/skills/timer/list',
-  },
-  {
-    name: 'chrono_start',
-    description: 'Inicia un cronómetro (cuenta progresiva con vueltas).',
-    inputSchema: { type: 'object', properties: { label: { type: 'string' } } },
-    method: 'POST', path: '/api/skills/chrono/start',
-  },
-  {
-    name: 'chrono_pause',
-    description: 'Pausa un cronómetro.',
-    inputSchema: { type: 'object', properties: { label: { type: 'string' } } },
-    method: 'POST', path: '/api/skills/chrono/pause',
-  },
-  {
-    name: 'chrono_resume',
-    description: 'Reanuda un cronómetro pausado.',
-    inputSchema: { type: 'object', properties: { label: { type: 'string' } } },
-    method: 'POST', path: '/api/skills/chrono/resume',
-  },
-  {
-    name: 'chrono_reset',
-    description: 'Pone un cronómetro en cero.',
-    inputSchema: { type: 'object', properties: { label: { type: 'string' } } },
-    method: 'POST', path: '/api/skills/chrono/reset',
-  },
-  {
-    name: 'chrono_lap',
-    description: 'Marca una vuelta en un cronómetro.',
-    inputSchema: { type: 'object', properties: { label: { type: 'string' } } },
-    method: 'POST', path: '/api/skills/chrono/lap',
-  },
-  {
-    name: 'chrono_cancel',
-    description: 'Cancela cronómetro. all=true para cancelar todos.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        label: { type: 'string' },
-        all:   { type: 'boolean' },
-      },
-    },
-    method: 'POST', path: '/api/skills/chrono/cancel',
-  },
-  {
-    name: 'chrono_list',
-    description: 'Lista los cronómetros activos.',
-    inputSchema: { type: 'object', properties: {} },
-    method: 'GET', path: '/api/skills/chrono/list',
+    route: (a) => actionRoute('chrono', a.action),
   },
   {
     name: 'reminder_create',
@@ -981,6 +915,39 @@ Para añadir sin borrar usa add_3d; para cerrar, hide_3d.`,
     postTransform: (r) => r.result ?? 'OK',
   },
 
+  /* ----- AGENTE DE ESCRITORIO: maneja ratón, teclado y pantalla del PC ----- */
+  {
+    name: 'computer_task',
+    description: 'Encarga una tarea de INTERFAZ GRÁFICA de varios pasos en este PC a un agente que la hace como una persona sentada frente al equipo: mira la pantalla, mueve el ratón, hace clic, escribe y usa atajos, hasta terminarla. Úsala para rellenar formularios, navegar una web hasta un sitio concreto, configurar algo dentro de una aplicación u operar ventanas — NO para lo que ya tiene herramienta directa (launch_app, system_media, system_window, system_volume, look_screen). Es ASÍNCRONA: devuelve un jobId al instante, el trabajo tarda minutos y el resultado se anuncia al terminar; dile al señor que te pones con ello y NO esperes. Pasa la tarea COMPLETA y literal.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'Qué debe hacerse en el equipo, en español y con todo el detalle que dio el señor.' },
+        model: { type: 'string', description: 'Modelo del agente: sonnet (default) u opus para tareas largas o delicadas.' },
+      },
+      required: ['task'],
+    },
+    method: 'POST', path: '/api/skills/computer/task',
+  },
+  {
+    name: 'computer_task_status',
+    description: 'Estado de las tareas de escritorio encargadas con computer_task. Sin id: la activa y las últimas. Con id: status (running, done, failed), resumen y error.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'jobId devuelto por computer_task (opcional).' },
+        log: { type: 'boolean', description: 'true para incluir la cola del log (solo para diagnosticar fallos).' },
+      },
+    },
+    method: 'POST', path: '/api/skills/computer/task/status',
+  },
+  {
+    name: 'computer_task_cancel',
+    description: 'Detiene la tarea de escritorio en curso (el señor dice "para", "deja el equipo", "cancela eso").',
+    inputSchema: { type: 'object', properties: {} },
+    method: 'POST', path: '/api/skills/computer/task/cancel',
+  },
+
   /* ----- AUTODESARROLLO: Jarvis modifica su propio código ----- */
   {
     name: 'code_task',
@@ -990,6 +957,7 @@ Para añadir sin borrar usa add_3d; para cerrar, hide_3d.`,
       properties: {
         instruction: { type: 'string', description: 'Qué debe cambiarse, en español y con el máximo detalle que dio el señor.' },
         model: { type: 'string', description: 'Modelo del agente: sonnet (default) u opus para cambios delicados o de arquitectura.' },
+        followUp: { type: 'string', description: 'Solo cuando el cambio es para poder cumplir una tarea que el señor acaba de pedir y que hoy no sabes hacer: su petición ORIGINAL, literal. Al terminar el cambio, el sistema la reintenta solo y le dice el resultado.' },
       },
       required: ['instruction'],
     },
@@ -1006,6 +974,67 @@ Para añadir sin borrar usa add_3d; para cerrar, hide_3d.`,
       },
     },
     method: 'POST', path: '/api/skills/code/task/status',
+  },
+  {
+    name: 'calendar_agenda',
+    description: 'Agenda del señor desde sus calendarios (solo lectura). Úsala para "¿qué tengo hoy/mañana/esta semana?", "¿a qué hora es la reunión?". days = cuántos días desde from (default 1 = hoy); from en ISO 8601 con offset (default: inicio de hoy). Devuelve eventos con inicio, fin, lugar y si son de todo el día. No crea eventos: para avisos usa reminder_create.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        days: { type: 'integer', minimum: 1, maximum: 60 },
+        from: { type: 'string', description: 'Inicio del intervalo, ISO 8601 (ej. "2026-10-03T00:00:00-05:00" para mañana).' },
+      },
+    },
+    method: 'GET', path: '/api/skills/calendar/agenda',
+  },
+  {
+    name: 'mail_inbox',
+    description: 'Lista correos del buzón del señor (solo lectura; no los marca como leídos). Por defecto los NO leídos más recientes. query busca en asunto, remitente y cuerpo; from filtra por remitente; sinceDays limita a los últimos N días. Devuelve uid, remitente, asunto, fecha. Para el contenido usa mail_read con el uid.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        unread: { type: 'boolean', description: 'false para incluir también los leídos (default true).' },
+        limit: { type: 'integer', minimum: 1, maximum: 25 },
+        query: { type: 'string' },
+        from: { type: 'string' },
+        sinceDays: { type: 'integer', minimum: 1 },
+      },
+    },
+    method: 'POST', path: '/api/skills/mail/inbox',
+  },
+  {
+    name: 'mail_read',
+    description: 'Lee un correo concreto por uid (de mail_inbox): remitente, asunto, fecha y texto del cuerpo (truncado). No lo marca como leído. Resume en voz; nunca leas direcciones ni enlaces.',
+    inputSchema: {
+      type: 'object',
+      properties: { uid: { type: 'integer' } },
+      required: ['uid'],
+    },
+    method: 'POST', path: '/api/skills/mail/read',
+  },
+  {
+    name: 'self_diagnose',
+    description: 'Autodiagnóstico de Jarvis: sondea AHORA los servicios (systemd), la transcripción y, con cli=true, el binario de Claude, y devuelve los incidentes abiertos con su código (JRV-…), qué falla y qué se hizo. Úsala cuando el señor pregunte si algo falla, cómo estás, o por qué algo no funciona.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cli: { type: 'boolean', description: 'true para comprobar también que el binario de Claude arranca (tarda unos segundos).' },
+      },
+    },
+    method: 'POST', path: '/api/skills/health/diagnose',
+  },
+  {
+    name: 'self_heal',
+    description: 'Actúa sobre un incidente del autodiagnóstico. action=fix lanza el agente de autodesarrollo para arreglar la causa en el código (asíncrono, avisa al terminar; solo cuando el señor lo pide). action=dismiss lo descarta (no se vuelve a avisar).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'Número del incidente (#id de self_diagnose).' },
+        action: { type: 'string', enum: ['fix', 'dismiss'] },
+      },
+      required: ['id', 'action'],
+    },
+    method: 'POST', path: '/api/skills/code/heal',
   },
   {
     name: 'code_run',
@@ -1063,6 +1092,70 @@ Para añadir sin borrar usa add_3d; para cerrar, hide_3d.`,
     inputSchema: { type: 'object', properties: {} },
     method: 'POST', path: '/api/skills/vision/camera', image: true,
   },
+  /* ----- Agent Hub: agentes Claude Code (míos y de Jarvis) ----- */
+  {
+    name: 'claude_agents',
+    description: 'Lista los agentes Claude Code del señor (los que abrió él en terminal y los que lanzaste tú): en qué trabaja cada uno, estado (working=trabajando, blocked=bloqueado y necesita algo, idle=terminó su turno y espera, ended=cerrado, error), resumen de lo último que dijo, y el uso de la cuenta (porcentaje de la ventana de 5 horas y de la semana). Úsalo para "cómo van mis agentes", "qué está haciendo Claude", "cuánto uso me queda". all=true incluye los cerrados recientes.',
+    inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Incluir agentes ya cerrados' } } },
+    method: 'GET', path: '/api/skills/claude/list',
+  },
+  {
+    name: 'claude_agent_launch',
+    description: 'Lanza un agente Claude Code NUEVO que trabaja en segundo plano sobre un proyecto del señor (programar, investigar el repo, arreglar algo). Tarda minutos. Para cambios en TU propio código usa code_task, no esto. project = nombre del proyecto como lo dice el señor ("app gym", "pixelpoly") o ruta absoluta. notify=true SOLO si el señor pidió que le avises al terminar.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'Instrucción completa y literal de lo que pidió el señor' },
+        project: { type: 'string', description: 'Nombre del proyecto o ruta absoluta' },
+        label: { type: 'string', description: 'Nombre corto para reconocerlo luego, ej "fix login"' },
+        model: { type: 'string', enum: ['sonnet', 'opus', 'haiku', 'fable'], description: 'Por defecto sonnet; opus para tareas difíciles' },
+        notify: { type: 'boolean', description: 'Avisar al señor cuando termine' },
+      },
+      required: ['task', 'project'],
+    },
+    method: 'POST', path: '/api/skills/claude/launch',
+  },
+  {
+    name: 'claude_agent_send',
+    description: 'Envía un mensaje o nueva instrucción a un agente Claude existente (o reanuda uno cerrado). agent = id o descripción ("el del login", "el de pixelpoly", "último"). No sirve para sesiones abiertas en una terminal: esas se le escriben allí.',
+    inputSchema: {
+      type: 'object',
+      properties: { agent: { type: 'string' }, text: { type: 'string' } },
+      required: ['agent', 'text'],
+    },
+    method: 'POST', path: '/api/skills/claude/send',
+  },
+  {
+    name: 'claude_agent_stop',
+    description: 'Detiene un agente Claude lanzado desde el hub. agent = id o descripción.',
+    inputSchema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] },
+    method: 'POST', path: '/api/skills/claude/stop',
+  },
+  {
+    name: 'claude_agent_watch',
+    description: 'Pide que avises al señor cuando un agente Claude termine ("avísame cuando acabe el del login"). El aviso llega solo, por voz y Telegram; no esperes ni consultes en bucle. Si responde alreadyFinished, el agente ya terminó: dile el resultado ahora.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'id o descripción del agente' },
+        via: { type: 'array', items: { type: 'string', enum: ['voice', 'telegram'] }, description: 'Canales; por defecto ambos' },
+      },
+      required: ['agent'],
+    },
+    method: 'POST', path: '/api/skills/claude/watch',
+  },
+  {
+    name: 'claude_agent_unwatch',
+    description: 'Cancela un aviso pendiente de fin de agente.',
+    inputSchema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] },
+    method: 'POST', path: '/api/skills/claude/unwatch',
+  },
+  {
+    name: 'claude_agents_open',
+    description: 'Abre Agent Hub en pantalla (ventana propia) para que el señor vea sus agentes; con agent abre directamente ese agente y su conversación.',
+    inputSchema: { type: 'object', properties: { agent: { type: 'string' } } },
+    method: 'POST', path: '/api/skills/claude/open',
+  },
   {
     name: 'speak',
     description: 'Di algo en voz alta por los altavoces, sin esperar a que el señor pregunte. Úsala solo para avisos que de verdad merecen interrumpir; tu respuesta normal de cada turno ya se dice sola y NO necesita esta herramienta.',
@@ -1078,12 +1171,19 @@ Para añadir sin borrar usa add_3d; para cerrar, hide_3d.`,
 const TOOL_BY_NAME = Object.fromEntries(TOOLS.map((t) => [t.name, t]))
 
 async function callBackend(tool, args) {
-  let url = `${BACKEND}${tool.path}`
+  // Consolidated tools pick their route per call (by `action`), and the action
+  // itself is not part of the backend body.
+  const { method, path } = tool.route ? tool.route(args || {}) : tool
+  let url = `${BACKEND}${path}`
   // Tools may reshape flat args into the backend's expected body (e.g. remote_*
   // wrapping into the hub RPC envelope).
-  const payload = tool.transform ? tool.transform(args || {}) : (args || {})
+  const payload = tool.transform
+    ? tool.transform(args || {})
+    : tool.route
+      ? Object.fromEntries(Object.entries(args || {}).filter(([k]) => k !== 'action'))
+      : (args || {})
   const init = {
-    method: tool.method,
+    method,
     headers: {
       'Content-Type': 'application/json',
       // Marks this request as a MODEL tool call, so the backend can apply the
@@ -1091,14 +1191,14 @@ async function callBackend(tool, args) {
       // traffic hits the same routes and must NOT be gated by whoever spoke
       // last, so the header is what separates the two.
       'X-Jarvis-Origin': 'model',
-      'X-Jarvis-Tool': tool.name,
+      'X-Jarvis-Tool': args?.action && tool.route ? `${tool.name}.${args.action}` : tool.name,
     },
   }
-  if (tool.method !== 'GET') {
+  if (method !== 'GET') {
     init.body = JSON.stringify(payload)
-  } else if (args && Object.keys(args).length > 0) {
+  } else if (payload && Object.keys(payload).length > 0) {
     url += '?' + new URLSearchParams(
-      Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)]))
+      Object.fromEntries(Object.entries(payload).map(([k, v]) => [k, String(v)]))
     ).toString()
   }
   const res = await fetch(url, init)

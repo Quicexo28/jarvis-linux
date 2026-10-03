@@ -49,14 +49,14 @@ echo "[jarvis-install] Installing systemd user services..."
 # NOTE: service files use %h which is the native systemd home-directory specifier.
 # systemd expands it automatically — no sed replacement needed.
 # This assumes Jarvis is cloned to ~/jarvis-linux (i.e. %h/jarvis-linux).
-for svc in jarvis-backend jarvis-stt jarvis-tts jarvis-wake jarvis-ui jarvis-jarvisbot jarvis-cloudbot jarvis-notifier; do
+for svc in jarvis-backend jarvis-stt jarvis-tts jarvis-wake jarvis-embed jarvis-ui jarvis-jarvisbot jarvis-cloudbot jarvis-notifier; do
   cp "$JARVIS_DIR/scripts/linux/$svc.service" "$SYSTEMD_DIR/$svc.service"
   echo "  → $svc.service"
 done
 
 systemctl --user daemon-reload
 
-for svc in jarvis-backend jarvis-stt jarvis-tts jarvis-wake jarvis-ui jarvis-jarvisbot jarvis-cloudbot jarvis-notifier; do
+for svc in jarvis-backend jarvis-stt jarvis-tts jarvis-wake jarvis-embed jarvis-ui jarvis-jarvisbot jarvis-cloudbot jarvis-notifier; do
   systemctl --user enable "$svc"
   echo "  → enabled $svc"
 done

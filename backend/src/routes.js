@@ -6,7 +6,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { handleHealth } from './handlers/health.js'
 import { handleModules } from './handlers/modules.js'
-import { handleDeviceAction, handleJarvisTurn, handleJarvisWake, handleJarvisTts, handleFillerWav, handleAgentHealth } from './handlers/jarvis.js'
+import { handleDeviceAction, handleJarvisTurn, handleJarvisWake, handleJarvisTts, handleFillerWav, handleAgentHealth, handleElevateStatus, handleElevateEnroll, handleElevateChallenge, handleElevate } from './handlers/jarvis.js'
 import { handleTelemetry } from './handlers/telemetry.js'
 import { handleSttTranscribe } from './handlers/stt.js'
 import { handleVisionScreen, handleVisionCamera } from './handlers/vision.js'
@@ -65,6 +65,7 @@ import {
   handleRgbSet, handleRgbPreset, handleRgbPresets, handleRgbState,
   handleRunCommand, handleCodeCheckpoint, handleCodeRollback, handleRestartBackend,
   handleCodeTask, handleCodeTaskStatus, handleCodeTaskCancel,
+  handleComputerTask, handleComputerTaskStatus, handleComputerTaskCancel,
 } from './handlers/skillTools.js'
 import {
   handlePcWindows, handlePcActiveWindow, handlePcReadUi, handlePcLaunch,
@@ -76,7 +77,10 @@ import { handleSystemPower, handleSystemVolume, handleSystemBluetooth, handleSys
 import { handleClipboard, handleMedia, handleWindow, handleDnd } from './handlers/desktopControl.js'
 import { handleStudySession, handleStudyCards, handleHabit, handleDayBrief, handleMorningBriefing, handleTaskDone } from './handlers/productivity.js'
 import { handleSecurityStatus, handleSecurityUnlock } from './handlers/security.js'
+import { handleIncidentList, handleDiagnose, handleHeal } from './handlers/selfHealth.js'
+import { handleCalendarAgenda, handleMailInbox, handleMailRead } from './handlers/personal.js'
 import { handleAgentsList, handleAgentRpc, handleAgentsControl, handleAgentEvent, handleAgentWake } from './handlers/agents.js'
+import { handleClaudeList, handleClaudeLaunch, handleClaudeSend, handleClaudeStop, handleClaudeWatch, handleClaudeUnwatch, handleClaudeOpen, handleClaudeAgentEvent } from './handlers/claudeAgents.js'
 import { handleRemoteDesktop, handleDesktopPair } from './handlers/remoteDesktop.js'
 import { handleProjectorStatus, handleProjectorOn, handleProjectorOff } from './handlers/projector.js'
 
@@ -89,6 +93,10 @@ export const routes = [
   { method: 'GET',  path: '/api/system/config',        handler: handleSystemConfig },
   { method: 'POST', path: '/api/jarvis/device-action', handler: handleDeviceAction },
   { method: 'POST', path: '/api/jarvis/turn',          handler: handleJarvisTurn },
+  { method: 'POST', path: '/api/jarvis/elevate/status',    handler: handleElevateStatus },
+  { method: 'POST', path: '/api/jarvis/elevate/enroll',    handler: handleElevateEnroll },
+  { method: 'POST', path: '/api/jarvis/elevate/challenge', handler: handleElevateChallenge },
+  { method: 'POST', path: '/api/jarvis/elevate',           handler: handleElevate },
   { method: 'POST', path: '/api/jarvis/wake',          handler: handleJarvisWake },
   { method: 'GET',  path: '/api/jarvis/wake-status',    handler: handleWakeStatus },
   { method: 'POST', path: '/api/jarvis/wake-detected',  handler: handleWakeDetected },
@@ -106,6 +114,8 @@ export const routes = [
   { method: 'POST', path: '/api/jarvis/memory/forget',  handler: handleMemoryForget },
   { method: 'GET',  path: '/api/jarvis/proactive',      handler: handleProactiveStatus },
   { method: 'POST', path: '/api/jarvis/proactive/run',  handler: handleProactiveRun },
+  { method: 'GET',  path: '/api/jarvis/health/incidents', handler: handleIncidentList },
+  { method: 'POST', path: '/api/skills/health/diagnose', handler: handleDiagnose },
   { method: 'POST', path: '/api/jarvis/speculative',    handler: handleSpeculative },
   { method: 'GET',  path: '/api/speaker-id/samples',   handler: handleSpeakerIdList },
   { method: 'POST', path: '/api/speaker-id/samples',   handler: handleSpeakerIdUpload },
@@ -190,6 +200,9 @@ export const routes = [
   { method: 'POST', path: '/api/skills/study/cards',      handler: handleStudyCards },
   { method: 'POST', path: '/api/skills/habit',            handler: handleHabit },
   { method: 'GET',  path: '/api/skills/day/brief',        handler: handleDayBrief },
+  { method: 'GET',  path: '/api/skills/calendar/agenda',  handler: handleCalendarAgenda },
+  { method: 'POST', path: '/api/skills/mail/inbox',       handler: handleMailInbox },
+  { method: 'POST', path: '/api/skills/mail/read',        handler: handleMailRead },
   { method: 'POST', path: '/api/skills/day/briefing',     handler: handleMorningBriefing },
   { method: 'POST', path: '/api/skills/obsidian/task/done', handler: handleTaskDone },
   { method: 'POST', path: '/api/skills/voice/toggle',   handler: handleVoiceToggle },
@@ -257,6 +270,10 @@ export const routes = [
   { method: 'POST', path: '/api/skills/code/task',            handler: handleCodeTask },
   { method: 'POST', path: '/api/skills/code/task/status',     handler: handleCodeTaskStatus },
   { method: 'POST', path: '/api/skills/code/task/cancel',     handler: handleCodeTaskCancel },
+  { method: 'POST', path: '/api/skills/code/heal',            handler: handleHeal },
+  { method: 'POST', path: '/api/skills/computer/task',        handler: handleComputerTask },
+  { method: 'POST', path: '/api/skills/computer/task/status', handler: handleComputerTaskStatus },
+  { method: 'POST', path: '/api/skills/computer/task/cancel', handler: handleComputerTaskCancel },
 
   // Distributed agents — bridge to the Rust hub sidecar (control API :8795).
   // remote_* MCP tools call these; the hub pushes proactive events to /event.
@@ -266,6 +283,17 @@ export const routes = [
   { method: 'POST', path: '/api/agents/control', handler: handleAgentsControl },
   { method: 'POST', path: '/api/agents/wake',   handler: handleAgentWake },
   { method: 'POST', path: '/api/agents/event',  handler: handleAgentEvent },
+
+  // Agent Hub — agentes Claude Code (míos y de Jarvis). Sidecar en :8796
+  // (~/Projects/Agent Hub); el hub empuja los avisos pedidos a /claude-agents/event.
+  { method: 'GET',  path: '/api/skills/claude/list',    handler: handleClaudeList },
+  { method: 'POST', path: '/api/skills/claude/launch',  handler: handleClaudeLaunch },
+  { method: 'POST', path: '/api/skills/claude/send',    handler: handleClaudeSend },
+  { method: 'POST', path: '/api/skills/claude/stop',    handler: handleClaudeStop },
+  { method: 'POST', path: '/api/skills/claude/watch',   handler: handleClaudeWatch },
+  { method: 'POST', path: '/api/skills/claude/unwatch', handler: handleClaudeUnwatch },
+  { method: 'POST', path: '/api/skills/claude/open',    handler: handleClaudeOpen },
+  { method: 'POST', path: '/api/claude-agents/event',   handler: handleClaudeAgentEvent },
 
   // PC control — bridge to pc_control_service.py sidecar (port 8792)
   { method: 'GET',  path: '/api/pc/windows',       handler: handlePcWindows },

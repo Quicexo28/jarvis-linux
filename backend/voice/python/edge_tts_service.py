@@ -238,9 +238,13 @@ async def _edge_to_pcm_stream(
     PCM from its stdout. Feeder and reader run concurrently so first PCM
     bytes come out as soon as ffmpeg has decoded the first MP3 frame.
     """
+    # -f mp3 + tiny probe: without them ffmpeg buffers ~1 s of MP3 to sniff
+    # the format before emitting the first PCM sample (measured 1.10 s →
+    # 0.10 s on a throttled feed). edge-tts always sends MP3.
     proc = await asyncio.create_subprocess_exec(
         FFMPEG_EXE,
         '-hide_banner', '-loglevel', 'error', '-nostdin',
+        '-probesize', '32', '-analyzeduration', '0', '-f', 'mp3',
         '-i', 'pipe:0',
         '-f', 's16le', '-ar', str(SAMPLE_RATE), '-ac', '1',
         'pipe:1',

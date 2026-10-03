@@ -41,12 +41,15 @@ const DANGEROUS_PATHS = [
   '/api/skills/system/power',
   '/api/skills/system/process',
   '/api/skills/code/',
+  '/api/skills/computer/', // agente de escritorio: ratón/teclado/shell — local brain only
   '/api/skills/file/pick',
   '/api/pc/',
   '/api/security/unlock',
   '/api/speaker-id/',
   '/api/agents/rpc', // can trigger remote exec/fs — local brain only
   '/api/agents/wake', // can power on remote machines — local brain only
+  '/api/skills/claude/', // Agent Hub: lanza/ordena agentes Claude con permisos — local brain only
+  '/api/claude-agents/event', // solo el hub (loopback) avisa; remoto podría hacer hablar a Jarvis
 ]
 
 function matchesList(pathname, list) {

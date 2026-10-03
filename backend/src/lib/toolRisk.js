@@ -39,6 +39,7 @@ export const RISK = { READ: 'read', WRITE: 'write', DESTRUCTIVE: 'destructive' }
 // safe (a read wrongly treated as a write only blocks unknown speakers).
 const DESTRUCTIVE_PREFIXES = [
   '/api/skills/code/',      // Jarvis editing/restarting its own source
+  '/api/skills/computer/',  // agente que maneja ratón/teclado/pantalla del PC
   '/api/agents/rpc',        // arbitrary RPC to another machine
   '/api/agents/control',
   '/api/agents/wake',
@@ -50,6 +51,8 @@ const DESTRUCTIVE_EXACT = new Set([
   '/api/skills/system/terminal',   // arbitrary shell
   '/api/skills/system/process',    // kill processes
   '/api/skills/desktop/pair',      // pairs a remote-desktop client to this host
+  '/api/skills/claude/launch',     // lanza un agente Claude Code con permisos sobre un repo
+  '/api/skills/claude/send',       // da nuevas órdenes a un agente (o reanuda uno cerrado)
 ])
 
 // NOTE: /api/skills/vision/* is deliberately NOT listed as a read. It changes
@@ -68,10 +71,17 @@ const READ_EXACT = new Set([
   // responder "qué sabes sobre X"). `vault/focus` queda sin listar ⇒ write:
   // mueve la cámara del renderer, o sea toca la pantalla del señor.
   '/api/skills/vault/graph',
-  // El estado del día (tareas, tarjetas, hábitos) solo se lee.
-  '/api/skills/day/brief',
-  '/api/skills/code/task/status', '/api/agents/list', '/api/system/telemetry',
+  // El estado del día (tareas, tarjetas, hábitos, agenda) solo se lee. El
+  // CORREO no va aquí a propósito: igual que la visión, leer el buzón expone
+  // contenido privado, así que una voz desconocida no puede pedirlo (⇒ write).
+  '/api/skills/day/brief', '/api/skills/calendar/agenda',
+  '/api/skills/code/task/status', '/api/skills/computer/task/status', '/api/agents/list', '/api/system/telemetry',
   '/api/system/config', '/api/jarvis/stats', '/api/jarvis/memory',
+  // Autodiagnóstico: sondear y listar incidentes no cambia nada (el remedio
+  // que dispara un sondeo es el mismo que el vigilante aplica solo cada 3 min).
+  '/api/skills/health/diagnose', '/api/jarvis/health/incidents',
+  // Qué agentes Claude hay y cómo van: solo lectura (Agent Hub).
+  '/api/skills/claude/list',
 ])
 
 /**
@@ -106,6 +116,22 @@ const OWNER_FRESH_MS = () => Number(process['env']['JARVIS_RISK_OWNER_FRESH_MS']
 
 const ENABLED = () => process['env']['JARVIS_RISK_GATE'] !== '0'
 
+// A chat turn the owner authorised with tablet biometric/PIN + the special
+// password (riskAuth.js). The probe is registered by claudeCli.js — not
+// imported here, to keep this module free of the CLI's dependency tree — and
+// answers "the ONLY turn in flight right now is that authorised one". One
+// ticket = one turn; nothing carries over to the next voice turn.
+let elevatedTurnProbe = () => false
+export function setElevatedTurnProbe(fn) { elevatedTurnProbe = typeof fn === 'function' ? fn : () => false }
+
+// Last denial, so a chat turn can tell the app "this needed authorisation"
+// instead of the app having to parse the model's apology.
+let lastDenial = null
+/** Denial recorded at or after `since` (ms epoch), or null. */
+export function riskDeniedSince(since) {
+  return lastDenial && lastDenial.at >= since ? lastDenial : null
+}
+
 /**
  * Decide whether a model tool call may proceed.
  *
@@ -122,9 +148,11 @@ export function checkToolRisk(req) {
     return { allowed: true, risk, mode, reason: 'not_model_origin' }
   }
   if (!ENABLED()) return { allowed: true, risk, mode, reason: 'gate_disabled' }
+  if (elevatedTurnProbe()) return { allowed: true, risk, mode, reason: 'elevated_turn' }
 
   const policy = POLICY[mode] ?? POLICY.UNKNOWN
   if (!policy[risk]) {
+    lastDenial = { at: Date.now(), risk, reason: `${mode}_cannot_${risk}` }
     return {
       allowed: false,
       risk,
@@ -139,6 +167,7 @@ export function checkToolRisk(req) {
   if (risk === RISK.DESTRUCTIVE) {
     const ago = getLastInteractionAgo()
     if (ago > OWNER_FRESH_MS()) {
+      lastDenial = { at: Date.now(), risk, reason: 'owner_match_stale' }
       return {
         allowed: false,
         risk,

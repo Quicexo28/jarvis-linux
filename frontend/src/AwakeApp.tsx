@@ -53,6 +53,7 @@ import type { SystemTelemetry, MobileTokenInfo, MobileStatus, Mode } from './typ
 import { useModel3dStore } from './state/model3dStore'
 // wake_word gate. Tolerant of common Whisper mis-spellings of "jarvis".
 import { hasWakePhrase, stripWakePhrase } from './lib/wakePhrase'
+import { isStopOnly } from './lib/bargeIn'
 
 // Default to false; replaced at runtime by /api/system/config.
 // Server reads JARVIS_TELEMETRY_ENABLED to enable the periodic poll.
@@ -575,6 +576,16 @@ export function AwakeApp() {
     // of being dropped or waiting for the reply. This is the "Ctrl+C in the CLI"
     // behavior: aborting the turn's controller cancels the NDJSON stream AND any
     // TTS playback. (Echo never reaches here.)
+    // A bare stop order ("para", "cállate") cuts Jarvis off and ENDS there. Sent
+    // on as a new turn, the brain would answer it and Jarvis would start talking
+    // again right after being told to stop. The aborted turn's own release()
+    // clears the busy flag (its stream rejects → .finally).
+    if ((speakingRef.current || turnBusyRef.current) && isStopOnly(text)) {
+      console.log(`[turn] stop (barge-in, sin turno nuevo): "${text}"`)
+      speakAbortRef.current?.abort()
+      setCoreInput(text)
+      return
+    }
     if (speakingRef.current) {
       console.log(`[turn] barge-in (speaking, conf=${speakerConfidence?.toFixed?.(2)}): "${text}"`)
       speakAbortRef.current?.abort()
