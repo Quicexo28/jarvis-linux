@@ -77,7 +77,8 @@ async function runCase(c) {
   const res = await fetch(`${BASE}/api/jarvis/process-speech`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: c.text, ...OWNER, ...(c.speaker ?? {}) }),
+    // eval:true → recorded as source 'eval', no memory learning, no router learning.
+    body: JSON.stringify({ text: c.text, eval: true, ...OWNER, ...(c.speaker ?? {}) }),
   })
   const body = await res.json()
 

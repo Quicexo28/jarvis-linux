@@ -18,6 +18,7 @@ import { migrateStraySpeakers } from './lib/obsidian.js'
 import { startScheduler } from './lib/reminders.js'
 import { startProactiveLoop } from './lib/proactive.js'
 import { restoreStudy } from './lib/studySession.js'
+import { restoreTimers } from './lib/backendTimers.js'
 import { startBriefingLoop } from './lib/dayBrief.js'
 import { attachAgentBridge } from './agent/bridge.js'
 import { handleMobileGestureUpgrade } from './handlers/mobileGesture.js'
@@ -115,6 +116,8 @@ startScheduler()
 // a hard budget (see lib/proactive.js).
 startProactiveLoop()
 restoreStudy()
+// Timers the backend held while the UI slept (lib/backendTimers.js).
+restoreTimers()
 startBriefingLoop()
 // A self-code job that was building a missing capability restarted us to apply
 // it: now run the task the owner originally asked for.

@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { kvGet, kvSet } from './turnStore.js'
 import { voiceDisallowedTools } from './voiceTools.js'
-import { setElevatedTurnProbe } from './toolRisk.js'
+import { setElevatedTurnProbe, setTaintedTurnProbe, isUntrustedSource } from './toolRisk.js'
 import { reportIssue } from './incidentBus.js'
 
 // Which `claude` binary to spawn. Overridable because the npm-installed one can
@@ -461,8 +461,11 @@ function hashStr(s) {
 const SESSION_RESUME = () => process['env']['JARVIS_SESSION_RESUME'] !== '0'
 // Auto-compaction window for the long-lived voice sessions. The CLI compacts
 // its own history instead of growing until the context blows up. 'auto' lets
-// the CLI pick; a token count (100k–1M) pins it.
-const SESSION_AUTOCOMPACT = () => process['env']['JARVIS_SESSION_AUTOCOMPACT'] || 'auto'
+// the CLI pick; a token count (100k–1M) pins it. Pinned to the minimum: with
+// haiku 5.5 'auto' means a 1M window, so a session that lives for weeks never
+// compacted — no-tool turns went from 24k to ~100k tokens per request between
+// August and October, every one of them re-read on every turn.
+const SESSION_AUTOCOMPACT = () => process['env']['JARVIS_SESSION_AUTOCOMPACT'] || '100000'
 
 // Does the `claude` on this machine understand a given flag? The binary is NOT
 // pinned to the code: the service PATH resolves one install (/usr/bin/claude ->
@@ -626,13 +629,14 @@ class ClaudeSession {
     if (this.model === 'haiku') {
       childEnv['MAX_THINKING_TOKENS'] = process['env']['JARVIS_VOICE_THINKING_TOKENS'] || '2048'
     }
-    // Tool search OFF: with ~80 MCP tools the CLI defers their schemas and the
-    // model has to spend a whole round trip on ToolSearch before it can call
-    // anything. Traces (haiku, tool turns): first sentence p50 5.6 s with
-    // ToolSearch vs 4.4 s without. The schemas live in the cached prefix, so
-    // loading them all up front costs cache reads, not latency.
-    // JARVIS_TOOL_SEARCH=auto|true restores the CLI's behaviour.
-    childEnv['ENABLE_TOOL_SEARCH'] = process['env']['JARVIS_TOOL_SEARCH'] || 'false'
+    // Tool search stays at the CLI default (deferred schemas). It used to be
+    // forced OFF because every tool turn paid a ToolSearch round trip first, but
+    // loading all ~85 schemas put 67k tokens in every request. jarvis-mcp.js now
+    // marks the tools voice actually uses `anthropic/alwaysLoad`, so those skip
+    // the search and only the rare ones defer. Measured with the voice config:
+    // base context 67k → 42k, hot tool turns unchanged (~2.4 s to first word,
+    // no ToolSearch). JARVIS_TOOL_SEARCH=false|auto|true overrides.
+    if (process['env']['JARVIS_TOOL_SEARCH']) childEnv['ENABLE_TOOL_SEARCH'] = process['env']['JARVIS_TOOL_SEARCH']
     const proc = spawn(CLAUDE_CMD, args, {
       cwd: this.cwd, env: childEnv, shell: true, windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -709,7 +713,7 @@ class ClaudeSession {
       if (retryFresh && !c.retried && !this.killedOnPurpose) {
         c.retried = true
         console.log(`[jarvis-session] ${this.model} resume failed — retrying the request on a fresh session`)
-        c.acc = ''; c.tools = []; c.toolCalls = []; c.toolErrors = []; c.toolNames = new Map()
+        c.acc = ''; c.tools = []; c.toolCalls = []; c.toolErrors = []; c.toolNames = new Map(); c.tainted = false
         this.queue.unshift(c)
         this._pump()
         return
@@ -765,6 +769,9 @@ class ClaudeSession {
               // lets us ask the renderer whether plan3d is actually on screen.
               this.current.toolCalls.push({ name, input: b.input ?? null })
               if (b.id) this.current.toolNames.set(b.id, name)
+              // Outside content entered this turn: from here on the risk gate
+              // refuses destructive tools for it (toolRisk "Rule of Two").
+              if (isUntrustedSource(b.name)) this.current.tainted = true
             }
           }
         }
@@ -970,6 +977,17 @@ export function onlyTurnInFlightTagged(tag) {
   return tagged
 }
 setElevatedTurnProbe(() => onlyTurnInFlightTagged('elevated'))
+
+/**
+ * True when any turn in flight has already read untrusted content. Same
+ * limitation as above — the MCP call does not say which turn it belongs to —
+ * so a tainted turn in one session also blocks the other: errs safe.
+ */
+export function anyTurnInFlightTainted() {
+  for (const s of sessions.values()) if (s.current?.tainted) return true
+  return false
+}
+setTaintedTurnProbe(anyTurnInFlightTainted)
 
 /**
  * Like sessionAsk, but invokes onText(deltaString) for each incremental text

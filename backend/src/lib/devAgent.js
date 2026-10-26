@@ -43,7 +43,10 @@ const __dir = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dir, '..', '..', '..')
 const JOBS_DIR = join(REPO_ROOT, 'backend', 'data', 'dev-jobs')
 
-const CLAUDE_CMD = process.platform === 'win32' ? 'claude.cmd' : 'claude'
+// Same binary resolution as claudeCli.js: JARVIS_CLAUDE_BIN (the pinned build
+// the service points at) wins, else PATH.
+const CLAUDE_CMD = process['env']['JARVIS_CLAUDE_BIN']
+  || (process.platform === 'win32' ? 'claude.cmd' : 'claude')
 const DEFAULT_MODEL = process['env']['JARVIS_DEV_MODEL'] || 'sonnet'
 const JOB_TIMEOUT_MS = Number(process['env']['JARVIS_DEV_JOB_TIMEOUT_MS'] || 25 * 60 * 1000)
 const BUILD_TIMEOUT_MS = Number(process['env']['JARVIS_DEV_BUILD_TIMEOUT_MS'] || 15 * 60 * 1000)
@@ -287,7 +290,8 @@ function spawnAgent(rec) {
       '--append-system-prompt', DEV_SYSTEM_PROMPT,
     ]
     // shell:false — the system prompt contains quotes/newlines that a shell
-    // would mangle. `claude` resolves via the systemd user PATH (mise shims).
+    // would mangle. Without JARVIS_CLAUDE_BIN, `claude` resolves via the
+    // systemd user PATH (mise shims).
     const proc = spawn(CLAUDE_CMD, args, {
       cwd: REPO_ROOT,
       env: process.env,

@@ -31,6 +31,7 @@ disable.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import os
 import re
@@ -229,6 +230,166 @@ PREROLL_SILENCE_MS = 80
 _PREROLL_BYTES = b'\x00' * (int(SAMPLE_RATE * PREROLL_SILENCE_MS / 1000) * 2)
 
 
+# --- Pre-connected upstream socket -------------------------------------------
+# Opening the websocket to Microsoft is most of edge-tts's latency: measured
+# ws_connect 630-710 ms of a ~900 ms time-to-first-MP3, paid on EVERY sentence
+# (the library opens a fresh socket per Communicate). A socket opened AHEAD of
+# time and used once answers in 175-250 ms. Reusing one socket for several
+# sentences does NOT work: the endpoint accepts it, but the 2nd+ request took
+# 1.5-3.5 s to first audio. And the server closes an idle socket at ~30 s.
+# So POST /prewarm (the backend calls it as soon as it decides to answer, while
+# the LLM is still thinking) parks ONE fresh socket; the next synthesis takes
+# it; unused, it is closed after PARK_TTL_S and not renewed. Anything going
+# wrong before the first audio falls back to the plain edge-tts path.
+PARK_TTL_S = float(os.environ.get('EDGE_TTS_PARK_TTL_S', '20'))
+try:
+    import aiohttp
+    from xml.sax.saxutils import escape as _xml_escape
+    from edge_tts.constants import SEC_MS_GEC_VERSION, WSS_HEADERS, WSS_URL
+    from edge_tts.data_classes import TTSConfig
+    from edge_tts.drm import DRM
+    _PARKING = True
+except Exception as e:  # noqa: BLE001 — edge-tts internals moved
+    print(f'[edge-tts] pre-connect disabled ({e})', flush=True)
+    _PARKING = False
+
+_parked: dict = {'task': None, 'at': 0.0}
+_bg_tasks: set = set()
+
+_SPEECH_CONFIG = (
+    'Content-Type:application/json; charset=utf-8\r\n'
+    'Path:speech.config\r\n\r\n'
+    '{"context":{"synthesis":{"audio":{"metadataoptions":{'
+    '"sentenceBoundaryEnabled":"true","wordBoundaryEnabled":"false"},'
+    '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n'
+)
+
+
+def _in_background(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+async def _open_upstream():
+    session = aiohttp.ClientSession(trust_env=True)
+    try:
+        ws = await session.ws_connect(
+            f'{WSS_URL}&ConnectionId={_edge_communicate.connect_id()}'
+            f'&Sec-MS-GEC={DRM.generate_sec_ms_gec()}&Sec-MS-GEC-Version={SEC_MS_GEC_VERSION}',
+            compress=15,
+            headers=DRM.headers_with_muid(WSS_HEADERS),
+            ssl=_edge_communicate._SSL_CTX,
+        )
+    except BaseException:
+        await session.close()
+        raise
+    return session, ws
+
+
+async def _discard_upstream(task) -> None:
+    try:
+        session, ws = await task
+    except BaseException:
+        return
+    for closing in (ws.close(), session.close()):
+        try:
+            await closing
+        except Exception:
+            pass
+
+
+def park_upstream() -> None:
+    """Open the next upstream socket now, unless a fresh one is already parked."""
+    if not _PARKING:
+        return
+    old = _parked['task']
+    if old is not None:
+        if time.time() - _parked['at'] < PARK_TTL_S:
+            return
+        _in_background(_discard_upstream(old))
+    task = asyncio.create_task(_open_upstream())
+    _parked['task'], _parked['at'] = task, time.time()
+
+    async def expire() -> None:
+        await asyncio.sleep(PARK_TTL_S)
+        if _parked['task'] is task:
+            _parked['task'] = None
+            await _discard_upstream(task)
+
+    _in_background(expire())
+
+
+async def _take_upstream():
+    """The parked socket if it is still usable (awaits one still connecting —
+    it started earlier, so it is never slower than a new one), else None."""
+    task, at = _parked['task'], _parked['at']
+    _parked['task'] = None
+    if task is None:
+        return None
+    if time.time() - at >= PARK_TTL_S:
+        _in_background(_discard_upstream(task))
+        return None
+    try:
+        conn = await task
+    except Exception:
+        return None
+    if conn[1].closed:
+        await _discard_upstream(task)
+        return None
+    return conn
+
+
+async def _mp3_over(conn, text: str, voice: str, rate: str, pitch: str, volume: str) -> AsyncIterator[bytes]:
+    """The exchange edge-tts does, over a socket opened earlier. One use only."""
+    session, ws = conn
+    try:
+        tc = TTSConfig(voice, rate, volume, pitch, 'SentenceBoundary')
+        await ws.send_str(f'X-Timestamp:{_edge_communicate.date_to_string()}\r\n' + _SPEECH_CONFIG)
+        escaped = _xml_escape(_edge_communicate.remove_incompatible_characters(text))
+        await ws.send_str(_edge_communicate.ssml_headers_plus_data(
+            _edge_communicate.connect_id(), _edge_communicate.date_to_string(),
+            _edge_communicate.mkssml(tc, escaped),
+        ))
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                data = msg.data[int.from_bytes(msg.data[:2], 'big') + 2:]
+                if data:
+                    yield data
+            elif msg.type == aiohttp.WSMsgType.TEXT:
+                if 'Path:turn.end' in msg.data:
+                    return
+            else:
+                raise RuntimeError(f'upstream {msg.type.name}')
+        raise RuntimeError('upstream closed before turn.end')
+    finally:
+        for closing in (ws.close(), session.close()):
+            try:
+                await closing
+            except Exception:
+                pass
+
+
+async def _mp3_chunks(text: str, voice: str, rate: str, pitch: str, volume: str) -> AsyncIterator[bytes]:
+    # Long texts need edge-tts's own byte-length splitting: plain path.
+    conn = await _take_upstream() if _PARKING and len(text.encode('utf-8')) < 3000 else None
+    if conn is not None:
+        got_audio = False
+        try:
+            async for data in _mp3_over(conn, text, voice, rate, pitch, volume):
+                got_audio = True
+                yield data
+            return
+        except Exception as e:  # noqa: BLE001
+            if got_audio:
+                raise  # mid-sentence: a restart would repeat audio
+            print(f'[edge-tts] parked socket failed ({e!r}) — fresh connection', flush=True)
+    communicate = edge_tts.Communicate(text, voice=voice, rate=rate, pitch=pitch, volume=volume)
+    async for chunk in communicate.stream():
+        if chunk.get('type') == 'audio' and chunk.get('data'):
+            yield chunk['data']
+
+
 async def _edge_to_pcm_stream(
     text: str, voice: str, rate: str, pitch: str, volume: str = DEFAULT_VOLUME
 ) -> AsyncIterator[bytes]:
@@ -257,19 +418,12 @@ async def _edge_to_pcm_stream(
 
     async def feed_mp3() -> None:
         try:
-            communicate = edge_tts.Communicate(
-                text, voice=voice, rate=rate, pitch=pitch, volume=volume,
-            )
-            async for chunk in communicate.stream():
-                if chunk.get('type') == 'audio':
-                    data = chunk.get('data')
-                    if not data:
-                        continue
-                    try:
-                        proc.stdin.write(data)
-                        await proc.stdin.drain()
-                    except (ConnectionResetError, BrokenPipeError):
-                        return
+            async for data in _mp3_chunks(text, voice, rate, pitch, volume):
+                try:
+                    proc.stdin.write(data)
+                    await proc.stdin.drain()
+                except (ConnectionResetError, BrokenPipeError):
+                    return
         except Exception as e:  # noqa: BLE001
             feeder_error.append(e)
         finally:
@@ -303,6 +457,54 @@ async def _edge_to_pcm_stream(
             pass
         if feeder_error:
             raise feeder_error[0]
+
+
+# --- Phrase cache --------------------------------------------------------------
+# Short fixed phrases repeat — the pre-ack lead-ins that open every tool turn,
+# confirmations, error lines — and each one cost a ~0.9 s round trip to
+# Microsoft before the first syllable. Their final PCM (post-FX) is kept on disk
+# and served instantly. Keyed on everything that shapes the audio: voice,
+# prosody, SSML locale rules, fx, and this file's mtime (an FX or code change
+# invalidates every entry). Least-recently-used entries go past CACHE_MAX_FILES.
+CACHE_DIR = Path(os.environ.get('EDGE_TTS_CACHE_DIR', str(Path.home() / '.cache' / 'jarvis' / 'tts')))
+CACHE_MAX_CHARS = int(os.environ.get('EDGE_TTS_CACHE_MAX_CHARS', '60'))
+CACHE_MAX_FILES = int(os.environ.get('EDGE_TTS_CACHE_MAX_FILES', '200'))
+_CACHE_SALT = '|'.join([
+    DEFAULT_VOICE, DEFAULT_PITCH, DEFAULT_VOLUME, SSML_LANG, ','.join(_KEEP_EN),
+    str(Path(__file__).stat().st_mtime_ns),
+])
+CACHE_CHUNK_BYTES = 9600  # 100 ms of float32 @ 24 kHz, like a live stream
+
+
+def _cache_path(text: str, rate: str, fx: bool) -> Path | None:
+    if CACHE_MAX_CHARS <= 0 or len(text) > CACHE_MAX_CHARS:
+        return None
+    key = hashlib.sha1(f'{_CACHE_SALT}|{rate}|{int(fx)}|{text}'.encode('utf-8')).hexdigest()
+    return CACHE_DIR / f'{key}.f32'
+
+
+def _cache_read(path: Path | None) -> bytes | None:
+    if path is None:
+        return None
+    try:
+        pcm = path.read_bytes()
+        os.utime(path)  # recency for the LRU prune
+        return pcm or None
+    except OSError:
+        return None
+
+
+def _cache_store(path: Path, pcm: bytes) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f'.{os.getpid()}.tmp')
+        tmp.write_bytes(pcm)
+        tmp.replace(path)
+        entries = sorted(CACHE_DIR.glob('*.f32'), key=lambda p: p.stat().st_mtime)
+        for old in entries[:-CACHE_MAX_FILES]:
+            old.unlink(missing_ok=True)
+    except OSError as e:
+        print(f'[edge-tts] cache write failed: {e}', flush=True)
 
 
 def _int16_bytes_to_float32(buf: bytes) -> np.ndarray:
@@ -388,6 +590,13 @@ def health():
     }
 
 
+@app.post('/prewarm')
+async def prewarm():
+    """Park an upstream socket for the next synthesis (see park_upstream)."""
+    park_upstream()
+    return {'ok': True, 'parking': _PARKING}
+
+
 def _rate_from_speed(speed: float | None) -> str:
     if speed is None or speed == 1.0:
         return DEFAULT_RATE
@@ -454,6 +663,9 @@ async def synthesize_ws(ws: WebSocket):
 
     control_task = asyncio.create_task(control_loop())
     fx = JarvisStreamFX() if fx_enabled else None
+    cache_path = _cache_path(text, rate, fx_enabled)
+    cached = _cache_read(cache_path)
+    collected: list[bytes] | None = [] if cache_path is not None and cached is None else None
 
     # edge-tts hits the MS cloud and occasionally stalls forever. Bound each
     # chunk wait so a hung synthesis fails fast instead of leaving the client
@@ -466,7 +678,12 @@ async def synthesize_ws(ws: WebSocket):
             'channels': 1,
             'encoding': 'float32-le',
         })
-        while not abort.is_set():
+        if cached is not None:
+            for i in range(0, len(cached), CACHE_CHUNK_BYTES):
+                if abort.is_set():
+                    break
+                await ws.send_bytes(cached[i:i + CACHE_CHUNK_BYTES])
+        while cached is None and not abort.is_set():
             try:
                 raw = await asyncio.wait_for(gen.__anext__(), timeout=10.0)
             except StopAsyncIteration:
@@ -478,8 +695,14 @@ async def synthesize_ws(ws: WebSocket):
                 continue
             if fx is not None:
                 arr = fx.process(arr)
-            await ws.send_bytes(arr.astype(np.float32).tobytes())
+            out = arr.astype(np.float32).tobytes()
+            if collected is not None:
+                collected.append(out)
+            await ws.send_bytes(out)
         if not abort.is_set():
+            # Only a complete, unaborted synthesis is worth keeping.
+            if collected:
+                _cache_store(cache_path, b''.join(collected))
             try:
                 await ws.send_json({'type': 'end'})
             except Exception:

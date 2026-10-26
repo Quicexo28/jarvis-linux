@@ -9,7 +9,11 @@
  */
 
 import { json, readBody } from '../lib/http.js'
-import { requestClient as skillBusRequest, hasClient as skillBusHasClient } from '../lib/skillBus.js'
+import { requestClient as skillBusRequest, hasClient as skillBusHasClient, onRendererConnect } from '../lib/skillBus.js'
+import {
+  startTimer, listTimers, cancelTimers, pauseTimers, resumeTimers, addToTimers, resetTimers,
+  hasBackendTimers, handOverTimers,
+} from '../lib/backendTimers.js'
 import { broadcastWake } from '../lib/wakeSignal.js'
 import { broadcastPttStart, broadcastPttStop } from '../lib/pttBus.js'
 import { addReminder, listReminders } from '../lib/reminders.js'
@@ -70,50 +74,98 @@ async function withBody(req, handler, res) {
 
 /* ----- TIMER ----- */
 
+// With the UI asleep the backend keeps the timers itself (lib/backendTimers.js)
+// instead of failing with renderer_not_connected, and hands them to the
+// renderer as soon as it is back — on connect, or on the next timer call.
+async function handOverTimersToRenderer() {
+  if (!hasBackendTimers() || !skillBusHasClient()) return
+  await handOverTimers({
+    create: (durationMs, label) => skillBusRequest('timer_create', { durationMs, label: label || undefined }),
+    pause: (label) => skillBusRequest('timer_pause', { label }),
+  })
+}
+onRendererConnect(handOverTimersToRenderer)
+
+/** Backend-held timer op while no renderer is connected; 0 matches = not_found, like the renderer. */
+function asleepTimerOp(res, count, extra = {}) {
+  if (!count) return json(res, 404, { ok: false, error: 'not_found', detail: 'No hay ningún temporizador con ese nombre.' })
+  return json(res, 200, { ok: true, result: { count, owner: 'backend', ...extra } })
+}
+
 export async function handleTimerStart(req, res) {
   return withBody(req, async (body) => {
     const seconds = Number(body.seconds || 0)
     if (!Number.isFinite(seconds) || seconds < 1) {
       return json(res, 400, { ok: false, error: 'invalid_seconds' })
     }
-    // Open the timer panel automatically, then create the timer.
-    if (skillBusHasClient()) {
-      try { await skillBusRequest('mode_open', { mode: 'timer' }) } catch {}
+    if (!skillBusHasClient()) {
+      const t = startTimer({ seconds, label: body.label || null })
+      console.log(`[tool] timer_create -> backend (UI dormida) ${t.label || ''} ${seconds}s`)
+      return json(res, 200, {
+        ok: true,
+        result: { ...t, owner: 'backend', note: 'La interfaz está dormida: llevo yo el temporizador y aviso al terminar.' },
+      })
     }
+    await handOverTimersToRenderer()
+    // Open the timer panel automatically, then create the timer.
+    try { await skillBusRequest('mode_open', { mode: 'timer' }) } catch {}
     return bridgeToBus('timer_create', { durationMs: Math.round(seconds * 1000), label: body.label || undefined }, res)
   }, res)
 }
 
 export async function handleTimerPause(req, res) {
-  return withBody(req, (body) => bridgeToBus('timer_pause', { label: body.label || undefined }, res), res)
+  return withBody(req, async (body) => {
+    if (!skillBusHasClient()) return asleepTimerOp(res, pauseTimers({ label: body.label }))
+    await handOverTimersToRenderer()
+    return bridgeToBus('timer_pause', { label: body.label || undefined }, res)
+  }, res)
 }
 
 export async function handleTimerResume(req, res) {
-  return withBody(req, (body) => bridgeToBus('timer_resume', { label: body.label || undefined }, res), res)
+  return withBody(req, async (body) => {
+    if (!skillBusHasClient()) return asleepTimerOp(res, resumeTimers({ label: body.label }))
+    await handOverTimersToRenderer()
+    return bridgeToBus('timer_resume', { label: body.label || undefined }, res)
+  }, res)
 }
 
 export async function handleTimerAdd(req, res) {
-  return withBody(req, (body) => {
+  return withBody(req, async (body) => {
     const seconds = Number(body.seconds || 0)
     if (!Number.isFinite(seconds) || seconds < 1) {
       return json(res, 400, { ok: false, error: 'invalid_seconds' })
     }
+    if (!skillBusHasClient()) return asleepTimerOp(res, addToTimers({ label: body.label, seconds }))
+    await handOverTimersToRenderer()
     return bridgeToBus('timer_add', { deltaMs: Math.round(seconds * 1000), label: body.label || undefined }, res)
   }, res)
 }
 
 export async function handleTimerCancel(req, res) {
-  return withBody(req, (body) => {
+  return withBody(req, async (body) => {
+    if (!skillBusHasClient()) {
+      const n = cancelTimers({ label: body.label, all: !!body.all })
+      // "Cancel all" with nothing pending is still a success, as in the renderer.
+      if (body.all) return json(res, 200, { ok: true, result: { cancelled: 'all', count: n, owner: 'backend' } })
+      return asleepTimerOp(res, n, { cancelled: body.label })
+    }
+    await handOverTimersToRenderer()
     const payload = body.all ? { all: true } : { label: body.label || undefined }
     return bridgeToBus('timer_cancel', payload, res)
   }, res)
 }
 
 export async function handleTimerReset(req, res) {
-  return withBody(req, (body) => bridgeToBus('timer_reset', { label: body.label || undefined }, res), res)
+  return withBody(req, async (body) => {
+    if (!skillBusHasClient()) return asleepTimerOp(res, resetTimers({ label: body.label }))
+    await handOverTimersToRenderer()
+    return bridgeToBus('timer_reset', { label: body.label || undefined }, res)
+  }, res)
 }
 
 export async function handleTimerList(req, res) {
+  if (!skillBusHasClient()) return json(res, 200, { ok: true, result: { timers: listTimers(), owner: 'backend' } })
+  await handOverTimersToRenderer()
   return bridgeToBus('timer_list', {}, res)
 }
 

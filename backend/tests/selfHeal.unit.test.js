@@ -45,6 +45,7 @@ describe('isEnvironmentalToolError', () => {
     'Error ejecutando mail_inbox: mail_not_configured',
     '<tool_use_error>Error: No such tool available: Bash. Bash is disabled for this session',
     'fetch failed: ECONNREFUSED 127.0.0.1:8790',
+    'Error ejecutando run_terminal: exit_1 | stderr: grep: no match',
   ])('%s is the world, not a bug', (e) => expect(m.isEnvironmentalToolError(e)).toBe(true))
 
   it('a TypeError is a bug', () => {

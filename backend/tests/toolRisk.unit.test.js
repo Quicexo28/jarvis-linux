@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { riskOf, RISK, checkToolRisk } from '../src/lib/toolRisk.js'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import {
+  riskOf, RISK, checkToolRisk, isUntrustedSource, setTaintedTurnProbe, setElevatedTurnProbe,
+} from '../src/lib/toolRisk.js'
 import { setSpeakerMode } from '../src/lib/speakerContext.js'
 import { markInteraction } from '../src/lib/attentionState.js'
 
@@ -102,5 +104,60 @@ describe('checkToolRisk', () => {
     const res = checkToolRisk(modelReq('/api/skills/system/power'))
     delete process.env.JARVIS_RISK_GATE
     expect(res.allowed).toBe(true)
+  })
+})
+
+// Rule of Two: a turn that read outside content (web, mail, screen) may not
+// also run a destructive tool. Real trace: WebSearch → run_terminal.
+describe('tainted turn', () => {
+  beforeEach(() => {
+    setSpeakerMode('OWNER', 'santiago')
+    markInteraction()
+    setTaintedTurnProbe(() => true)
+  })
+  afterEach(() => {
+    setTaintedTurnProbe(null)
+    setElevatedTurnProbe(null)
+    delete process.env.JARVIS_TAINT_GATE
+  })
+
+  it('knows which tools bring untrusted content', () => {
+    for (const n of ['WebSearch', 'WebFetch', 'mcp__jarvis__mail_read', 'mcp__jarvis__look_screen']) {
+      expect(isUntrustedSource(n), n).toBe(true)
+    }
+    for (const n of ['mcp__jarvis__timer', 'mcp__jarvis__run_terminal', 'mcp__filesystem__read_text_file', undefined]) {
+      expect(isUntrustedSource(n), String(n)).toBe(false)
+    }
+  })
+
+  it('refuses a destructive tool even to a fresh owner, and says how to confirm', () => {
+    const res = checkToolRisk(modelReq('/api/skills/system/terminal'))
+    expect(res.allowed).toBe(false)
+    expect(res.reason).toBe('tainted_turn')
+    expect(res.spoken).toMatch(/confirme/)
+  })
+
+  it('still lets the turn read and write', () => {
+    expect(checkToolRisk(modelReq('/api/skills/timer/start')).allowed).toBe(true)
+    expect(checkToolRisk(modelReq('/api/skills/view/current')).allowed).toBe(true)
+  })
+
+  it('wins over an elevated ticket', () => {
+    setElevatedTurnProbe(() => true)
+    expect(checkToolRisk(modelReq('/api/skills/code/task')).reason).toBe('tainted_turn')
+  })
+
+  it('never touches GUI traffic', () => {
+    expect(checkToolRisk(uiReq('/api/skills/system/terminal')).allowed).toBe(true)
+  })
+
+  it('allows again once the turn is clean', () => {
+    setTaintedTurnProbe(() => false)
+    expect(checkToolRisk(modelReq('/api/skills/system/terminal')).allowed).toBe(true)
+  })
+
+  it('has its own kill switch', () => {
+    process.env.JARVIS_TAINT_GATE = '0'
+    expect(checkToolRisk(modelReq('/api/skills/system/terminal')).allowed).toBe(true)
   })
 })

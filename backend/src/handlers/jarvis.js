@@ -58,6 +58,16 @@ export async function handleJarvisWake(_req, res) {
 
 const XTTS_URL = process['env'].XTTS_URL ?? 'http://127.0.0.1:8789'
 
+/**
+ * Tell the TTS service a reply is coming so it opens its upstream socket now.
+ * With edge-tts the handshake is ~0.65 s of the ~0.9 s before the first
+ * syllable; done while the LLM is still thinking, the first sentence starts in
+ * ~0.2 s. Fire-and-forget: an engine without /prewarm just answers 404.
+ */
+export function prewarmTts() {
+  fetch(`${XTTS_URL}/prewarm`, { method: 'POST', signal: AbortSignal.timeout(1500) }).catch(() => {})
+}
+
 // Streams Float32 PCM from the Python XTTS service to the browser as it
 // generates, so the user hears the cloned voice with low latency instead of
 // waiting for the full sentence. Pass-through of upstream chunks; no buffering.

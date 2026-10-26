@@ -124,6 +124,32 @@ const ENABLED = () => process['env']['JARVIS_RISK_GATE'] !== '0'
 let elevatedTurnProbe = () => false
 export function setElevatedTurnProbe(fn) { elevatedTurnProbe = typeof fn === 'function' ? fn : () => false }
 
+// Untrusted content in the turn ("Rule of Two"). Speaker-id proves WHO asked;
+// it says nothing about what the model READ while answering. A web page, an
+// email, a calendar invite from a stranger or whatever is on screen can carry
+// instructions, and a turn that reads such content AND runs a destructive tool
+// has all three legs of the lethal trifecta: private data (memory and vault are
+// in every turn), untrusted input, and a way to act. Seen in the real traces:
+// WebSearch → run_terminal in one turn. So once a turn pulls in outside
+// content, destructive tools are refused for the rest of THAT turn; the model
+// has to say what it was about to do, and the owner's "sí" arrives as the next
+// turn, which starts clean. Names are the CLI's tool_use names. Residual: the
+// CLI's own WebFetch never reaches this gate, so it can still be used to send
+// data out in a tainted turn.
+const UNTRUSTED_SOURCES = new Set([
+  'WebSearch', 'WebFetch',
+  'mcp__jarvis__mail_inbox', 'mcp__jarvis__mail_read',
+  'mcp__jarvis__calendar_agenda', 'mcp__jarvis__day_brief',
+  'mcp__jarvis__look_screen', 'mcp__jarvis__look_camera',
+])
+export function isUntrustedSource(toolName) { return UNTRUSTED_SOURCES.has(String(toolName ?? '')) }
+
+// Registered by claudeCli.js, like the elevated probe: "a turn in flight has
+// already read untrusted content".
+let taintedTurnProbe = () => false
+export function setTaintedTurnProbe(fn) { taintedTurnProbe = typeof fn === 'function' ? fn : () => false }
+const TAINT_ENABLED = () => process['env']['JARVIS_TAINT_GATE'] !== '0'
+
 // Last denial, so a chat turn can tell the app "this needed authorisation"
 // instead of the app having to parse the model's apology.
 let lastDenial = null
@@ -148,6 +174,20 @@ export function checkToolRisk(req) {
     return { allowed: true, risk, mode, reason: 'not_model_origin' }
   }
   if (!ENABLED()) return { allowed: true, risk, mode, reason: 'gate_disabled' }
+  // Before the elevated ticket on purpose: the owner authorised the turn
+  // before the outside content was read, not the action it now suggests.
+  if (risk === RISK.DESTRUCTIVE && TAINT_ENABLED() && taintedTurnProbe()) {
+    lastDenial = { at: Date.now(), risk, reason: 'tainted_turn' }
+    return {
+      allowed: false,
+      risk,
+      mode,
+      reason: 'tainted_turn',
+      spoken: 'En este turno leí contenido de fuera (web, correo, agenda o pantalla), así que no ejecuto ' +
+        'acciones de riesgo en el mismo turno. Dígale al señor exactamente qué iba a hacer y pídale que lo ' +
+        'confirme; si confirma, hágalo en el turno siguiente.',
+    }
+  }
   if (elevatedTurnProbe()) return { allowed: true, risk, mode, reason: 'elevated_turn' }
 
   const policy = POLICY[mode] ?? POLICY.UNKNOWN

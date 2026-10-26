@@ -984,6 +984,13 @@ class StreamState:
         self.spk_prev_time = 0.0
         self.spk_context_max_s = 5.0
         self.spk_context_ttl_s = float(os.environ.get("STT_SPK_CONTEXT_TTL", "12"))
+        # Pre-speech audio kept while nobody is talking (see add_audio). Bytes,
+        # float32-aligned. The grace keeps a PTT press intact: each press opens a
+        # fresh stream, and its flush must get ALL the audio even if the VAD
+        # never fired on a quiet utterance.
+        self.preroll_bytes = int(float(os.environ.get("STT_PREROLL_S", "1.0")) * SAMPLE_RATE) * 4
+        self.preroll_grace_s = float(os.environ.get("STT_PREROLL_GRACE_S", "30"))
+        self.opened_at = time.time()
 
     def spk_context(self) -> Optional[np.ndarray]:
         """Previous same-turn audio, or None if it's gone stale."""
@@ -1061,6 +1068,16 @@ class StreamState:
                     self.is_speaking = False
                     self.silence_frames = 0
                     return ("final", finalized_audio)
+
+        # While nobody is talking keep only a short pre-roll. The renderer
+        # streams continuously, and the buffer used to hold EVERYTHING since the
+        # last final: ten minutes of room noise + a 2 s command became one 600 s
+        # segment that went whole through DeepFilter, whisper and the speaker-id
+        # windows (seg_ms up to 23 s), and the allocations ballooned the process
+        # to 12 GB of swap until systemd-oomd killed it (2026-10-22, twice).
+        if (not self.is_speaking and len(self.audio_buffer) > self.preroll_bytes
+                and time.time() - self.opened_at > self.preroll_grace_s):
+            del self.audio_buffer[: len(self.audio_buffer) - self.preroll_bytes]
 
         return (None, None)
 

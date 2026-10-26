@@ -1,0 +1,17 @@
+# Autodesarrollo (Jarvis modifica su código)
+
+> Extraído de CLAUDE.md. Detalle de referencia: leer antes de tocar esta zona.
+
+### Autodesarrollo (Jarvis modifica su propio código)
+
+Pedirle por voz "arregla X en tu código" lanza un **agente Claude Code completo** sobre el repo. El cerebro de voz (haiku, ~30 s de turno) NO edita: **delega**.
+
+- **`lib/devAgent.js`** — runner de jobs. `startDevJob({instruction})` → (1) `gitCheckpoint` (punto de restauración), (2) `spawn claude --print --output-format stream-json --dangerously-skip-permissions --model sonnet --append-system-prompt <reglas>` con `cwd` = raíz del repo (el agente lee este CLAUDE.md solo), (3) `git diff` contra el checkpoint, (4) **aplica**: `planApply()` mapea archivos→acciones según la tabla "Relaunching after updates" (python→`systemctl restart jarvis-stt/tts/wake`, frontend→`tauri:build --no-bundle` + restart `jarvis-ui`, backend→restart, `.service`→`daemon-reload`), (5) avisa por Telegram (`notifyJarvis`) + toast del renderer. **Asíncrono**: el turno de voz solo acusa recibo; el resultado llega minutos después.
+- **Un job a la vez** (`active`). Jobs persistidos en `backend/data/dev-jobs/<id>.json` + `.log` ANTES del restart, porque el propio backend se reinicia al final y la memoria se pierde.
+- **El restart del backend va SIEMPRE al final y por `scheduleRestart()` (exit 99 + `Restart=on-failure`)**, nunca `systemctl --user restart jarvis-backend`: el agente y el runner viven en el cgroup del backend y un systemctl los mataría a mitad. Por lo mismo el prompt del agente le PROHÍBE reiniciar backend/UI y ejecutar el build de Tauri — de eso se encarga `applyChanges` cuando ya terminó.
+- **El agente termina con `RESUMEN: <frase>`** — es lo único que se lee en voz alta (`extractSummary`, con fallback a la última línea).
+- **Rutas** `/api/skills/code/task|task/status|task/cancel` (+ las previas `run|checkpoint|rollback|restart`), todas POST. Triple barrera: local-only (webAuth `DANGEROUS_PATHS` cubre `/api/skills/code/`), `ownerOnly` (speaker OWNER) y `requireCodeAuth`. **Tools MCP**: `code_task`, `code_task_status`, `code_run`, `code_checkpoint`, `code_rollback`, `code_restart`.
+- **Dos caminos de entrada**, a propósito: intent `self_code` en `intentClassifier.js` (verbo mutador cerca de "tu/su/el código|backend|frontend") dispara `startDevJob` directo desde `speech.js` — no depende de que haiku elija la tool; y la tool `code_task` cubre todo lo que el regex no vea. `self_code` NO está en `LIMITED_INTENTS`, así que solo el OWNER pasa el gate de `filterIntentsByMode`.
+- **Env** (`jarvis-backend.service`): `JARVIS_CODE_DIR=%h/jarvis-linux` — **sin esto Jarvis no ve su propio código** (`getCodeDir()` alimenta el prompt de autodesarrollo Y las roots del MCP filesystem); `JARVIS_CODE_TRUST_LOCAL=1` autoriza sin contraseña (si hay `JARVIS_CODE_PASSWORD_HASH` la contraseña SIEMPRE manda — `node scripts/set-code-password.js`); `JARVIS_DEV_MODEL` (sonnet), `JARVIS_DEV_JOB_TIMEOUT_MS` (25 min), `JARVIS_DEV_BUILD_TIMEOUT_MS` (15 min).
+- **Ojo con el checkpoint**: `gitCheckpoint` hace `git add -A` + commit en la rama actual, así que el primer job **compromete todo el árbol sucio** en un commit `jarvis-checkpoint:`. Es lo que hace que `code_rollback` (reset --hard) sea seguro; si no lo quieres, commitea tú antes.
+

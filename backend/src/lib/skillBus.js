@@ -77,6 +77,15 @@ export function requestClient(verb, payload = {}, timeoutMs = 15000) {
  * WebSocket upgrade handler for /api/skills/bus. Mirrors the ws-loading pattern
  * used by stt.js so 'ws' stays an optional runtime dependency.
  */
+// Run once a primary renderer has connected (e.g. hand it the timers the
+// backend kept while the UI slept). Delayed a beat so the renderer finishes
+// registering its primitives first; skipped if that socket is already gone.
+const connectListeners = new Set()
+export function onRendererConnect(fn) {
+  connectListeners.add(fn)
+  return () => connectListeners.delete(fn)
+}
+
 export async function handleSkillBusUpgrade(req, socket, head) {
   let WsModule
   try {
@@ -98,6 +107,10 @@ export async function handleSkillBusUpgrade(req, socket, head) {
       if (client && client !== ws) { try { client.close() } catch {} }
       client = ws
       console.log('[skill-bus] renderer connected (primary)')
+      setTimeout(() => {
+        if (client !== ws) return
+        for (const fn of connectListeners) Promise.resolve().then(fn).catch(() => {})
+      }, 1500)
     } else {
       remotes.add(ws)
       console.log(`[skill-bus] renderer connected (remote, ${remotes.size} total)`)

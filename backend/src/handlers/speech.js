@@ -9,9 +9,11 @@
  */
 
 import { json, readBody } from '../lib/http.js'
+import { prewarmTts } from './jarvis.js'
 import { getAttentionState, markInteraction, forcePassive, setVoiceMuted, isVoiceMuted } from '../lib/attentionState.js'
 import { classifyIntent, hasWakePhrase } from '../lib/intentClassifier.js'
 import { pickModel } from '../lib/modelRouter.js'
+import { learnedModel } from '../lib/learnedRouter.js'
 import { addUserMessage, addAssistantMessage, getConversationContext } from '../lib/conversationMemory.js'
 import { sessionAskStream, sessionAsk, warmSession, getCodeDir } from '../lib/claudeCli.js'
 import { recordTurn, setTurnVerdict, turnStats, allFacts, searchFacts, deleteFact } from '../lib/turnStore.js'
@@ -519,6 +521,11 @@ async function runSpeechTurn(body, { onSentence: onSentenceRaw = () => {} } = {}
   // Latency tracer (#1): one line per responded turn. t0 = transcript received;
   // firstSentence = time until the first spoken chunk left for TTS.
   const t0 = Date.now()
+  // The eval harness replays a fixture through this same pipeline. Its turns
+  // are recorded apart and teach nothing: before this, every run stored the
+  // fixture's sentences as personal facts ("Tiene una hermana llamada Ana")
+  // and fed the learned router.
+  const isEval = body?.eval === true
   let tFirstSentence = 0
   const onSentence = (s) => {
     const clean = sanitizeSpoken(s)
@@ -544,7 +551,7 @@ async function runSpeechTurn(body, { onSentence: onSentenceRaw = () => {} } = {}
         ts: t0,
         speaker: result.speaker ?? null,
         mode: result.state ?? null,
-        source: 'voice',
+        source: isEval ? 'eval' : 'voice',
         text: result.userText ?? '',
         reply: result.reply ?? null,
         intent: result.intentTag ?? null,
@@ -577,7 +584,7 @@ async function runSpeechTurn(body, { onSentence: onSentenceRaw = () => {} } = {}
           .then((verdict) => { if (ctx.turnId) setTurnVerdict(ctx.turnId, verdict) })
           .catch(() => {})
       }
-      if (result.userText) {
+      if (result.userText && !isEval) {
         learnFromTurn({
           text: result.userText,
           reply: result.reply,
@@ -644,6 +651,8 @@ async function _runSpeechTurnInner(body, onSentence, ctx = { meta: null }) {
   if (!classification.shouldRespond) {
     return { action: 'ignore', reason: classification.reason, score: classification.score, state }
   }
+  // A reply is coming: let the TTS open its upstream socket while we think.
+  prewarmTts()
 
   // Shared conversation window captured BEFORE adding this turn — used to bridge
   // history into a different model's session (cross-model memory, see below).
@@ -806,7 +815,8 @@ async function _runSpeechTurnInner(body, onSentence, ctx = { meta: null }) {
 
   // Multi-model routing: delicate work → opus, complex reasoning → sonnet,
   // everything else → haiku (fast). Each model has its own warm session.
-  const model = pickModel(intentTag, text)
+  // The regex router picks; verification history can escalate haiku → sonnet.
+  const model = learnedModel(pickModel(intentTag, text), text)
   if (model !== 'haiku') console.log(`[speech] routing "${intentTag}" -> ${model}`)
 
   // Cross-model memory: each model has its OWN persistent session/history, so

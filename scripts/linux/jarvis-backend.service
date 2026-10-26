@@ -27,8 +27,17 @@ Environment=JARVIS_CODE_DIR=%h/jarvis-linux
 Environment=JARVIS_CODE_TRUST_LOCAL=1
 # Modelo del agente de autodesarrollo (sonnet por defecto, opus para lo delicado).
 Environment=JARVIS_DEV_MODEL=sonnet
+# CLI de Claude FIJADO para Jarvis (voz, autodesarrollo, agente de escritorio).
+# Copia propia, fuera del PATH: el `claude` interactivo se auto-actualiza y ya
+# tumbó la voz dos veces (2.1.243 SIGSEGV, flag desconocida). Subir de versión
+# es deliberado: `npm install --prefix ~/.local/share/jarvis-claude
+# @anthropic-ai/claude-code@<ver>`, `npm run eval:voice`, reiniciar.
+# Salida de emergencia: %h/.local/bin/claude-musl.
+Environment=JARVIS_CLAUDE_BIN=%h/.local/share/jarvis-claude/node_modules/.bin/claude
+Environment=DISABLE_AUTOUPDATER=1
 Environment=JARVIS_OBSIDIAN_API_URL=https://127.0.0.1:27124/
-Environment=JARVIS_OBSIDIAN_API_KEY=Bearer 06b6afd1156e5feb4ad67a17432e0a5c5e74c0337a66e60a02c48765fc77020b
+# JARVIS_OBSIDIAN_API_KEY va en backend/data/secrets.local.json (la key sola, sin "Bearer "),
+# nunca aquí: este fichero está en el repo. Hoy solo la usa el sondeo de estado.
 
 # PROYECTOR — adb vive en ~/.local/bin (platform-tools de Google, no el de
 # pacman: su mirror servía el paquete sin su .sig). Ruta ABSOLUTA porque una

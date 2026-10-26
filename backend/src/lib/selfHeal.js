@@ -81,9 +81,10 @@ const FALLBACK_REPLY = 'No tengo respuesta en este momento.'
 
 // Tool errors that describe the WORLD, not a bug: UI asleep, a speaker without
 // permission, a built-in the voice session is denied on purpose, a machine
-// that's off. Fixing code would not change any of them.
+// that's off, a shell command that exited non-zero (exit_N). Fixing code would
+// not change any of them.
 const ENVIRONMENTAL_TOOL_ERROR_RE =
-  /renderer_not_connected|not_configured|risk_denied|owner_only|remote_forbidden|no such tool available|is disabled for this session|machine_offline|not_connected|offline|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|timeout|cancel|abort|job_running|no_active|unknown_job|not_found|ambigua|ambiguous|invalid_|missing_|bad_request|required/i
+  /exit_\d+|renderer_not_connected|not_configured|risk_denied|owner_only|remote_forbidden|no such tool available|is disabled for this session|machine_offline|not_connected|offline|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|timeout|cancel|abort|job_running|no_active|unknown_job|not_found|ambigua|ambiguous|invalid_|missing_|bad_request|required/i
 
 // ── pure helpers (exported for tests) ────────────────────────────────────────
 

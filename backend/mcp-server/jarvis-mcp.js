@@ -19,8 +19,42 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
+import { riskOf } from '../src/lib/toolRisk.js'
 
 const BACKEND = process['env']['JARVIS_BACKEND_URL'] || 'http://localhost:8788'
+
+// Tools whose schemas load up front. Claude Code defers MCP schemas behind
+// ToolSearch, and a deferred tool costs one extra round trip the first time a
+// turn needs it (measured with the voice config: tool turns 2.2 s → 3.9 s to
+// the first word). Loading all ~85 instead put 67k tokens in every request.
+// These are the ones voice actually uses (turn traces + eval fixture); the rest
+// stay deferred. Every entry costs prompt tokens on every turn — keep it short.
+const ALWAYS_LOAD = new Set([
+  'timer', 'chrono', 'reminder_create',
+  'open_view', 'close_view', 'launch_app', 'run_terminal',
+  'system_power', 'system_volume', 'system_media', 'system_window', 'toggle_voice',
+  'show_display', 'hide_display', 'show_3d', 'hide_3d', 'sim_control',
+  'look_screen', 'day_brief', 'calendar_agenda', 'obsidian_task_create',
+  'flashcards', 'remote_machines',
+])
+
+// Shown to the client even while the schemas are deferred, so ToolSearch knows
+// what lives here.
+const INSTRUCTIONS = 'Herramientas de Jarvis (asistente de voz del señor Santiago en su PC Linux). ' +
+  'Familias: temporizador, cronómetro, recordatorios y avisos; vistas, overlays y tarjetas en pantalla; ' +
+  'visor 3D y simulación; sistema (apps, terminal, volumen, multimedia, ventanas, bluetooth, portapapeles, ' +
+  'no molestar, energía); bóveda Obsidian (notas, tareas, grafo), estudio, tarjetas y hábitos; agenda, ' +
+  'correo y resumen del día; móvil; máquinas remotas; proyector; luces RGB; nube; visión (pantalla y cámara); ' +
+  'agentes de Claude y de escritorio; su propio código y autodiagnóstico.'
+
+// MCP annotations from the SAME classification the backend gate enforces
+// (lib/toolRisk.js), so they cannot drift from it. Hints only — the gate is
+// still the enforcement. timer/chrono route per action and their actions
+// mutate, so they count as write.
+function annotationsFor(tool) {
+  const risk = tool.route ? 'write' : riskOf(tool.path)
+  return { readOnlyHint: risk === 'read', destructiveHint: risk === 'destructive' }
+}
 
 /** Backend route for an action of a consolidated tool (timer/chrono). */
 function actionRoute(kind, action) {
@@ -1170,6 +1204,17 @@ Para añadir sin borrar usa add_3d; para cerrar, hide_3d.`,
 
 const TOOL_BY_NAME = Object.fromEntries(TOOLS.map((t) => [t.name, t]))
 
+// run_terminal answers {ok:false, exit, stdout, stderr} when the command exits
+// non-zero — grep with no match, a failed systemctl. That output IS the answer;
+// before, the model only got "http_200" and had to guess what went wrong.
+function commandFailure(data) {
+  const tail = (s) => String(s || '').trim().slice(-700)
+  const parts = [`exit_${data.exit}${data.timedOut ? ' (timeout)' : ''}`]
+  if (tail(data.stderr)) parts.push(`stderr: ${tail(data.stderr)}`)
+  if (tail(data.stdout)) parts.push(`stdout: ${tail(data.stdout)}`)
+  return parts.join(' | ')
+}
+
 async function callBackend(tool, args) {
   // Consolidated tools pick their route per call (by `action`), and the action
   // itself is not part of the backend body.
@@ -1206,7 +1251,13 @@ async function callBackend(tool, args) {
   let data
   try { data = JSON.parse(text) } catch { data = { ok: res.ok, raw: text } }
   if (!res.ok || data.ok === false) {
-    const err = (data && (data.error || data.detail)) || `http_${res.status}`
+    // A risk denial explains itself in `detail`, written for the model (why,
+    // and how the señor can confirm). Passing only the code left the model
+    // saying "el sistema bloqueó la orden" with no way forward.
+    const err = data?.error === 'risk_denied' && data.detail
+      ? `risk_denied: ${data.detail}`
+      : (data && (data.error || data.detail))
+        || (typeof data?.exit === 'number' ? commandFailure(data) : `http_${res.status}`)
     throw new Error(err)
   }
   return tool.postTransform ? tool.postTransform(data) : data
@@ -1214,11 +1265,17 @@ async function callBackend(tool, args) {
 
 const server = new Server(
   { name: 'jarvis-mcp', version: '1.0.0' },
-  { capabilities: { tools: {} } },
+  { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
 )
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+  tools: TOOLS.map((t) => ({
+    name: t.name,
+    description: t.description,
+    inputSchema: t.inputSchema,
+    annotations: annotationsFor(t),
+    ...(ALWAYS_LOAD.has(t.name) ? { _meta: { 'anthropic/alwaysLoad': true } } : {}),
+  })),
 }))
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
