@@ -102,6 +102,9 @@ Responde SOLO con el bloque de código JavaScript.`
     model: 'opus',
     fallbackReply: '',
     namespace: 'jarvis-selfbuild',
+    // The reply is a whole code block. Without this runClaude keeps only the
+    // LAST line — the closing fence — so self_build never got a module.
+    multiline: true,
   })
   return extractCodeBlock(raw)
 }

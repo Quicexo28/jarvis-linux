@@ -1,12 +1,15 @@
+import { isolatedServerEnv } from './helpers/isolatedServer.js'
 import { test, expect, beforeAll, afterAll } from 'vitest'
 import { spawn } from 'child_process'
 import { execPath, cwd, env } from 'node:process'
 import { setTimeout as delay } from 'timers/promises'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
-const BASE = 'http://127.0.0.1:8788'
+// Its OWN port. On 8788 the child died with EADDRINUSE whenever the production
+// backend was up, and these tests silently ran against PRODUCTION: real turns
+// on the live voice session (spending the subscription, once grepping the repo
+// for a fake "Lampara"), timing out whenever the brain took >5 s.
+const PORT = 18788
+const BASE = `http://127.0.0.1:${PORT}`
 let proc
 
 beforeAll(async () => {
@@ -17,12 +20,7 @@ beforeAll(async () => {
     // Own throwaway DB and no watchdog: when the production backend already holds
     // 8788 this child dies with EADDRINUSE, and with the default DB path that
     // crash (and its probes) landed in the REAL incident log.
-    env: {
-      ...env,
-      JARVIS_FAKE_CLAUDE: '1',
-      JARVIS_SELFHEAL: '0',
-      JARVIS_DB_PATH: join(mkdtempSync(join(tmpdir(), 'jarvis-contract-')), 'test.db'),
-    },
+    env: isolatedServerEnv(PORT, env),
   })
   for (let i = 0; i < 40; i++) {
     try {

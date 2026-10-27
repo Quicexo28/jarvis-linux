@@ -1,10 +1,12 @@
+import { isolatedServerEnv } from './helpers/isolatedServer.js'
 import { test, expect, beforeAll, afterAll } from 'vitest'
 import { spawn } from 'child_process'
 import { execPath, cwd } from 'node:process'
 import { setTimeout as delay } from 'timers/promises'
 
-const BASE = 'http://127.0.0.1:8788'
-const WS_URL = 'ws://127.0.0.1:8788/api/jarvis/agent/ws'
+const PORT = 18790  // own port: see helpers/isolatedServer.js
+const BASE = `http://127.0.0.1:${PORT}`
+const WS_URL = `ws://127.0.0.1:${PORT}/api/jarvis/agent/ws`
 let proc
 
 beforeAll(async () => {
@@ -13,7 +15,7 @@ beforeAll(async () => {
     stdio: ['ignore', 'pipe', 'pipe'],
     // No watchdog in this child: when production already holds 8788 it dies with
     // EADDRINUSE, and that crash must not land in the real incident log.
-    env: { ...process.env, JARVIS_SELFHEAL: '0' },
+    env: isolatedServerEnv(PORT),
   })
   for (let i = 0; i < 40; i++) {
     try {

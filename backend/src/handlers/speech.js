@@ -31,6 +31,7 @@ import { startDevJob } from '../lib/devAgent.js'
 import { noteTurn } from '../lib/selfHeal.js'
 import { activateSkill } from '../lib/skillRegistry.js'
 import { findSkillByText, invokeRoute } from '../lib/skillManifest.js'
+import { tryFastPath } from '../lib/fastPath.js'
 import { routes } from '../routes.js'
 import {
   setSpeakerMode,
@@ -62,7 +63,11 @@ NUMEROS: Notacion natural española. Decimales con "coma" ("uno coma cuatro"). S
 // Agenda y correo: solo lectura (ICS + IMAP, ver lib/calendar.js y lib/mail.js).
 const AGENDA_PROMPT_SECTION = `
 
-AGENDA Y CORREO: Para "que tengo hoy", "mañana" o "esta semana" usa calendar_agenda (y day_brief si tambien pregunta por tareas o habitos). Di la hora y el titulo de forma natural, el primero y cuantos mas hay; no leas la lista entera si son muchos. Para el correo usa mail_inbox (por defecto los no leidos) y mail_read con el uid para leer uno: resume remitente (por su nombre) y de que trata, nunca leas direcciones de correo ni enlaces. Si una de estas herramientas responde que no esta configurada, dile al señor en una frase que falta configurarla. No puedes enviar correos ni crear eventos: si te lo pide, dilo y ofrece un recordatorio.`
+AGENDA Y CORREO: Para "que tengo hoy", "mañana" o "esta semana" usa calendar_agenda (y day_brief si tambien pregunta por tareas o habitos). Di la hora y el titulo de forma natural, el primero y cuantos mas hay; no leas la lista entera si son muchos. Para el correo usa mail_inbox (por defecto los no leidos) y mail_read con el uid para leer uno: resume remitente (por su nombre) y de que trata, nunca leas direcciones de correo ni enlaces. Si una de estas herramientas responde que no esta configurada, dile al señor en una frase que falta configurarla. No puedes enviar correos ni crear eventos: si te lo pide, dilo y ofrece un recordatorio.
+
+CLIMA: Para el tiempo, la lluvia o "¿llevo paraguas?" usa weather (con place solo si nombra un lugar) y di su resumen con naturalidad; nunca busques el clima en la web. Si responde place_not_configured, preguntale en que ciudad esta.
+
+VIGILANTES: Si el señor pide que revises algo de forma periodica o a una hora y le avises segun lo que encuentres ("avisame cada mañana a las 7 si va a llover", "cada hora mira si llego el correo de la universidad"), usa watcher con action create, la tarea en sus palabras y at (HH:MM) o every_minutes. Confirma en una frase que quedo programado y cuando corre. Un aviso de texto fijo a una hora es reminder_create, no un vigilante.`
 
 // Appended only when an Obsidian vault is configured. Gives the voice session
 // direct file access to the vault via the filesystem MCP server (read_text_file,
@@ -584,7 +589,8 @@ async function runSpeechTurn(body, { onSentence: onSentenceRaw = () => {} } = {}
           .then((verdict) => { if (ctx.turnId) setTurnVerdict(ctx.turnId, verdict) })
           .catch(() => {})
       }
-      if (result.userText && !isEval) {
+      // A fast-path command ("sube el volumen") carries no durable fact.
+      if (result.userText && !isEval && result.intentTag !== 'fast_path') {
         learnFromTurn({
           text: result.userText,
           reply: result.reply,
@@ -776,6 +782,27 @@ async function _runSpeechTurnInner(body, onSentence, ctx = { meta: null }) {
     addAssistantMessage(reply)
     onSentence(reply)
     return { action: 'respond', reply, intentTag, score: classification.score, state, userText: text, speaker: speakerName }
+  }
+
+  // chat: short unambiguous commands (timers, volume, media, the time) run
+  // deterministically — no model, ~instant, and they keep working when the CLI
+  // doesn't (lib/fastPath.js). Anything else falls through untouched.
+  if (intentTag === 'chat') {
+    const fast = await tryFastPath(text, (r, b) => {
+      const route = routes.find((x) => x.method === r.method && x.path === r.path)
+      if (!route) throw new Error(`no_route ${r.path}`)
+      return invokeRoute(route, b)
+    })
+    if (fast) {
+      ctx.meta = {
+        model: 'fast', tools: fast.tool ? [fast.tool] : [],
+        toolCalls: fast.tool ? [{ name: fast.tool, input: fast.input }] : [], toolErrors: [],
+      }
+      addAssistantMessage(fast.reply)
+      appendHistoryEntry(speakerName, { userText: text, assistantReply: fast.reply }).catch(() => {})
+      onSentence(fast.reply)
+      return { action: 'respond', reply: fast.reply, intentTag: 'fast_path', score: classification.score, state, userText: text, speaker: speakerName }
+    }
   }
 
   // chat: try a matching pre-built skill trigger first (instant, no Claude).

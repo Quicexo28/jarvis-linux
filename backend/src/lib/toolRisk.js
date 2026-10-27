@@ -75,6 +75,10 @@ const READ_EXACT = new Set([
   // CORREO no va aquí a propósito: igual que la visión, leer el buzón expone
   // contenido privado, así que una voz desconocida no puede pedirlo (⇒ write).
   '/api/skills/day/brief', '/api/skills/calendar/agenda',
+  // Public forecast for a place; nothing private goes out but the city name.
+  '/api/skills/weather',
+  // Listing the scheduled watchers; creating/cancelling/running them is write.
+  '/api/skills/watcher/list',
   '/api/skills/code/task/status', '/api/skills/computer/task/status', '/api/agents/list', '/api/system/telemetry',
   '/api/system/config', '/api/jarvis/stats', '/api/jarvis/memory',
   // Autodiagnóstico: sondear y listar incidentes no cambia nada (el remedio
@@ -169,6 +173,17 @@ export function checkToolRisk(req) {
   const risk = riskOf(path)
   const mode = getSpeakerMode()
 
+  // A scheduled watcher (lib/watchers.js) runs with nobody speaking: it may
+  // LOOK (weather, agenda, mail, the web) and nothing else, whoever spoke last.
+  // Not behind the kill switch on purpose — there is no speaker to fall back on.
+  if (req?.headers?.['x-jarvis-origin'] === 'watcher') {
+    if (risk === RISK.READ) return { allowed: true, risk, mode, reason: 'watcher_read' }
+    lastDenial = { at: Date.now(), risk, reason: 'watcher_read_only' }
+    return {
+      allowed: false, risk, mode, reason: 'watcher_read_only',
+      spoken: 'Un vigilante programado solo puede consultar; no ejecuta acciones. Incluye en tu aviso qué habría que hacer.',
+    }
+  }
   // Not a model tool call → not our business (GUI, companion app, internal).
   if (req?.headers?.['x-jarvis-origin'] !== 'model') {
     return { allowed: true, risk, mode, reason: 'not_model_origin' }

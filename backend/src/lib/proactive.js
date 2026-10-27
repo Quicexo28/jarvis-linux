@@ -62,7 +62,7 @@ function lastSentAt() {
   return Number(kvGet('proactive:last') || 0)
 }
 
-function inQuietHours(now = new Date()) {
+export function inQuietHours(now = new Date()) {
   const hour = Number(now.toLocaleString('en-US', { timeZone: TZ, hour: '2-digit', hour12: false }))
   const from = QUIET_FROM()
   const to = QUIET_TO()

@@ -19,6 +19,7 @@ import { startScheduler } from './lib/reminders.js'
 import { startProactiveLoop } from './lib/proactive.js'
 import { restoreStudy } from './lib/studySession.js'
 import { restoreTimers } from './lib/backendTimers.js'
+import { startWatchers } from './lib/watchers.js'
 import { startBriefingLoop } from './lib/dayBrief.js'
 import { attachAgentBridge } from './agent/bridge.js'
 import { handleMobileGestureUpgrade } from './handlers/mobileGesture.js'
@@ -27,7 +28,7 @@ import { startPdfWatcher } from './lib/pdfWatcher.js'
 import { startSelfHeal } from './lib/selfHeal.js'
 import { reportIssue } from './lib/incidentBus.js'
 import { lastSessionStderr } from './lib/claudeCli.js'
-import { resumeFollowUps } from './lib/devAgent.js'
+import { resumeFollowUps, markInterruptedJobs } from './lib/devAgent.js'
 import { scheduleIndex } from './lib/semanticMemory.js'
 
 const port = Number(env.PORT ?? 8788)
@@ -118,7 +119,11 @@ startProactiveLoop()
 restoreStudy()
 // Timers the backend held while the UI slept (lib/backendTimers.js).
 restoreTimers()
+// Scheduled read-only checks the señor asked for (lib/watchers.js).
+startWatchers()
 startBriefingLoop()
+// A self-code job still "running" on disk died with the previous process.
+markInterruptedJobs()
 // A self-code job that was building a missing capability restarted us to apply
 // it: now run the task the owner originally asked for.
 resumeFollowUps()

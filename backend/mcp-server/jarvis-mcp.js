@@ -34,7 +34,7 @@ const ALWAYS_LOAD = new Set([
   'open_view', 'close_view', 'launch_app', 'run_terminal',
   'system_power', 'system_volume', 'system_media', 'system_window', 'toggle_voice',
   'show_display', 'hide_display', 'show_3d', 'hide_3d', 'sim_control',
-  'look_screen', 'day_brief', 'calendar_agenda', 'obsidian_task_create',
+  'look_screen', 'day_brief', 'calendar_agenda', 'obsidian_task_create', 'weather',
   'flashcards', 'remote_machines',
 ])
 
@@ -120,6 +120,29 @@ const TOOLS = [
     description: 'Lista recordatorios pendientes.',
     inputSchema: { type: 'object', properties: {} },
     method: 'GET', path: '/api/skills/reminder/list',
+  },
+  {
+    name: 'watcher',
+    description: 'Vigilantes: comprobaciones PROGRAMADAS que Jarvis hace solo y avisa si hay algo ("avísame cada mañana a las 7 si va a llover", "cada hora revisa si llegó el correo de la universidad"). El vigilante solo CONSULTA (clima, agenda, correo, web, notas), nunca actúa. action: create (task = la tarea literal del señor, más at "HH:MM" diario o every_minutes ≥15), list, cancel (id o match = parte del texto), run (id: probarlo ya). Para un aviso de texto fijo a una hora usa reminder_create, no esto.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['create', 'list', 'cancel', 'run'] },
+        task: { type: 'string', description: 'create: qué revisar y cuándo avisar, en las palabras del señor.' },
+        at: { type: 'string', description: 'create: hora diaria "HH:MM" (24 h).' },
+        every_minutes: { type: 'number', description: 'create: cada cuántos minutos (15-1440), en vez de at.' },
+        id: { type: 'string', description: 'cancel/run: id del vigilante (de list).' },
+        match: { type: 'string', description: 'cancel: parte del texto de la tarea.' },
+      },
+      required: ['action'],
+    },
+    route: (a) => {
+      const act = String(a.action || '').toLowerCase()
+      if (!['create', 'list', 'cancel', 'run'].includes(act)) throw new Error(`acción inválida para watcher: ${a.action} (usa create, list, cancel, run)`)
+      return act === 'list'
+        ? { method: 'GET', path: '/api/skills/watcher/list' }
+        : { method: 'POST', path: `/api/skills/watcher/${act}` }
+    },
   },
   {
     name: 'notify_now',
@@ -411,6 +434,18 @@ const TOOLS = [
     description: 'Estado del día del señor en una sola lectura: tareas de hoy (abiertas/hechas y arrastradas de días anteriores), recordatorios de hoy, tarjetas de repaso pendientes, minutos estudiados hoy y en la semana, sesión de estudio en curso y hábitos con racha. Úsalo para "qué tengo hoy", "cómo va mi día", "planeemos el día" y para la revisión de la noche ("qué hice hoy").',
     inputSchema: { type: 'object', properties: {} },
     method: 'GET', path: '/api/skills/day/brief',
+  },
+  {
+    name: 'weather',
+    description: 'Clima actual y pronóstico de hasta 7 días (Open-Meteo): temperatura, sensación, estado, viento y probabilidad de lluvia por horas, con un "resumen" listo para decir. Úsala SIEMPRE para el clima, la lluvia o "¿llevo paraguas?" — nunca WebSearch. Sin place usa el lugar del señor; si responde place_not_configured, pregúntale la ciudad.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        place: { type: 'string', description: 'Ciudad o lugar si el señor lo nombró ("Medellín", "Cartagena"). Omítelo para su ciudad.' },
+        days: { type: 'number', description: 'Días de pronóstico, 1-7. 1 = hoy (por defecto).' },
+      },
+    },
+    method: 'GET', path: '/api/skills/weather',
   },
   {
     name: 'obsidian_task_done',
@@ -926,7 +961,9 @@ Para añadir sin borrar usa add_3d; para cerrar, hide_3d.`,
     inputSchema: {
       type: 'object',
       properties: {
-        color:  { type: 'string', description: 'nombre (red,blue,gold...) o hex #RRGGBB' },
+        // The colour names live in rgb_ctl.py on the Windows PC; "lime" was
+        // rejected there ("color no reconocido"). Hex always works.
+        color:  { type: 'string', description: 'hex #RRGGBB (siempre funciona; úsalo para cualquier tono que no sea básico, p. ej. verde lima = #32CD32) o un nombre básico en inglés (red, green, blue, white, gold, purple, orange, pink, cyan).' },
         target: { type: 'string', enum: ['all', 'pc', 'keyboard'], description: 'default: all' },
       },
       required: ['color'],
@@ -1234,8 +1271,10 @@ async function callBackend(tool, args) {
       // Marks this request as a MODEL tool call, so the backend can apply the
       // per-speaker risk policy to it (see lib/toolRisk.js). GUI and companion
       // traffic hits the same routes and must NOT be gated by whoever spoke
-      // last, so the header is what separates the two.
-      'X-Jarvis-Origin': 'model',
+      // last, so the header is what separates the two. A background session
+      // (the scheduled watchers) runs its own copy of this server with
+      // JARVIS_MCP_ORIGIN=watcher, which the gate holds to read-only.
+      'X-Jarvis-Origin': process['env']['JARVIS_MCP_ORIGIN'] || 'model',
       'X-Jarvis-Tool': args?.action && tool.route ? `${tool.name}.${args.action}` : tool.name,
     },
   }

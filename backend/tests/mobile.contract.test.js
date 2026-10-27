@@ -1,9 +1,11 @@
+import { isolatedServerEnv } from './helpers/isolatedServer.js'
 import { test, expect, beforeAll, afterAll } from 'vitest'
 import { spawn } from 'child_process'
 import { execPath, cwd } from 'node:process'
 import { setTimeout as delay } from 'timers/promises'
 
-const BASE = 'http://127.0.0.1:8788'
+const PORT = 18791  // own port: see helpers/isolatedServer.js
+const BASE = `http://127.0.0.1:${PORT}`
 let proc
 
 beforeAll(async () => {
@@ -12,7 +14,7 @@ beforeAll(async () => {
     stdio: ['ignore', 'pipe', 'pipe'],
     // No watchdog in this child: when production already holds 8788 it dies with
     // EADDRINUSE, and that crash must not land in the real incident log.
-    env: { ...process.env, JARVIS_SELFHEAL: '0' },
+    env: isolatedServerEnv(PORT),
   })
   for (let i = 0; i < 40; i++) {
     try {
@@ -36,7 +38,7 @@ test('GET /api/mobile/token returns token info shape', async () => {
   // longer for the permanent JARVIS_WEB_TOKEN when configured.
   expect(body.token).toMatch(/^[0-9a-f]{32,}$/)
   expect(typeof body.permanent).toBe('boolean')
-  expect(body.lanUrl).toMatch(/^http:\/\/\d+\.\d+\.\d+\.\d+:8788$/)
+  expect(body.lanUrl).toMatch(new RegExp(`^http://\\d+\\.\\d+\\.\\d+\\.\\d+:${PORT}$`))
   expect(typeof body.expiresAt).toBe('number')
   expect(body.activated).toBe(false)
   expect(typeof body.qrUrl).toBe('string')

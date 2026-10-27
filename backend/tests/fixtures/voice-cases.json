@@ -302,6 +302,22 @@
     }
   },
   {
+    "name": "clima sin buscar en la web",
+    "tags": [
+      "weather"
+    ],
+    "text": "Jarvis, ¿va a llover hoy en Bogotá?",
+    "expect": {
+      "toolsInclude": [
+        "weather"
+      ],
+      "toolsExclude": [
+        "WebSearch"
+      ],
+      "maxFirstMs": 8000
+    }
+  },
+  {
     "name": "día: qué tengo hoy",
     "tags": [
       "day"

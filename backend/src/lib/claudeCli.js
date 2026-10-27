@@ -116,11 +116,23 @@ function listWindowsDrives() {
 // The first entry is the CWD; the rest are added as extra MCP roots via
 // --add-dir (client roots REPLACE the filesystem server's argv dirs, so each
 // accessible dir must also be a root). Deduped, existence-checked.
+// Of Jarvis's own repo, only the SOURCE trees are exposed. The repo root used
+// to be a root, which put backend/data (secrets.local.json, jarvis.db with
+// every turn and memory), the voice-print samples and the systemd units one
+// read_text_file away from a turn that had just read a web page.
+const CODE_SOURCE_DIRS = ['backend/src', 'backend/mcp-server', 'backend/voice/python', 'frontend/src', 'docs']
+
 function getFilesystemRoots() {
   const roots = []
   const add = (p) => { if (p && !roots.includes(p)) roots.push(p) }
   add(getVaultDir())
-  add(getCodeDir())
+  const code = getCodeDir()
+  if (code) {
+    for (const sub of CODE_SOURCE_DIRS) {
+      const dir = join(code, sub)
+      try { if (statSync(dir).isDirectory()) add(dir) } catch {}
+    }
+  }
   const extra = process['env']['JARVIS_EXTRA_DIRS']
   if (extra) {
     for (const p of extra.split(';').map((s) => s.trim()).filter(Boolean)) {
@@ -243,13 +255,15 @@ function startAuthSync() {
 // it behaves as a plain Node runtime so the MCP stdio server runs correctly.
 // In dev (npm run dev backend), execPath is the system node — the env var is
 // harmless there.
-function jarvisMcpServerDef() {
+function jarvisMcpServerDef(origin = 'model') {
   return {
     command: process.execPath,
     args: [resolveMcpServerPath()],
     env: {
       ELECTRON_RUN_AS_NODE: '1',
       JARVIS_BACKEND_URL: 'http://localhost:8788',
+      // Which X-Jarvis-Origin the server stamps; toolRisk holds 'watcher' to reads.
+      ...(origin !== 'model' ? { JARVIS_MCP_ORIGIN: origin } : {}),
     },
   }
 }
@@ -281,8 +295,8 @@ function filesystemMcpServerDef() {
 // Build the { mcpServers } config object: the Jarvis tools server + (when a
 // vault/code dir is configured) direct filesystem access. Shared by the CWD
 // .mcp.json writer and the explicit --mcp-config file below.
-function buildMcpConfig() {
-  const mcpServers = { jarvis: jarvisMcpServerDef() }
+function buildMcpConfig(origin = 'model') {
+  const mcpServers = { jarvis: jarvisMcpServerDef(origin) }
   const fsDef = filesystemMcpServerDef()
   if (fsDef) mcpServers.filesystem = fsDef
   return { mcpServers }
@@ -302,12 +316,25 @@ function writeMcpProjectJson(cwd) {
 // up with ZERO MCP tools — verified: no mcp child procs — so the voice brain
 // reported the 3D viewer, timers, nav, etc. all as "no disponible"). An explicit
 // --mcp-config file is honored deterministically, independent of project-trust.
-function writeMcpConfigFile() {
-  const cfgPath = join(tmpdir(), 'jarvis-session', 'mcp-config.json')
+function writeMcpConfigFile(origin = 'model') {
+  const name = origin === 'model' ? 'mcp-config.json' : `mcp-config-${origin}.json`
+  const cfgPath = join(tmpdir(), 'jarvis-session', name)
   mkdirSync(dirname(cfgPath), { recursive: true })
-  writeFileSync(cfgPath, JSON.stringify(buildMcpConfig(), null, 2), 'utf-8')
+  writeFileSync(cfgPath, JSON.stringify(buildMcpConfig(origin), null, 2), 'utf-8')
   return cfgPath
 }
+
+// Session profiles. 'voice' is the spoken brain. 'watcher' runs scheduled
+// checks with nobody talking (lib/watchers.js): its MCP server stamps
+// origin=watcher (read-only in toolRisk) and it cannot write files either.
+const FS_WRITE_TOOLS = ['write_file', 'edit_file', 'move_file', 'create_directory'].map((t) => `mcp__filesystem__${t}`)
+function profileDisallowed(profile) {
+  const base = voiceDisallowedTools()
+  if (profile !== 'watcher') return base
+  return [base, ...FS_WRITE_TOOLS].filter(Boolean).join(',')
+}
+
+const FS_GUARD_HOOK = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'fs-guard-hook.mjs')
 
 function buildLeanConfigDir({ withMcp, dirSuffix }) {
   const realDir = process['env']['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude')
@@ -319,7 +346,20 @@ function buildLeanConfigDir({ withMcp, dirSuffix }) {
   // The actual server lives in a .mcp.json in the session CWD (writeMcpProjectJson).
   // settings.json only carries enableAllProjectMcpServers so that .mcp.json
   // server auto-approves in non-interactive mode.
-  const settings = withMcp ? { enableAllProjectMcpServers: true } : {}
+  // The voice session (withMcp) also gets the guard that keeps the filesystem
+  // MCP server's write tools out of Jarvis's own repo — the vault needs them,
+  // the code changes through code_task (scripts/fs-guard-hook.mjs).
+  const settings = withMcp
+    ? {
+        enableAllProjectMcpServers: true,
+        hooks: {
+          PreToolUse: [{
+            matcher: 'mcp__filesystem__(write_file|edit_file|move_file|create_directory)',
+            hooks: [{ type: 'command', command: `"${process.execPath}" "${FS_GUARD_HOOK}"` }],
+          }],
+        },
+      }
+    : {}
   writeFileSync(join(dir, 'settings.json'), JSON.stringify(settings, null, 2), 'utf-8')
   syncAuthToDir(dir)
   return dir
@@ -392,6 +432,14 @@ export function runClaude(userMessage, opts = {}) {
       : userMessage
 
     const args = ['--print', '--dangerously-skip-permissions', '--model', model, '--system-prompt-file', promptPath]
+    // One-shots are text in, text out (fact extraction, briefing, proactive
+    // decision, parsers, self-build codegen), and several read text nobody
+    // controls: calendar invite titles, a reply that summarised a web page.
+    // With --dangerously-skip-permissions and the CLI's default tool set, an
+    // instruction hidden in a calendar title could have run Bash — the hole
+    // closed for the voice session long ago was still open here. No tools at
+    // all. '""' because spawn runs through a shell (shell:true joins argv).
+    if (cliSupportsFlag('--tools')) args.push('--tools', '""')
     const leanDir = ensureLeanConfigDir()
     const childEnv = Object.assign({}, process['env'])
     if (leanDir) childEnv['CLAUDE_CONFIG_DIR'] = leanDir
@@ -433,6 +481,12 @@ export function runClaude(userMessage, opts = {}) {
       // array arrived as "]".
       const text = multiline ? out.trim() : out.trim().split('\n').pop()?.trim()
       if (!text) console.warn(`[${namespace}] empty stdout. exit=${code} stderr:`, err.slice(0, 200))
+      // A failed CLI prints its error on stdout ("You've hit your session
+      // limit…") — that is not an answer. The briefing would have read it out.
+      if (code !== 0 || usageLimitNotice(text)) {
+        if (text) console.warn(`[${namespace}] CLI failed (exit=${code}): ${text.slice(0, 160)}`)
+        return resolve(fallbackReply)
+      }
       resolve(text || fallbackReply)
     })
 
@@ -522,8 +576,9 @@ function persistSessionId(sessionKey, id) {
 }
 
 class ClaudeSession {
-  constructor(systemPromptText, model, sessionKey = '') {
+  constructor(systemPromptText, model, sessionKey = '', profile = 'voice') {
     this.model = model
+    this.profile = profile
     this.queue = []
     this.current = null
     this.buf = ''
@@ -588,7 +643,7 @@ class ClaudeSession {
     // plus MCP tools that belong to Claude Code, not to a spoken turn. The list
     // and the reason for each entry live in lib/voiceTools.js, next to the drift
     // guard that keeps it in sync with the system prompt.
-    const disallowed = voiceDisallowedTools()
+    const disallowed = profileDisallowed(this.profile)
     if (disallowed) args.push('--disallowedTools', disallowed)
 
     // Extra filesystem roots beyond the CWD (e.g. Jarvis's own code dir when the
@@ -613,7 +668,7 @@ class ClaudeSession {
     // back to the CWD .mcp.json if writing the config file fails.
     if (mcpDir) {
       try {
-        const cfgPath = writeMcpConfigFile()
+        const cfgPath = writeMcpConfigFile(this.profile === 'watcher' ? 'watcher' : 'model')
         args.push('--mcp-config', cfgPath, '--strict-mcp-config')
       } catch {
         writeMcpProjectJson(this.cwd)
@@ -828,7 +883,14 @@ class ClaudeSession {
             })
           } catch {}
         }
-        c.resolve(resultText || (c.acc || '').trim() || c.fallbackReply)
+        // The CLI reports its own failures as a normal result with is_error —
+        // never pass that text on as Jarvis's answer (see usageLimitNotice).
+        if (msg.is_error) {
+          console.warn(`[jarvis-session] ${this.model} error result: ${resultText.slice(0, 160)}`)
+          c.resolve(usageLimitNotice(resultText) || c.fallbackReply)
+        } else {
+          c.resolve(resultText || (c.acc || '').trim() || c.fallbackReply)
+        }
         this._pump()
       }
     }
@@ -902,6 +964,25 @@ let lastStderr = ''
 // otherwise "timer" alone would hide start vs cancel.
 const ACTION_TOOL_RE = /(?:^|__)(timer|chrono)$/
 
+/**
+ * The subscription's usage limit arrives as a normal-looking answer — "You've
+ * hit your session limit · resets 10:30am (America/Bogota)". It was spoken in
+ * English, and a scheduled watcher took it for news and notified it. Returns
+ * a Spanish line for it, or null when the text is not a limit message.
+ * @param {string} text
+ */
+export function usageLimitNotice(text) {
+  const t = String(text || '')
+  if (!/\b(session|usage|weekly|rate)\s+limit\b/i.test(t)) return null
+  const m = t.match(/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i)
+  if (!m) return 'Llegué al límite de uso de mi suscripción por ahora, señor.'
+  const h = Number(m[1])
+  const min = m[2] && m[2] !== '00' ? `:${m[2]}` : ''
+  const ap = (m[3] || '').toLowerCase()
+  const part = ap === 'am' ? ' de la mañana' : ap === 'pm' ? (h === 12 ? ' del mediodía' : h < 7 ? ' de la tarde' : ' de la noche') : ''
+  return `Llegué al límite de uso de mi suscripción, señor. Se restablece a las ${h}${min}${part}.`
+}
+
 /** Exported for tests. */
 export function qualifiedToolName(name, input) {
   const action = input && typeof input.action === 'string' ? input.action.trim().toLowerCase() : ''
@@ -952,9 +1033,11 @@ export function sessionAsk(userMessage, opts = {}) {
     fallbackReply = 'No tengo respuesta en este momento.',
   } = opts
   if (FAKE_CLAUDE()) return Promise.resolve(FAKE_REPLY)
-  const key = `${model}::${hashStr(systemPromptText)}`
+  // opts.profile: 'voice' (default) or 'watcher' (read-only background checks).
+  const profile = opts.profile || 'voice'
+  const key = `${model}::${hashStr(systemPromptText)}${profile === 'voice' ? '' : `::${profile}`}`
   let sess = sessions.get(key)
-  if (!sess) { sess = new ClaudeSession(systemPromptText, model, key); sessions.set(key, sess) }
+  if (!sess) { sess = new ClaudeSession(systemPromptText, model, key, profile); sessions.set(key, sess) }
   const message = extraContext ? `${extraContext}\n\nUsuario: ${userMessage}` : userMessage
   return sess.ask(message, timeoutMs, fallbackReply, null, opts.onMeta ?? null, opts.tag ?? null)
 }

@@ -1,16 +1,18 @@
+import { isolatedServerEnv } from './helpers/isolatedServer.js'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn } from 'child_process'
 import { execPath, cwd, env } from 'node:process'
 import { setTimeout as delay } from 'timers/promises'
 
-const BASE = 'http://127.0.0.1:8788'
+const PORT = 18792  // own port: see helpers/isolatedServer.js
+const BASE = `http://127.0.0.1:${PORT}`
 let proc
 
 beforeAll(async () => {
   proc = spawn(execPath, ['src/server.js'], {
     cwd: cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...env, JARVIS_FAKE_CLAUDE: '1' },
+    env: isolatedServerEnv(PORT, env),
   })
   for (let i = 0; i < 40; i++) {
     try {

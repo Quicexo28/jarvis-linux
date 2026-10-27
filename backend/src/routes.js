@@ -76,6 +76,8 @@ import { handleAppLaunch, handleRunTerminal } from './handlers/systemExec.js'
 import { handleSystemPower, handleSystemVolume, handleSystemBluetooth, handleSystemProcess } from './handlers/systemControl.js'
 import { handleClipboard, handleMedia, handleWindow, handleDnd } from './handlers/desktopControl.js'
 import { handleStudySession, handleStudyCards, handleHabit, handleDayBrief, handleMorningBriefing, handleTaskDone } from './handlers/productivity.js'
+import { handleWeather } from './handlers/weather.js'
+import { handleWatcherCreate, handleWatcherList, handleWatcherCancel, handleWatcherRun } from './handlers/watchers.js'
 import { handleSecurityStatus, handleSecurityUnlock } from './handlers/security.js'
 import { handleIncidentList, handleDiagnose, handleHeal } from './handlers/selfHealth.js'
 import { handleCalendarAgenda, handleMailInbox, handleMailRead } from './handlers/personal.js'
@@ -200,6 +202,11 @@ export const routes = [
   { method: 'POST', path: '/api/skills/study/cards',      handler: handleStudyCards },
   { method: 'POST', path: '/api/skills/habit',            handler: handleHabit },
   { method: 'GET',  path: '/api/skills/day/brief',        handler: handleDayBrief },
+  { method: 'GET',  path: '/api/skills/weather',          handler: handleWeather },
+  { method: 'POST', path: '/api/skills/watcher/create',   handler: handleWatcherCreate },
+  { method: 'GET',  path: '/api/skills/watcher/list',     handler: handleWatcherList },
+  { method: 'POST', path: '/api/skills/watcher/cancel',   handler: handleWatcherCancel },
+  { method: 'POST', path: '/api/skills/watcher/run',      handler: handleWatcherRun },
   { method: 'GET',  path: '/api/skills/calendar/agenda',  handler: handleCalendarAgenda },
   { method: 'POST', path: '/api/skills/mail/inbox',       handler: handleMailInbox },
   { method: 'POST', path: '/api/skills/mail/read',        handler: handleMailRead },

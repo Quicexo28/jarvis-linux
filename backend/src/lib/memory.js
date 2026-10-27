@@ -22,7 +22,7 @@
  */
 
 import { runClaude } from './claudeCli.js'
-import { addFact, searchFacts, searchTurns } from './turnStore.js'
+import { addFact, allFacts, searchFacts, searchTurns } from './turnStore.js'
 import { vectorSearch, factsByIds, rrf, scheduleIndex } from './semanticMemory.js'
 
 const RECALL_ENABLED = () => process['env']['JARVIS_MEMORY_RECALL'] !== '0'
@@ -92,7 +92,11 @@ function clip(s, n) {
   return t.length > n ? `${t.slice(0, n)}…` : t
 }
 
+const OWNER_NAME = (process['env']['JARVIS_OWNER_NAME'] || 'Santiago').trim()
+
 const EXTRACT_PROMPT = `Extraes hechos DURADEROS sobre el usuario a partir de un intercambio de voz con su asistente.
+
+El usuario se llama ${OWNER_NAME}. "Jarvis" es el nombre del ASISTENTE (y de su proyecto), NUNCA del usuario: jamás escribas que el usuario se llama, se hace llamar o prefiere que lo llamen Jarvis.
 
 Devuelves SOLO un array JSON, sin texto ni markdown. Cada elemento: {"kind": "...", "subject": "...", "text": "..."}.
 
@@ -133,13 +137,71 @@ export function learnFromTurn({ text, reply, turnId = null, intent = '' } = {}) 
     multiline: true,
   })
     .then((out) => {
-      const facts = parseFacts(out)
-      if (!facts.length) return
-      for (const f of facts) addFact({ ...f, source: turnId ? `turn:${turnId}` : 'turn' })
+      const known = allFacts(500)
+      const fresh = []
+      for (const f of parseFacts(out)) {
+        if (isIdentityConfusion(f.text)) { console.log(`[memory] dropped (Jarvis is not the señor): ${f.text}`); continue }
+        const dup = findNearDuplicate(f.text, [...known, ...fresh])
+        // Seen again: bump the existing fact (hits/updated_at) instead of a 4th variant.
+        if (dup) { addFact({ ...dup, text: dup.text }); continue }
+        addFact({ ...f, source: turnId ? `turn:${turnId}` : 'turn' })
+        fresh.push(f)
+      }
+      if (!fresh.length) return
       scheduleIndex()
-      console.log(`[memory] learned ${facts.length}: ${facts.map((f) => f.text).join(' | ')}`)
+      console.log(`[memory] learned ${fresh.length}: ${fresh.map((f) => f.text).join(' | ')}`)
     })
     .catch((e) => console.warn('[memory] learn failed —', e?.message))
+}
+
+// The extractor kept mistaking the señor for the assistant — "Se llama Jarvis",
+// "Lo llaman Jarvis", "Prefiere ser llamado 'Jarvis'": six such facts in the
+// store by 2026-10-26, recalled into turns. Facts about the assistant or the
+// project ("Su asistente se llama Jarvis") are true and stay.
+const IDENTITY_CONFUSION_RE = /\b(se llama|lo llaman|le llaman|se hace llamar|se refiere a s[ií] mismo|se llama a s[ií] mismo|prefiere ser llamado|prefiere que lo llamen|su nombre es)\b[^.]*\bjarvis\b/i
+const ABOUT_ASSISTANT_RE = /\b(asistente|proyecto|servicio|app|aplicaci[oó]n|sistema)\b/i
+
+/** @param {string} text */
+export function isIdentityConfusion(text) {
+  const t = String(text ?? '')
+  return IDENTITY_CONFUSION_RE.test(t) && !ABOUT_ASSISTANT_RE.test(t)
+}
+
+const FACT_STOPWORDS = new Set([
+  'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'de', 'del', 'al', 'a', 'en', 'y', 'o', 'que',
+  'su', 'sus', 'le', 'les', 'lo', 'se', 'es', 'son', 'con', 'por', 'para', 'como', 'todas', 'todos',
+  'toda', 'todo', 'muy', 'mas', 'usuario', 'senor',
+])
+
+/** Content words, accent-free, crude plural stripping ("mañanas" = "mañana"). */
+function factStems(text) {
+  const words = String(text ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().match(/[a-z0-9]+/g) || []
+  return new Set(words
+    .filter((w) => !FACT_STOPWORDS.has(w))
+    .map((w) => (w.length > 5 && w.endsWith('es') ? w.slice(0, -2) : w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w)))
+}
+
+/**
+ * An existing fact that says the same thing in other words, or null.
+ * "Entrena a las seis de la mañana" ≈ "Entrena todas las mañanas a las seis";
+ * "Usa la técnica pomodoro…" ≈ "Utiliza la técnica pomodoro…". The store had
+ * three to thirteen variants of the same fact, all competing for recall slots.
+ * @param {string} text
+ * @param {Array<{text: string}>} facts
+ */
+export function findNearDuplicate(text, facts, threshold = 0.6) {
+  const a = factStems(text)
+  if (a.size < 2) return null
+  let best = null
+  let bestScore = threshold
+  for (const f of facts) {
+    const b = factStems(f.text)
+    let shared = 0
+    for (const w of a) if (b.has(w)) shared++
+    const score = shared / (a.size + b.size - shared)
+    if (score >= bestScore) { best = f; bestScore = score }
+  }
+  return best
 }
 
 /**

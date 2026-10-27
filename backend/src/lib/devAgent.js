@@ -555,6 +555,24 @@ export function resumeFollowUps(delayMs = 25000) {
   console.log(`[devAgent] ${pending.length} tarea(s) pendiente(s) tras autodesarrollo — se ejecutan en ${Math.round(delayMs / 1000)} s`)
 }
 
+/**
+ * Boot: a job still "running" on disk belongs to a process that no longer
+ * exists — the backend restarted under it (a restart kills the whole cgroup,
+ * agent included). Left as is, "¿cómo va el cambio?" answered "en curso"
+ * forever (seen 2026-10-26). Mark it failed; its checkpoint stays for a
+ * rollback, and only `done` jobs resume their follow-up, so nothing re-runs.
+ */
+export function markInterruptedJobs() {
+  for (const rec of listDevJobs(50)) {
+    if (rec.status !== 'running' || (active && active.id === rec.id)) continue
+    rec.status = 'failed'
+    rec.error = 'interrumpido: el backend se reinició durante el trabajo'
+    rec.endedAt = new Date().toISOString()
+    writeJob(rec)
+    console.log(`[devAgent] ${rec.id} interrumpido por un reinicio — marcado como fallido`)
+  }
+}
+
 /** Kill the running job. The checkpoint stays, so a rollback is still possible. */
 export function cancelDevJob() {
   if (!active) return { ok: false, error: 'no_active_job', spoken: 'No hay ningún cambio de código en curso, señor.' }

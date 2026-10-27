@@ -224,7 +224,9 @@ async function runJob(rec) {
     writeJob(rec)
     if (rec.error !== 'cancelled') {
       const said = rec.summary || (res.ok ? 'Tarea de escritorio terminada, señor.' : 'La tarea de escritorio no se pudo completar, señor.')
-      rec.deliveredVia = await deliver(said)
+      // Fake mode is the test suite: it must not pop a real desktop notification
+      // on every `npm test` (it did: «tarea de escritorio simulada…»).
+      rec.deliveredVia = FAKE() ? 'fake' : await deliver(said)
       writeJob(rec)
     }
     return rec

@@ -96,7 +96,9 @@ let timer = null
 
 /** Start the scheduler (idempotent). Checks every 30 s. */
 export function startScheduler(intervalMs = 30000) {
-  if (timer) return
+  // Off for the contract tests' throwaway servers: reminders.json is shared
+  // with production, so a second scheduler would fire the same reminder twice.
+  if (timer || process['env']['JARVIS_REMINDERS'] === '0') return
   timer = setInterval(() => { tick().catch(() => {}) }, intervalMs)
   if (typeof timer.unref === 'function') timer.unref() // don't keep process alive in tests
   console.log('[reminders] scheduler started')
