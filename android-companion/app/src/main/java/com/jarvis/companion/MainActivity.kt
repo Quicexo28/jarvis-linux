@@ -246,6 +246,11 @@ class MainActivity : Activity() {
         fun reporterRunning(): Boolean = ReporterService.isRunning
 
         @JavascriptInterface
+        fun openKeystone() {
+            main.post { startActivity(Intent(this@MainActivity, com.jarvis.companion.wall.KeystoneActivity::class.java)) }
+        }
+
+        @JavascriptInterface
         fun openSettings() {
             main.post { startActivity(Intent(this@MainActivity, SetupActivity::class.java)) }
         }

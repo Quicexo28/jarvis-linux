@@ -36,6 +36,11 @@ Environment=WEBKIT_DISABLE_DMABUF_RENDERER=1
 # → renderD128, y `nvidia-smi` sin WebKit).
 Environment=__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
 Environment=__GLX_VENDOR_LIBRARY_NAME=mesa
+# Regresión webkit2gtk 2.54.x (2.54.2, 2026-10-29): un <video srcObject>, oculto
+# o visible, queda en readyState 0 (0x0) y play() nunca resuelve, así que los
+# gestos se quedaban en `starting`. Con esta variable: 640x360, readyState 3,
+# play() en ~1,5 s.
+Environment=WEBKIT_GST_ALLOW_PLAYBACK_OF_INVISIBLE_VIDEOS=1
 Environment=WEBKIT_INSPECTOR_SERVER=127.0.0.1:9222
 
 [Install]

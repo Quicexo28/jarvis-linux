@@ -104,3 +104,10 @@ Puertos: backend 8788 · python 8789-8791 (STT 8790) · pc_control 8792 · hub d
 | `Model3DViewer`, kinds 3D, `lib/sim/`, física | `visor-3d-y-simulacion.md` |
 
 Otros: `docs/HISTORY.md` (decisiones cerradas), `docs/PENDIENTES.md`, specs sueltas en `docs/`.
+
+## Reportes
+Sigue el estándar de reporte de `~/.claude/CLAUDE.md` (frases cortas, sin jerga). Palabras de este proyecto, en lenguaje simple:
+- **servicio (unit)**: programa que corre solo en segundo plano; se revisa con `systemctl --user status <nombre>`.
+- **backend / frontend**: el "cerebro" (sin pantalla) y la pantalla que ves.
+- **wake / STT / TTS**: oír la palabra de activación / pasar voz a texto / pasar texto a voz.
+- **bóveda**: la carpeta de notas de Obsidian donde Jarvis guarda lo que aprende.

@@ -61,4 +61,8 @@
         <item quantity="one">Enviando a la bóveda…</item>
         <item quantity="other">Enviando %1$d archivos…</item>
     </plurals>
+
+    <!-- Modo pared (proyector) -->
+    <string name="wall_a11y_label">Jarvis · pared</string>
+    <string name="wall_a11y_description">Solo para el proyector en modo pared: mueve el D-pad, atrás y escribe en el campo con foco cuando lo pides desde la app de control, y avisa de qué app está delante. No lee ni guarda contenido.</string>
 </resources>

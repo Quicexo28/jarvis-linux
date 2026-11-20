@@ -27,7 +27,7 @@ import { DEFAULT_OUTPUT } from '../gestures/types'
 import type { HandFrame, DetectedHand, Vec3 } from '../gestures/types'
 import {
   FRAME_MIN_INTERVAL_MS, FRAME_MAX_INTERVAL_MS, PACE_FACTOR, LANDMARKER_MAX_RESTARTS,
-  IDLE_AFTER_MS, IDLE_FRAME_INTERVAL_MS, INFER_MAX_WIDTH,
+  IDLE_AFTER_MS, IDLE_FRAME_INTERVAL_MS, INFER_MAX_WIDTH, FRAME_STALL_MS,
 } from '../gestures/config'
 
 /**
@@ -76,6 +76,10 @@ export function useGesturePipeline(): void {
     let timer: ReturnType<typeof setTimeout> | null = null
     let fpsWindow = { frames: 0, start: performance.now(), inferSum: 0 }
     let lastHandAt = performance.now()
+    // Vigilante de frames: si la cámara deja de dar frames nuevos, el último output
+    // quedaría congelado (pinch activo pegado, interfaz con zoom y sin salida).
+    let lastFrameAt = performance.now()
+    let stalled = false
     // Sonda de imagen: el fallo "no detecta manos" es MUDO — con un frame negro
     // detectForVideo responde igual de rápido y devuelve cero manos, así que el
     // pipeline reporta 'running' y ms plausibles mientras no ve nada. Cada 5 s se
@@ -96,6 +100,8 @@ export function useGesturePipeline(): void {
     const restartLandmarker = (reason: string) => {
       if (!alive) return
       landmarker = null
+      // Output congelado dejaría un pinch activo pegado mientras el modelo se recrea.
+      setOutput(DEFAULT_OUTPUT)
       restarts++
       if (restarts > LANDMARKER_MAX_RESTARTS) {
         setStatus('error', `landmarker caído ${restarts - 1} veces (${reason})`)
@@ -123,6 +129,13 @@ export function useGesturePipeline(): void {
 
       const video = nextFrame()
       if (!video) {
+        // Output congelado deja un pinch activo pegado y la interfaz con zoom sin
+        // salida: se resetea al detectar el atasco (el status vuelve con la ventana de fps).
+        if (!stalled && performance.now() - lastFrameAt >= FRAME_STALL_MS) {
+          stalled = true
+          setOutput(DEFAULT_OUTPUT)
+          setStatus('starting', 'cámara sin frames…')
+        }
         // Sin frame nuevo: esperar el EVENTO de frame (requestVideoFrameCallback)
         // en vez de sondear — el polling de 8 ms batía contra la cadencia de la
         // cámara (30 fps) y añadía hasta un frame entero de latencia. Timeout de
@@ -145,6 +158,8 @@ export function useGesturePipeline(): void {
       }
 
       const t0 = performance.now()
+      lastFrameAt = t0
+      stalled = false
       const source = inferenceSource(video)
       if (t0 - lastProbeAt >= 5000) {
         lastProbeAt = t0
@@ -229,7 +244,9 @@ export function useGesturePipeline(): void {
     setStatus('starting')
     ;(async () => {
       const { width, height } = await openCamera()
-      if (!alive) { closeCamera(); return }
+      // El cleanup ya llamó closeCamera; repetirlo aquí apagaría la cámara del efecto
+      // nuevo tras un off→on, dejando 'running' sin frames.
+      if (!alive) return
       console.log(`[gestures] cámara activa ${width}x${height}`)
 
       // Preferir GPU: XNNPACK/CPU hace la inferencia SÍNCRONA en el main thread
@@ -253,6 +270,7 @@ export function useGesturePipeline(): void {
       console.log(`[gestures] modelo listo (delegate=${delegate})`)
       setStatus('running', `${delegate} · main`)
       fpsWindow = { frames: 0, start: performance.now(), inferSum: 0 }
+      lastFrameAt = performance.now()
       tick()
     })().catch((e) => {
       if (!alive) return

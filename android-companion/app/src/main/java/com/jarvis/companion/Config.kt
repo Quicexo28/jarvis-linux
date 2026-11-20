@@ -75,6 +75,55 @@ object Config {
             .apply()
     }
 
+    /** Solo el flag, sin tocar UUID/AppId (el modo pared no usa Moonlight). */
+    fun setProjectorFlag(ctx: Context, enabled: Boolean) {
+        prefs(ctx).edit().putBoolean("projectorMode", enabled).apply()
+    }
+
+    /**
+     * Modo pared: en vez de Moonlight, la app pinta ella misma el stream de
+     * `wall-server` (paquete `wall`). Apagado por defecto: la tablet y el móvil
+     * comparten este APK y no deben enterarse de que existe.
+     */
+    fun wallMode(ctx: Context): Boolean = prefs(ctx).getBoolean("wallMode", false)
+
+    const val WALL_URL_DEFAULT = "ws://192.168.1.29:8450/wall"
+
+    fun wallUrl(ctx: Context): String =
+        prefs(ctx).getString("wallUrl", "")!!.trim().ifEmpty { WALL_URL_DEFAULT }
+
+    /** Token propio de wall-server (no el de Jarvis): solo da acceso a la pared. */
+    fun wallToken(ctx: Context): String = prefs(ctx).getString("wallToken", "")!!.trim()
+
+    fun setWall(ctx: Context, enabled: Boolean, url: String? = null, token: String? = null) {
+        val e = prefs(ctx).edit().putBoolean("wallMode", enabled)
+        if (url != null) e.putString("wallUrl", url.trim())
+        if (token != null) e.putString("wallToken", token.trim())
+        e.apply()
+    }
+
+    /**
+     * Pared como HOME del proyector (vía `wall.HomeTrampolineActivity`, que
+     * solo se habilita con wallMode && homeMode). Se apaga con el extra
+     * `--ez homeMode false` y el HOME vuelve al launcher de fábrica.
+     */
+    fun homeMode(ctx: Context): Boolean = prefs(ctx).getBoolean("homeMode", true)
+
+    fun setHomeMode(ctx: Context, enabled: Boolean) {
+        prefs(ctx).edit().putBoolean("homeMode", enabled).apply()
+    }
+
+    /**
+     * Reactivar la depuración inalámbrica en cada arranque y en cada conexión
+     * wifi (Android 14 la apaga al reiniciar). Por defecto encendido en modo
+     * proyector; requiere WRITE_SECURE_SETTINGS concedido por adb.
+     */
+    fun keepAdbWifi(ctx: Context): Boolean = prefs(ctx).getBoolean("keepAdbWifi", projectorMode(ctx))
+
+    fun setKeepAdbWifi(ctx: Context, enabled: Boolean) {
+        prefs(ctx).edit().putBoolean("keepAdbWifi", enabled).apply()
+    }
+
     fun isConfigured(ctx: Context): Boolean =
         baseUrl(ctx).startsWith("http") && token(ctx).isNotEmpty()
 

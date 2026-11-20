@@ -23,11 +23,44 @@ export function getGestureVideo(): HTMLVideoElement | null {
   return video
 }
 
-export async function openCamera(): Promise<{ width: number; height: number }> {
+/** getUserMedia y video.play() pueden colgarse sin error; un `starting` eterno
+ * se diagnosticaba como pipeline muerto. */
+const OPEN_TIMEOUT_MS = 12000
+
+// Una sola apertura en vuelo: dos getUserMedia concurrentes dejan un stream
+// huérfano y el churn tumba el cliente PipeWire.
+let opening: Promise<{ width: number; height: number }> | null = null
+let wanted = false
+
+function withTimeout<T>(p: Promise<T>, what: string, onLate?: (v: T) => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let done = false
+    const t = setTimeout(() => {
+      done = true
+      reject(new Error(`cámara sin respuesta: ${what} no arrancó en ${OPEN_TIMEOUT_MS / 1000} s`))
+    }, OPEN_TIMEOUT_MS)
+    p.then(
+      (v) => { if (done) { onLate?.(v); return } clearTimeout(t); done = true; resolve(v) },
+      (e) => { if (done) return; clearTimeout(t); done = true; reject(e) },
+    )
+  })
+}
+
+export function openCamera(): Promise<{ width: number; height: number }> {
+  wanted = true
   if (video && stream?.active && video.readyState >= 2) {
-    return { width: video.videoWidth, height: video.videoHeight }
+    return Promise.resolve({ width: video.videoWidth, height: video.videoHeight })
   }
-  closeCamera()
+  if (opening) return opening
+  const p: Promise<{ width: number; height: number }> = startCamera().finally(() => {
+    if (opening === p) opening = null
+  })
+  opening = p
+  return p
+}
+
+async function startCamera(): Promise<{ width: number; height: number }> {
+  releaseCamera()
 
   // SOLO `ideal`: WebKitGTK ignora los constraints (negocia vía portal
   // PipeWire), pero un constraint DURO (`max`/`exact`) que no puede satisfacer
@@ -36,7 +69,7 @@ export async function openCamera(): Promise<{ width: number; height: number }> {
   // cada frame de cámara de más es contención contra el render; 20 fps de gesto
   // ya se sienten continuos porque los consumers interpolan entre muestras. Si
   // el portal lo ignora, el pacing de useGesturePipeline limita igual el ritmo.
-  stream = await navigator.mediaDevices.getUserMedia({
+  const got = await withTimeout(navigator.mediaDevices.getUserMedia({
     video: {
       // 640x480 empíricamente negocia 640x360; pedir 480x270 hacía que el
       // portal saltara a 1280x720 (más decodificación por frame para nada).
@@ -44,7 +77,12 @@ export async function openCamera(): Promise<{ width: number; height: number }> {
       frameRate: { ideal: 20 },
       facingMode: 'user',
     },
-  })
+  }), 'getUserMedia', (late) => late.getTracks().forEach(t => t.stop())) // llegó tras el timeout: no dejarlo huérfano
+  if (!wanted) {
+    got.getTracks().forEach(t => t.stop())
+    throw new Error('cámara cancelada')
+  }
+  stream = got
 
   video = document.createElement('video')
   video.srcObject = stream
@@ -54,9 +92,19 @@ export async function openCamera(): Promise<{ width: number; height: number }> {
   video.style.display = 'none'
   video.dataset.jarvisGestures = '1'
   document.body.appendChild(video)
-  await video.play()
+  const v = video
+  try {
+    await withTimeout(v.play(), 'video.play()')
+  } catch (e) {
+    releaseCamera()
+    throw e
+  }
+  if (!wanted) {
+    releaseCamera()
+    throw new Error('cámara cancelada')
+  }
 
-  return { width: video.videoWidth, height: video.videoHeight }
+  return { width: v.videoWidth, height: v.videoHeight }
 }
 
 /**
@@ -137,14 +185,28 @@ export function isScalingDisabled(): boolean {
 }
 
 export function closeCamera(): void {
+  wanted = false
+  // Con apertura en vuelo no se libera aquí: startCamera ve wanted=false y limpia
+  // al terminar. Liberar ahora rompería el play() en vuelo cuando un off→on rápido
+  // reutiliza esa misma apertura.
+  if (opening) return
+  releaseCamera()
+}
+
+function releaseCamera(): void {
+  // Orden importa: con webkit2gtk 2.54.2 soltar srcObject con el track aún vivo
+  // cuelga a veces el hilo principal (deadlock en el teardown de GStreamer:
+  // appsrc del track bloqueado en una query de negociación). Medido en harness
+  // WebKitGTK aislado: orden viejo colgó al ciclo 6; parando tracks primero,
+  // 29 ciclos sin cuelgue. En la UI viva colgaba ~3 de 15 apagados.
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop())
+    stream = null
+  }
   if (video) {
     video.srcObject = null
     video.remove()
     video = null
-  }
-  if (stream) {
-    stream.getTracks().forEach(t => t.stop())
-    stream = null
   }
   scaleCanvas = null
   scaleCtx = null

@@ -85,6 +85,7 @@ import { handleAgentsList, handleAgentRpc, handleAgentsControl, handleAgentEvent
 import { handleClaudeList, handleClaudeLaunch, handleClaudeSend, handleClaudeStop, handleClaudeWatch, handleClaudeUnwatch, handleClaudeOpen, handleClaudeAgentEvent } from './handlers/claudeAgents.js'
 import { handleRemoteDesktop, handleDesktopPair } from './handlers/remoteDesktop.js'
 import { handleProjectorStatus, handleProjectorOn, handleProjectorOff } from './handlers/projector.js'
+import { handleWall } from './handlers/wall.js'
 
 export const routes = [
   { method: 'GET',  path: '/health',                   handler: handleHealth },
@@ -269,6 +270,13 @@ export const routes = [
   { method: 'POST', path: '/api/skills/projector/on',          handler: handleProjectorOn },
   { method: 'POST', path: '/api/skills/projector/off',         handler: handleProjectorOff },
 
+  // Pared: proxy a wall-server (:8450) para la pestaña «Pared» de la app. Por
+  // PREFIJO porque el icono lleva el paquete en la ruta; la lista blanca de lo
+  // que pasa vive en handlers/wall.js (solo las rutas de su PROTOCOL.md).
+  { method: 'GET',  prefix: '/api/skills/wall/',               handler: handleWall },
+  { method: 'POST', prefix: '/api/skills/wall/',               handler: handleWall },
+  { method: 'DELETE', prefix: '/api/skills/wall/',             handler: handleWall },
+
   // Self-code skill tools (autodesarrollo: run/checkpoint/rollback/restart)
   { method: 'POST', path: '/api/skills/code/run',             handler: handleRunCommand },
   { method: 'POST', path: '/api/skills/code/checkpoint',      handler: handleCodeCheckpoint },
@@ -361,7 +369,7 @@ export async function dispatch(req, res) {
   }
 
   const pathname = req.url.split('?')[0]
-  const match = routes.find((r) => r.method === req.method && r.path === pathname)
+  const match = routes.find((r) => r.method === req.method && (r.path === pathname || (r.prefix && pathname.startsWith(r.prefix))))
   if (!match) {
     return json(res, 404, { ok: false, error: 'not_found' })
   }

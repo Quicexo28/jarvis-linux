@@ -28,6 +28,7 @@ import { VoiceHalo } from './components/VoiceHalo'
 import { useAudioLevel } from './hooks/useAudioLevel'
 import { WorldScene } from './scenes/WorldScene'
 import { PlanSelectorOverlay } from './components/PlanSelectorOverlay'
+import { ModeErrorBoundary } from './components/ModeErrorBoundary'
 import { ListeningOverlay } from './components/ListeningOverlay'
 import { DisplayCard } from './components/DisplayCard'
 import { Model3DViewer } from './components/Model3DViewer'
@@ -45,8 +46,8 @@ import { useGesturePipeline } from './hooks/useGesturePipeline'
 import { useGestureCursor } from './hooks/useGestureCursor'
 import { useGestureStore } from './state/gestureStore'
 import { getWakeConfirmation } from './utils/wakeReply'
-import { PINCH_ENTER_THRESHOLD, PINCH_VIGNETTE_START, RING_DRAG_SENSITIVITY } from './gestures/config'
-import { snapToNearestSlot, dragToRingAngle } from './state/ringSnap'
+import { PINCH_ENTER_THRESHOLD, PINCH_VIGNETTE_START, RING_DRAG_SENSITIVITY, RING_SLOT_HYSTERESIS } from './gestures/config'
+import { slotWithHysteresis, dragToRingAngle } from './state/ringSnap'
 import { modeMeta, MAIN_RING } from './constants'
 import QRCode from 'qrcode'
 import type { SystemTelemetry, MobileTokenInfo, MobileStatus, Mode } from './types'
@@ -162,6 +163,8 @@ export function AwakeApp() {
 
   /** Handler de eventos de gesto; se reasigna en cada render (ver más abajo). */
   const gestureEventsRef = useRef<Parameters<typeof useGestureStore.subscribe>[0]>(() => {})
+  /** Enclavamiento del pinch: tras entrar a un modo hay que soltarlo para volver a entrar. */
+  const pinchLatchRef = useRef(false)
 
   // Gesture: el puño AGARRA el carrusel y lo gira; al soltar, snap al slot más
   // cercano. Manipulación DIRECTA y absoluta — el ángulo es una función de
@@ -189,9 +192,11 @@ export function AwakeApp() {
     const stop = () => {
       if (!dragging) return
       dragging = false
-      lastSlot = -1
       const jarvis = useJarvisStore.getState()
-      const slot = snapToNearestSlot(jarvis.ringAngle, MAIN_RING.length)
+      // Cae en el slot que estaba RESALTADO (con su histéresis), no en el más
+      // cercano: soltar con el ángulo en 1.55 no debe elegir otro que el visto.
+      const slot = slotWithHysteresis(jarvis.ringAngle, lastSlot, MAIN_RING.length, RING_SLOT_HYSTERESIS)
+      lastSlot = -1
       // El orden importa: soltar la bandera ANTES deja que setActiveRingMode
       // vuelva a mantener el invariante ángulo↔modo (ver jarvisStore).
       jarvis.setRingDragging(false)
@@ -220,8 +225,9 @@ export function AwakeApp() {
       const angle = dragToRingAngle(baseAngle, g.deltaX, RING_DRAG_SENSITIVITY)
       jarvis.setRingAngle(angle)
       // Resalte en vivo del slot que pasa por el frente: sin esto el holograma
-      // no se ilumina hasta soltar y el arrastre sigue siendo a ciegas.
-      const slot = snapToNearestSlot(angle, MAIN_RING.length)
+      // no se ilumina hasta soltar y el arrastre sigue siendo a ciegas. Con
+      // histéresis: en la frontera x.5 el temblor de la mano alternaba dos modos.
+      const slot = slotWithHysteresis(angle, lastSlot, MAIN_RING.length, RING_SLOT_HYSTERESIS)
       if (slot !== lastSlot) {
         lastSlot = slot
         jarvis.setActiveRingMode(MAIN_RING[slot])
@@ -250,9 +256,31 @@ export function AwakeApp() {
   const qrCanvasRef        = useRef<HTMLCanvasElement>(null)
   const housePlans = useMemo(() => loadSavedPlans(), [zoomedMode])
 
+  const cancelPlanSelector = useCallback(() => {
+    setShowPlanSelector(false)
+    setPendingCanvasMode(null)
+  }, [])
+
+  // Salida ÚNICA (botón, Escape, gesto back): cada llamada sube un nivel y
+  // siempre limpia el pinch, para no dejar el holograma escalado sin modo.
   const handleBack = useCallback(() => {
-    setZoomedMode(null)
-  }, [setZoomedMode])
+    setPinchZoomProgress(0)
+    if (showPlanSelector) { cancelPlanSelector(); return }
+    if (zoomedMode != null) { setZoomedMode(null); return }
+    if (ringLevel !== 'main') setRingLevel('main')
+  }, [showPlanSelector, zoomedMode, ringLevel, cancelPlanSelector, setZoomedMode, setRingLevel, setPinchZoomProgress])
+
+  // El selector de plano solo existe en house-sub: cualquier salida de nivel
+  // (voz, Escape) lo cierra.
+  useEffect(() => {
+    if (ringLevel !== 'house-sub') cancelPlanSelector()
+  }, [ringLevel, cancelPlanSelector])
+
+  // Red de seguridad: si el pipeline cae con el pinch activo, no llegará otra
+  // muestra que lo limpie.
+  useEffect(() => {
+    if (gestureStatus !== 'running') setPinchZoomProgress(0)
+  }, [gestureStatus, setPinchZoomProgress])
 
   const enterMode = useCallback((mode: Mode) => {
     if (ringLevel === 'main' && mode === 'house') { setRingLevel('house-sub'); return }
@@ -280,11 +308,7 @@ export function AwakeApp() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (zoomedMode != null) handleBack()
-        else if (ringLevel === 'house-sub' || ringLevel === 'utils-sub') setRingLevel('main')
-        return
-      }
+      if (e.key === 'Escape') { handleBack(); return }
       if (zoomedMode != null) return
       if (e.key === 'ArrowLeft')  { rotateRing(-1); return }
       if (e.key === 'ArrowRight') { rotateRing(+1); return }
@@ -313,19 +337,21 @@ export function AwakeApp() {
     // cierra el visor: es el "atrás" de lo visible, no del ring de debajo.
     if (out.back && !prev.back) {
       if (model3dOpen) model3dHide()
-      else if (zoomedMode != null) handleBack()
-      else if (ringLevel === 'house-sub' || ringLevel === 'utils-sub') setRingLevel('main')
+      else handleBack()
     }
 
     // pinch → progreso de zoom sobre el holograma (solo en el ring)
     const pinch = out.pinch
-    if (zoomedMode !== null || model3dOpen || !pinch.active) {
+    if (!pinch.active) pinchLatchRef.current = false
+    if (zoomedMode !== null || model3dOpen || !pinch.active || pinchLatchRef.current) {
       if (useJarvisStore.getState().pinchZoomProgress !== 0) setPinchZoomProgress(0)
       return
     }
     const raw = (pinch.zoom - 1.0) / (PINCH_ENTER_THRESHOLD - 1.0)
     const progress = Math.max(0, Math.min(1, raw))
     if (progress >= 1.0) {
+      // Sostener el pinch encadenaba entradas (house → house-sub → plan3d).
+      pinchLatchRef.current = true
       setPinchZoomProgress(0)
       enterMode(activeRingMode)
       return
@@ -543,7 +569,11 @@ export function AwakeApp() {
     // talking before the STT window closes) is NOT blocked.
     const msSinceSpoke = Date.now() - postSpeakTimeRef.current
     const echoActive = speakingRef.current || msSinceSpoke < 1200
-    if (echoActive && !hasRealSpeech(text, spokenTextRef.current)) {
+    // La orden de parar se evalúa antes del eco y del wake gate: "para" es palabra
+    // común (el filtro de eco la descartaría si Jarvis la dijo) y la ventana de
+    // wake_word puede haber cerrado mientras habla.
+    const stopOrder = (speakingRef.current || turnBusyRef.current) && isStopOnly(text)
+    if (echoActive && !stopOrder && !hasRealSpeech(text, spokenTextRef.current)) {
       console.log(`[turn] ignored (self-echo, no novel words): "${text}"`)
       return
     }
@@ -554,7 +584,7 @@ export function AwakeApp() {
     // window so a back-and-forth keeps going without repeating "jarvis".
     if (voiceMode === 'wake_word') {
       const heard = hasWakePhrase(text)
-      if (!wakeListening && !heard) {
+      if (!wakeListening && !heard && !stopOrder) {
         console.log(`[wake] gated (no wake word): "${text}"`)
         return
       }
@@ -580,7 +610,7 @@ export function AwakeApp() {
     // on as a new turn, the brain would answer it and Jarvis would start talking
     // again right after being told to stop. The aborted turn's own release()
     // clears the busy flag (its stream rejects → .finally).
-    if ((speakingRef.current || turnBusyRef.current) && isStopOnly(text)) {
+    if (stopOrder) {
       console.log(`[turn] stop (barge-in, sin turno nuevo): "${text}"`)
       speakAbortRef.current?.abort()
       setCoreInput(text)
@@ -653,10 +683,11 @@ export function AwakeApp() {
     // dead-air. The session is created lazily on the first sentence.
     let session: TtsSession | null = null
     const speakSentence = (t: string) => {
+      // Un sentence tardío de un turno abortado no debe dejar speakingRef en true.
+      if (ctrl.signal.aborted) return
       spoke = true
       speakingRef.current = true
       ttsBusThinking(false) // reply started — hologram switches to speak-inflate
-      if (ctrl.signal.aborted) return
       if (!session) session = streamTtsSession({ url: ttsUrl, lang: 'es', fx: true, signal: ctrl.signal })
       session.speak(t)
     }
@@ -832,6 +863,7 @@ export function AwakeApp() {
       {showPlanSelector && pendingCanvasMode && (
         <PlanSelectorOverlay
           plans={housePlans}
+          onCancel={cancelPlanSelector}
           onSelect={(key) => {
             setHousePlanKey(key)
             setShowPlanSelector(false)
@@ -850,10 +882,12 @@ export function AwakeApp() {
           the active house-panel selection via initialSelectedKey. */}
       {isCanvasMode && (
         <div className="mode-overlay" style={{ opacity: overlayVisible ? 1 : 0 }}>
-          {zoomedMode === 'plan2d' && <Plan2DEditor />}
-          {zoomedMode === 'plan3d' && <Plan3DViewer initialSelectedKey={housePlanKey} />}
-          {zoomedMode === 'space'  && <SpaceViewer  initialSelectedKey={housePlanKey} />}
-          {zoomedMode === 'vault'  && <VaultGraph />}
+          <ModeErrorBoundary key={zoomedMode} onFail={handleBack}>
+            {zoomedMode === 'plan2d' && <Plan2DEditor />}
+            {zoomedMode === 'plan3d' && <Plan3DViewer initialSelectedKey={housePlanKey} />}
+            {zoomedMode === 'space'  && <SpaceViewer  initialSelectedKey={housePlanKey} />}
+            {zoomedMode === 'vault'  && <VaultGraph />}
+          </ModeErrorBoundary>
         </div>
       )}
 
@@ -908,7 +942,7 @@ export function AwakeApp() {
 
       {/* El modo `vault` trae su propio botón dentro del HUD, y el global le
           caía encima de la marca de la barra de estado. Un solo "volver". */}
-      {zoomedMode && zoomedMode !== 'vault' && (
+      {!showPlanSelector && (zoomedMode ? zoomedMode !== 'vault' : ringLevel !== 'main') && (
         <button className="world-back-btn" onClick={handleBack}>
           ← Volver
         </button>

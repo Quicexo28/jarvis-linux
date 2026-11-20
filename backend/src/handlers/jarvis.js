@@ -8,6 +8,7 @@ import { runClaude, sessionAsk } from '../lib/claudeCli.js'
 import { addUserMessage, addAssistantMessage, getConversationContext } from '../lib/conversationMemory.js'
 import { markInteraction } from '../lib/attentionState.js'
 import { splitForTts } from '../lib/ttsChunks.js'
+import { killProcessGroup } from '../lib/ttsPlayer.js'
 import { consumeTicket, elevationStatus, enrollDevice, issueChallenge, elevate } from '../lib/riskAuth.js'
 import { riskDeniedSince } from '../lib/toolRisk.js'
 
@@ -115,6 +116,10 @@ export async function handleJarvisTts(req, res) {
   }
 }
 
+// Corte de la voz en curso. Invariante: una sola voz por máquina, sea cual sea
+// el cliente; una sesión nueva silencia la anterior antes de arrancar su player.
+let stopActiveTts = null
+
 /**
  * WebSocket upgrade handler for /api/jarvis/tts/ws.
  *
@@ -126,6 +131,9 @@ export async function handleJarvisTts(req, res) {
  * (to satisfy the frontend watchdog timer), then {type:"end"} once paplay
  * finishes. The frontend AudioWorklet drains the silent frame instantly and
  * resolves — UI state stays correct without the client handling real audio.
+ *
+ * El player va en grupo propio y se corta con SIGKILL al grupo (ttsPlayer.js);
+ * stopActiveTts garantiza una sola voz a la vez.
  */
 export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
   let WsModule
@@ -155,12 +163,26 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
     // the still-buffered pipe while N is playing → gapless playback.
     const aecSink = process.env.JARVIS_AEC_SINK ?? 'jarvis_aec_sink'
     const deviceFlag = aecSink ? ` --device=${aecSink}` : ''
+    // detached: grupo de procesos propio, para matar sh+ffmpeg+paplay de golpe.
+    stopActiveTts?.()
     const player = spawn('sh', ['-c',
       `ffmpeg -loglevel quiet -f f32le -ar 24000 -ac 1 -i pipe:0 -f s16le -ar 48000 -ac 2 - | paplay --raw --rate=48000 --channels=2 --format=s16le${deviceFlag}`,
-    ], { stdio: ['pipe', 'ignore', 'ignore'] })
+    ], { stdio: ['pipe', 'ignore', 'ignore'], detached: true })
     player.stdin.on('error', () => {})
 
     let aborted = false
+    let playerClosed = false // evita SIGKILL a un pgid ya reciclado
+    const upstreams = new Set()
+
+    // Corta todo: player (grupo entero) y upstreams abiertos. Terminar un
+    // upstream dispara su 'close' → fail → cleanup, que con aborted no reintenta.
+    const stop = () => {
+      if (aborted) return
+      aborted = true
+      if (!playerClosed) killProcessGroup(player)
+      for (const u of upstreams) { try { u.terminate() } catch {} }
+    }
+    stopActiveTts = stop
     let sentStart = false
     let ended = false       // client signalled no more sentences
 
@@ -223,6 +245,8 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
     }
 
     player.on('close', () => {
+      playerClosed = true
+      if (stopActiveTts === stop) stopActiveTts = null
       sendJson({ type: 'end' })
       try { clientWs.close(1000) } catch {}
     })
@@ -275,6 +299,7 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
       synthActive++
       const attempt = job.attempts
       const upstream = new WsClient(upstreamUrl)
+      upstreams.add(upstream)
       let finished = false
       let watchdog = null
       const armWatchdog = () => {
@@ -286,6 +311,7 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
         finished = true
         clearTimeout(watchdog)
         synthActive--
+        upstreams.delete(upstream)
         try { upstream.terminate() } catch {}
       }
       const succeed = () => {
@@ -353,8 +379,7 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
       let msg
       try { msg = JSON.parse(data.toString()) } catch { return }
       if (msg.type === 'abort') {
-        aborted = true
-        try { player.kill() } catch {}
+        stop()
         try { clientWs.close(1000) } catch {}
         return
       }
@@ -372,10 +397,10 @@ export async function handleJarvisTtsStreamUpgrade(req, socket, head) {
     })
 
     clientWs.on('close', () => {
-      if (!aborted) { aborted = true; try { player.kill() } catch {} }
+      stop()
     })
     clientWs.on('error', () => {
-      aborted = true; try { player.kill() } catch {}
+      stop()
     })
   })
 }

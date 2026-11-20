@@ -243,6 +243,13 @@ export async function handleClaudeAgentEvent(req, res) {
   const failed = body?.status === 'error'
   const via = Array.isArray(body?.via) ? body.via : ['voice', 'telegram']
   const summary = spokenSummary(body?.error || body?.summary)
+  // Responder ya: el hub corta a los 10 s y reintenta, y la voz puede tardar más.
+  // Entregar en segundo plano evita que el aviso se repita cada minuto.
+  void deliverEvent({ body, title, failed, via, summary })
+  return json(res, 200, { ok: true, accepted: true })
+}
+
+async function deliverEvent({ body, title, failed, via, summary }) {
   const delivered = []
 
   if (via.includes('voice') && hasClient()) {
@@ -264,5 +271,4 @@ export async function handleClaudeAgentEvent(req, res) {
     if (ok) delivered.push('telegram')
   }
   console.log(`[claude-hub] terminó "${title}" (${body?.status}) → ${delivered.join('+') || 'sin canal'}`)
-  return json(res, 200, { ok: true, delivered })
 }

@@ -292,7 +292,17 @@ async fn handle_agent(hub: Hub, stream: TcpStream, peer: String) -> Result<()> {
     // Teardown.
     heartbeat.abort();
     writer.abort();
-    hub.agents.lock().await.remove(&name);
+    // Only drop the entry if it is still ours: when an agent reconnects before the old
+    // socket times out, the newer connection has already replaced it under the same name,
+    // and removing by name alone would orphan the live connection.
+    {
+        let mut agents = hub.agents.lock().await;
+        if !agents.get(&name).is_some_and(|c| c.tx.same_channel(&tx)) {
+            info!("agent '{name}': old connection closed, newer one stays");
+            return Ok(());
+        }
+        agents.remove(&name);
+    }
     info!("agent '{name}' offline");
     hub.notify(json!({
         "type": "disconnected", "machine": name,

@@ -20,8 +20,8 @@ android {
         applicationId = "com.jarvis.companion"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "2.7.1"
+        versionCode = 12
+        versionName = "2.9.0"
     }
 
     signingConfigs {
@@ -53,6 +53,10 @@ android {
     }
 }
 
-// Zero external dependencies: plain Android SDK + org.json (bundled) keeps the
-// APK tiny and the build offline-friendly after first sync.
-dependencies {}
+// Plain Android SDK + org.json (bundled) for everything except one library:
+// the wall mode (wall/WallService) needs a WebSocket client with binary frames
+// and the SDK has none. OkHttp is the standard one (already in the local Gradle
+// cache, so the build stays offline-friendly).
+dependencies {
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+}

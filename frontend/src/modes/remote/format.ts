@@ -55,3 +55,20 @@ export function baseName(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean)
   return parts[parts.length - 1] ?? path
 }
+
+/**
+ * Dirección para el navegador de la pared (`POST /webapps/open {url}`): solo
+ * `https:`, como exige el contrato (el server también lo valida). Sin esquema
+ * se le pone `https://` («netflix.com» vale); cualquier otro esquema, usuario
+ * y contraseña en la URL o un host sin punto se rechazan. null = no vale.
+ */
+export function httpsUrl(input: string): string | null {
+  const s = input.trim()
+  if (!s || s.length > 2048) return null
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(s) && !/^[^/]+\.[^/]+:\d+(\/|$)/.test(s) ? s : `https://${s}`
+  let u: URL
+  try { u = new URL(withScheme) } catch { return null }
+  if (u.protocol !== 'https:' || u.username || u.password) return null
+  if (!u.hostname.includes('.') && !u.hostname.startsWith('[')) return null
+  return u.href
+}

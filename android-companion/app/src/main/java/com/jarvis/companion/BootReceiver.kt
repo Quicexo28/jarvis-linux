@@ -13,7 +13,8 @@ import com.jarvis.companion.widget.WidgetPrefs
  * it the user just opens the app once and it resumes.
  *
  * En **modo proyector** hace lo contrario: no arranca el reporter (una pantalla
- * no reporta bateria ni ubicacion) y lo unico que hace es abrir el stream.
+ * no reporta bateria ni ubicacion) y lo unico que hace es abrir el stream
+ * (Moonlight, o la pared propia si `wallMode`).
  * Es la pieza que sostiene todo el encendido automatico: la depuracion
  * inalambrica de Android 14 sale DESACTIVADA en cada arranque, asi que el
  * backend NO puede alcanzar el proyector por ADB recien encendido — el unico
@@ -33,6 +34,25 @@ class BootReceiver : BroadcastReceiver() {
         // El modo proyector se comprueba ANTES de `isConfigured`: con un UUID
         // fijado no hace falta emparejamiento, y ese es justo el caso normal.
         if (Config.projectorMode(ctx)) {
+            // Depuración inalámbrica de vuelta en cuanto haya wifi (keepAdbWifi,
+            // requiere WRITE_SECURE_SETTINGS). Comodidad: nada de lo que sigue
+            // depende de ella.
+            AdbWifi.watch(ctx)
+            // Modo pared: el firmware abre su launcher de fábrica al arrancar,
+            // así que se trae el inicio propio al frente (necesita
+            // SYSTEM_ALERT_WINDOW). La conexión al PC arranca al abrir
+            // «Monitor». Sin wallMode, el camino de Moonlight queda tal cual.
+            if (Config.wallMode(ctx)) {
+                com.jarvis.companion.wall.WallHome.syncTrampoline(ctx)
+                try { com.jarvis.companion.wall.KeystoneService.start(ctx) } catch (e: Exception) { Log.w(TAG, "keystone: ${e.message}") }
+                try {
+                    ctx.startActivity(Intent(ctx, com.jarvis.companion.wall.LauncherActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                } catch (e: Exception) {
+                    Log.w(TAG, "no se pudo abrir el inicio: ${e.message}")
+                }
+                return
+            }
             projectAtBoot(ctx)
             return
         }

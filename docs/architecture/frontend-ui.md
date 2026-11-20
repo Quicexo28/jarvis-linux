@@ -84,3 +84,5 @@ Mode ring: `main` (`home | house | system | cloud`) + `sub` (`plan3d | space | p
 
 - **`SYSTEM_TELEMETRY_ENABLED`** in `AwakeApp.tsx` gates telemetry poll (set to `false` by default).
 
+
+- **Salida única** (`AwakeApp.tsx`): `handleBack` sirve a botón "← Volver", Escape y gesto back, y sube un nivel por llamada: limpia `pinchZoomProgress`, luego cierra el selector de plano (`cancelPlanSelector`), luego `zoomedMode`, luego el sub-anillo. El selector solo existe en `house-sub` (un efecto lo cancela al salir de ese nivel, así `view_close` por voz también lo cierra) y el botón se muestra en sub-anillo. El pinch tiene enclavamiento (`pinchLatchRef`): al llegar a `progress>=1` entra una vez y hay que soltar el pinch para volver a entrar, si no sostenerlo encadenaba house → house-sub → plan3d; además se pone a 0 si el pipeline de gestos deja de estar `running`. `ModeErrorBoundary` envuelve los visores de canvas: un throw sale del modo (`handleBack`) en vez de desmontar la app. `view_close` también limpia el pinch y devuelve `closed: 'pinch'` si había uno.

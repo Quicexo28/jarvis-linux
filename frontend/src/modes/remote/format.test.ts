@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { uptime, mb, pct, ago, baseName, batteryPct } from './format'
+import { uptime, mb, pct, ago, baseName, batteryPct, httpsUrl } from './format'
 
 describe('uptime', () => {
   it('shows days and hours past a day', () => {
@@ -73,5 +73,29 @@ describe('baseName', () => {
   })
   it('handles POSIX paths', () => {
     expect(baseName('/home/santi/informe.pdf')).toBe('informe.pdf')
+  })
+})
+
+describe('httpsUrl', () => {
+  it('acepta https y completa el esquema si falta', () => {
+    expect(httpsUrl('https://www.netflix.com/browse')).toBe('https://www.netflix.com/browse')
+    expect(httpsUrl('  netflix.com ')).toBe('https://netflix.com/')
+    expect(httpsUrl('youtube.com/tv')).toBe('https://youtube.com/tv')
+    expect(httpsUrl('192.168.1.29:8443/x')).toBe('https://192.168.1.29:8443/x')
+  })
+  it('rechaza cualquier otro esquema', () => {
+    expect(httpsUrl('http://netflix.com')).toBeNull()
+    expect(httpsUrl('javascript:alert(1)')).toBeNull()
+    expect(httpsUrl('file:///etc/passwd')).toBeNull()
+    expect(httpsUrl('data:text/html,hola')).toBeNull()
+    expect(httpsUrl('chrome://settings')).toBeNull()
+  })
+  it('rechaza basura, credenciales y hosts sin punto', () => {
+    expect(httpsUrl('')).toBeNull()
+    expect(httpsUrl('   ')).toBeNull()
+    expect(httpsUrl('https://')).toBeNull()
+    expect(httpsUrl('https://user:pw@netflix.com')).toBeNull()
+    expect(httpsUrl('netflix')).toBeNull()
+    expect(httpsUrl('https://' + 'a'.repeat(2050) + '.com')).toBeNull()
   })
 })

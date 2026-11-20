@@ -33,6 +33,8 @@ class SetupActivity : Activity() {
     private lateinit var intervalInput: EditText
     private lateinit var projectorInput: EditText
     private lateinit var appIdInput: EditText
+    private lateinit var wallUrlInput: EditText
+    private lateinit var wallTokenInput: EditText
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -93,6 +95,21 @@ class SetupActivity : Activity() {
         label("AppId (vacío = abre la lista de apps)")
         appIdInput = input("881448767", Config.projectorAppId(this), InputType.TYPE_CLASS_NUMBER)
 
+        // Modo pared: sustituye a Moonlight en el proyector. La app pinta el
+        // stream de wall-server ella misma y hace de pantalla de inicio.
+        root.addView(TextView(this).apply {
+            text = "\nModo pared"
+            textSize = 18f
+        })
+        root.addView(TextView(this).apply {
+            text = "Solo para el proyector. Token vacío = desactivado."
+            textSize = 13f
+        })
+        label("URL de wall-server")
+        wallUrlInput = input(Config.WALL_URL_DEFAULT, Config.wallUrl(this), InputType.TYPE_TEXT_VARIATION_URI)
+        label("Token de wall-server")
+        wallTokenInput = input("token", Config.wallToken(this), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
+
         fun button(text: String, onClick: () -> Unit) = root.addView(Button(this).apply {
             this.text = text
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
@@ -101,6 +118,7 @@ class SetupActivity : Activity() {
 
         button("Guardar y abrir Jarvis") { saveAndOpen() }
         button("Guardar modo proyector") { saveProjector() }
+        button("Guardar modo pared") { saveWall() }
         button("Permisos de ubicación y micrófono") { requestRuntimePermissions() }
         button("Ignorar optimización de batería") { requestIgnoreBatteryOptimizations() }
         button("Detener reporte en segundo plano") {
@@ -158,6 +176,30 @@ class SetupActivity : Activity() {
         })
     }
 
+    /**
+     * Activa (o apaga) el modo pared. Implica modo proyector, que es lo que
+     * mira el BootReceiver; el UUID de Moonlight no se toca por si se vuelve.
+     */
+    private fun saveWall() {
+        val token = wallTokenInput.text.toString().trim()
+        val url = wallUrlInput.text.toString().trim()
+        if (token.isEmpty()) {
+            Config.setWall(this, false)
+            com.jarvis.companion.wall.WallService.stop(this)
+            updateStatus("Modo pared desactivado.")
+            return
+        }
+        if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+            Toast.makeText(this, "La URL debe empezar por ws://", Toast.LENGTH_LONG).show()
+            return
+        }
+        Config.setWall(this, true, url, token)
+        Config.setProjectorFlag(this, true)
+        ReporterService.stop(this)
+        com.jarvis.companion.wall.WallService.startWithActivity(this, "ajustes")
+        finish()
+    }
+
     /* ----- permissions ----- */
 
     private fun hasPermission(perm: String) =
@@ -207,6 +249,7 @@ class SetupActivity : Activity() {
             if (pm.isIgnoringBatteryOptimizations(packageName)) "excluida ✓" else "activa (excluir recomendado)")
         lines.add("Reporte: " + if (ReporterService.isRunning) "activo" else "detenido")
         if (Config.projectorMode(this)) lines.add("Modo proyector: ACTIVO")
+        if (Config.wallMode(this)) lines.add("Modo pared: ACTIVO")
         status.text = lines.joinToString("\n")
     }
 }

@@ -6,7 +6,8 @@ import * as THREE from 'three'
 import { useJarvisStore } from '../state/jarvisStore'
 import { useSystemStore } from '../state/systemStore'
 import { getTtsLevel, isTtsSpeaking, isTtsThinking, isHoloAwake } from '../audio/ttsLevelBus'
-import { PINCH_SCALE_MULTIPLIER, PINCH_APPROACH_DISTANCE, PINCH_DISSOLVE_START } from '../gestures/config'
+import { PINCH_SCALE_MULTIPLIER, PINCH_APPROACH_DISTANCE, PINCH_DISSOLVE_START, RING_FOLLOW_OMEGA } from '../gestures/config'
+import { springFollow, dampFactor, type SpringState } from '../state/ringSnap'
 import { modeMeta, MAIN_RING, SUB_RING, SUB_RING_UTILS } from '../constants'
 import { FOLDER_HUE, HUE } from '../lib/theme'
 import { HoloClock, HoloBase, HoloReticle, HoloFloor, Glow, HoloMaterial, useHoloMaterial, getGlowTexture } from './holoKit'
@@ -22,6 +23,11 @@ import type { Mode } from '../types'
 
 const R_ACTIVE = 4
 const R_IDLE   = 7
+/** Tasas (1/s) de los lerp por frame de cada holograma, independientes del frame
+ * rate (`dampFactor`). Igualan a 60 fps lo que hacían `k·6` y `k·5` con
+ * `k = 1 − 0.005^dt` (≈0.507 y ≈0.423 por frame), sin su sobreimpulso. */
+const HOLO_SCALE_RATE    = 42.5
+const HOLO_ENTRANCE_RATE = 33
 
 // Orden de los anillos: importado, NO redeclarado (ver constants.ts).
 const MAIN_ORDER = MAIN_RING
@@ -1100,7 +1106,8 @@ interface RingGroupProps {
 }
 function RingGroup({ targetAngle, targetRef, initialAngle, children }: RingGroupProps) {
   const groupRef = useRef<THREE.Group>(null)
-  const angleRef = useRef(initialAngle ?? targetAngle)
+  // Ángulo + velocidad del muelle, mutados en sitio (cero asignaciones por frame).
+  const springRef = useRef<SpringState>({ x: initialAngle ?? targetAngle, v: 0 })
 
   useFrame((_, delta) => {
     if (!groupRef.current) return
@@ -1108,12 +1115,12 @@ function RingGroup({ targetAngle, targetRef, initialAngle, children }: RingGroup
     // ~20 veces/s): leerlo aquí evita re-renderizar el anillo entero por cada
     // muestra de gesto. Con prop suelta, el carrusel solo se movía al soltar.
     const target = targetRef ? targetRef.current : targetAngle
-    // Damping pattern from the original CameraController, multiplied for a ~350ms settle.
-    const k = 1 - Math.pow(0.005, delta)
-    // Choose the shortest-path delta so we never spin the long way around.
-    const diff = wrapPi(target - angleRef.current)
-    angleRef.current += diff * k * 6
-    groupRef.current.rotation.y = angleRef.current
+    const s = springRef.current
+    // Camino corto: el objetivo se expresa junto al ángulo actual para no dar
+    // nunca la vuelta larga. Muelle crítico exacto: estable con frames largos
+    // (el lerp `k·6` de antes se pasaba del objetivo y temblaba — ver ringSnap).
+    springFollow(s, s.x + wrapPi(target - s.x), RING_FOLLOW_OMEGA, delta)
+    groupRef.current.rotation.y = s.x
   })
 
   return <group ref={groupRef}>{children}</group>
@@ -1189,11 +1196,12 @@ function RingHologram({
     const desiredZ = -r * Math.cos(slotAngle) + pinchZ
 
     if (springEntrance && !springStartedRef.current) {
-      // Spring entrance from origin → slot position.
-      const k = 1 - Math.pow(0.005, delta)
-      springRef.current.x += (desiredX - springRef.current.x) * k * 5
-      springRef.current.y += (0        - springRef.current.y) * k * 5
-      springRef.current.z += (desiredZ - springRef.current.z) * k * 5
+      // Spring entrance from origin → slot position. Tasa equivalente al `k·5`
+      // de antes a 60 fps, pero sin pasarse del objetivo con frames largos.
+      const k = dampFactor(HOLO_ENTRANCE_RATE, delta)
+      springRef.current.x += (desiredX - springRef.current.x) * k
+      springRef.current.y += (0        - springRef.current.y) * k
+      springRef.current.z += (desiredZ - springRef.current.z) * k
       groupRef.current.position.copy(springRef.current)
       // Once close enough, snap-track exact target on subsequent frames.
       if (Math.abs(springRef.current.x - desiredX) < 0.05 && Math.abs(springRef.current.z - desiredZ) < 0.05) {
@@ -1204,8 +1212,9 @@ function RingHologram({
       springRef.current.set(desiredX, 0, desiredZ)
     }
 
-    const k = 1 - Math.pow(0.005, delta)
-    matRef.current.scale = THREE.MathUtils.lerp(matRef.current.scale, targetScale, k * 6)
+    // Escala que sigue al foco mientras el anillo gira. Era `lerp(…, k·6)`: con
+    // frames >34 ms el factor pasaba de 1 y los hologramas "latían" al girar.
+    matRef.current.scale = THREE.MathUtils.lerp(matRef.current.scale, targetScale, dampFactor(HOLO_SCALE_RATE, delta))
     const finalScale = matRef.current.scale * (hovered && isActive ? 1.05 : 1)
     groupRef.current.scale.setScalar(finalScale)
     groupRef.current.visible = visible

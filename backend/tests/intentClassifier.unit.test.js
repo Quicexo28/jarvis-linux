@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classifyIntent } from '../src/lib/intentClassifier.js'
+import { classifyIntent, gestureEnableFromText } from '../src/lib/intentClassifier.js'
 
 const ENGAGED_CTX = { state: 'ENGAGED', speakerConfidence: 1.0, alwaysOn: true }
 
@@ -12,6 +12,29 @@ describe('toggle_gestures intent', () => {
   it('detects "desactiva los gestos"', () => {
     const r = classifyIntent('desactiva los gestos', ENGAGED_CTX)
     expect(r.intentTag).toBe('toggle_gestures')
+  })
+})
+
+describe('toggle_gestures: frases de abrir/cerrar', () => {
+  it.each([
+    'activa el sistema de gestos',
+    'abre el control por gestos',
+    'prende el modo de gestos',
+    'abre el sistema de gestos',
+    'cierra los gestos',
+  ])('detecta "%s"', (frase) => {
+    expect(classifyIntent(frase, ENGAGED_CTX).intentTag).toBe('toggle_gestures')
+  })
+
+  it('no confunde "abre el navegador"', () => {
+    expect(classifyIntent('abre el navegador', ENGAGED_CTX).intentTag).not.toBe('toggle_gestures')
+  })
+
+  it('gestureEnableFromText distingue encender de apagar', () => {
+    expect(gestureEnableFromText('desactiva los gestos')).toBe(false)
+    expect(gestureEnableFromText('apaga gestos')).toBe(false)
+    expect(gestureEnableFromText('activa gestos')).toBe(true)
+    expect(gestureEnableFromText('abre el sistema de gestos')).toBe(true)
   })
 })
 

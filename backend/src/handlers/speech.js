@@ -11,7 +11,7 @@
 import { json, readBody } from '../lib/http.js'
 import { prewarmTts } from './jarvis.js'
 import { getAttentionState, markInteraction, forcePassive, setVoiceMuted, isVoiceMuted } from '../lib/attentionState.js'
-import { classifyIntent, hasWakePhrase } from '../lib/intentClassifier.js'
+import { classifyIntent, hasWakePhrase, gestureEnableFromText } from '../lib/intentClassifier.js'
 import { pickModel } from '../lib/modelRouter.js'
 import { learnedModel } from '../lib/learnedRouter.js'
 import { addUserMessage, addAssistantMessage, getConversationContext } from '../lib/conversationMemory.js'
@@ -709,7 +709,7 @@ async function _runSpeechTurnInner(body, onSentence, ctx = { meta: null }) {
 
   // toggle_gestures intent: push gesture_set primitive to renderer via skill bus.
   if (intentTag === 'toggle_gestures') {
-    const enable = /activa|enciende/i.test(text.toLowerCase())
+    const enable = gestureEnableFromText(text)
     let gestureApplied = false
     if (skillBusHasClient()) {
       try { await skillBusRequest('gesture_set', { enabled: enable }); gestureApplied = true } catch {}

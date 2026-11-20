@@ -142,6 +142,21 @@ export const PINCH_VIGNETTE_START = 0.5
  * número es ahora literal — subirlo mueve MÁS anillo por el mismo gesto.
  */
 export const RING_DRAG_SENSITIVITY = 7.0
+/**
+ * Muelle crítico con el que el anillo (WorldScene `RingGroup`) sigue a su
+ * objetivo, en rad/s. Retardo en movimiento = 2/ω (40 → 50 ms); asentado al 99 %
+ * tras un snap ≈ 6,6/ω (≈170 ms). Más bajo = más suave pero más "detrás" de la
+ * mano; más alto = vuelven a notarse los escalones de ~25 Hz del pipeline.
+ */
+export const RING_FOLLOW_OMEGA = 40
+/**
+ * Histéresis del slot resaltado durante el arrastre, en slots: para cambiar de
+ * modo el ángulo debe pasar la frontera x.5 por este margen. Holgado frente al
+ * temblor residual ESTIMADO con la mano quieta (ruido de muñeca tras One-Euro ×
+ * RING_DRAG_SENSITIVITY ≈ 0,01-0,03 slots; sin medir en vivo) y lo bastante
+ * pequeño (≈7°) para que el resalte no se sienta pegado.
+ */
+export const RING_SLOT_HYSTERESIS = 0.12
 
 // --- Tap: clic con la MISMA mano que apunta (pulgar toca el índice) ---
 // El "V abierta soltada" (DiscreteTracker) sigue existiendo, pero como clic de
@@ -192,3 +207,7 @@ export const CURSOR_MAGNET_STICKY = 72
 export const CURSOR_DWELL_MS = 1100
 /** Movimiento (px) que cancela el dwell en curso. */
 export const CURSOR_DWELL_CANCEL_PX = 38
+
+/** Sin frames nuevos de cámara durante este tiempo el pipeline se declara
+ * atascado: se limpia el output y el status vuelve a `starting`. */
+export const FRAME_STALL_MS = 1500

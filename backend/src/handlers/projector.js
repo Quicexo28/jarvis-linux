@@ -48,6 +48,9 @@ const cfg = () => ({
   // publica los ids en `apps.json` (los asigna en runtime) ni en `/api/apps`;
   // sale de `<currentgame>` en serverinfo mientras la app corre.
   appId: process.env.JARVIS_PROJECTOR_APP_ID ?? '',
+  // Modo pared (wall-server + companion): el HOME del proyector ES la app de
+  // la pared, asi que `on` no debe lanzar Moonlight encima — la taparia.
+  wall: process.env.JARVIS_PROJECTOR_WALL === '1',
 })
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -282,6 +285,20 @@ async function launchMoonlight(c, uuid) {
   }
 }
 
+/**
+ * Trae la pared al frente con un HOME. `WallActivity` no esta exportada (un
+ * `am start` desde shell la rechaza); el trampolin HOME del companion si es
+ * alcanzable, y si alguien desactivo el modo HOME cae en el launcher de fabrica.
+ */
+async function showWall(c) {
+  try {
+    await adb(c, ['shell', 'input', 'keyevent', 'KEYCODE_HOME'], 5000)
+    return { ok: true, mode: 'wall' }
+  } catch (e) {
+    return { ok: false, error: 'launch_failed', detail: e.message }
+  }
+}
+
 /* ----------------------------------------------------------------- rutas */
 
 /** GET /api/skills/projector/status */
@@ -398,8 +415,7 @@ export async function handleProjectorOn(req, res) {
     steps.push({ step: 'wake' })
   }
 
-  const uuid = await localSunshineUuid()
-  const launch = await launchMoonlight(c, uuid)
+  const launch = c.wall ? await showWall(c) : await launchMoonlight(c, await localSunshineUuid())
   steps.push({ step: 'launch', ...launch })
 
   const ok = launch.ok

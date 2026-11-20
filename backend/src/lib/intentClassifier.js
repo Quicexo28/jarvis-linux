@@ -83,7 +83,15 @@ const SELF_CODE_RE = /\b(modifica|cambia|edita|arregla|corrige|mejora|refactoriz
 
 const SELF_BUILD_RE = /\b(no\s+puedes|aprende\s+a\s+hacer|conf[ií]g[uú]rate\s+para|act[íi]vate\s+para|necesito\s+que\s+puedas|no\s+sabes\s+c[oó]mo|implementa\s+(la\s+)?capacidad|t[oó]ma(me)?\s+una\s+foto|saca(me)?\s+una\s+foto|haz(me)?\s+una\s+foto|con[eé]ctate\s+a\s+(mi\s+|la\s+)?c[aá]mara|usa\s+(mi\s+|la\s+)?c[aá]mara)\b/i
 const ACTIVATE_SKILL_RE = /\b(activa\s+(la?\s+)?habilidad|activa\s+(el?\s+)?skill|habilita\s+(la?\s+)?funci[oó]n|enciende\s+(la?\s+)?habilidad)\b/i
-const TOGGLE_GESTURES_RE = /\b(activa|desactiva|enciende|apaga)\s+(los?\s+)?gestos\b/i
+// Verbos de abrir/cerrar incluidos: "abre el sistema de gestos" caía al LLM, que no
+// tiene gesture_set y como mucho abría el panel de debug (a veces no pasaba nada).
+const TOGGLE_GESTURES_RE = /\b(activa|desactiva|enciende|apaga|prende|abre|abrir|inicia|arranca|cierra|quita)\s+(?:(?:el|la|los|las)\s+)?(?:(?:sistema|control|modo|reconocimiento|seguimiento)\s+(?:de|por)\s+(?:los\s+)?)?gestos\b/i
+const GESTURE_OFF_RE = /\b(desactiva|apaga|cierra|quita)\w*\b/i
+
+/** true = encender gestos, false = apagarlos. "desactiva" contiene "activa": por eso palabra completa. */
+export function gestureEnableFromText(text) {
+  return !GESTURE_OFF_RE.test(String(text ?? ''))
+}
 const VOICE_MUTED_RE = /\b(no\s+escuches|ign[oó]ra(me)?|modo\s+silencio|silencio\s+de\s+voz)\b/i
 const SET_VOICE_MODE_RE = /\b(modo\s+(siempre\s+activ[ao]|continuo|wake\s*word|palabra\s+de\s+activaci[oó]n|ptt|push\s+to\s+talk|empujar\s+para\s+hablar|apagado\s+de\s+voz|voz\s+apagada|desactiva\s+voz|apaga\s+(el\s+)?micr[oó]fono)|cambia\s+(el\s+)?modo\s+de\s+(voz|escucha)|pon\s+(te\s+en\s+modo|el\s+modo)\s+(siempre|wake|ptt|silencio|continuo))\b/i
 

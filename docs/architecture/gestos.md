@@ -25,6 +25,12 @@ Funciones (contrato de producto): MANO DE PUNTERO — puño=arrastrar/rotar (del
 - **`EURO_TAP` es el filtro más rápido del sistema** (minCutoff 3.0, beta 3.0): con los parámetros del pinch el contacto tardaba 3 muestras (~150 ms) en cruzar el umbral y el botón se sentía pastoso. El ruido lo para la histéresis 0.45/0.62 de apertura, que en unidades de palma es enorme frente al jitter de landmarks.
 - **Calibrar el tap**: el panel «Debug gestos» muestra `tapAperture` (apertura cruda pulgar-índice de la mano izquierda) junto a los umbrales vigentes. Sin ese número, mover `TAP_ENTER/EXIT_APERTURE` es a ciegas.
 
+**Arrastre del anillo con el puño: temblor (2026-11).** El anillo (`RingGroup`, WorldScene) seguía a `ringAngle` con `angle += diff · k·6`, `k = 1 − 0.005^dt`: el 6 iba FUERA del exponente, así que el factor pasaba de 1 con frames >34 ms y de 2 con >76 ms. Con la inferencia de MediaPipe en el main thread esos frames son normales → sobreimpulso y oscilación alrededor del objetivo (el "tiembla, se siente inestable"). La escala de cada holograma (`lerp(…, k·6)`) tenía el mismo bug y "latía" al girar. Ahora:
+- El anillo sigue con un **muelle crítico integrado exacto** (`springFollow` en `state/ringSnap.ts`, `RING_FOLLOW_OMEGA`): estable con cualquier `dt`, sin sobreimpulso, y con velocidad continua — un seguidor de primer orden copiaba los escalones de ~25 Hz del pipeline como tirones. Coste: retardo 2/ω (50 ms con ω=40).
+- Los lerp por frame de hologramas usan `dampFactor(rate, dt) = 1 − e^(−rate·dt)`, con tasas que igualan a 60 fps el comportamiento anterior.
+- El slot resaltado durante el arrastre lleva **histéresis** (`slotWithHysteresis`, `RING_SLOT_HYSTERESIS`): con `Math.round` a secas la mano quieta cerca de x.5 alternaba dos modos y cada cambio re-renderizaba el anillo entero. Al soltar se elige el slot RESALTADO, no el más cercano.
+- Nunca multipliques un `1 − base^dt` por una constante fuera del exponente: deja de ser independiente del frame rate.
+
 Gotchas Linux/WebKitGTK (Tauri):
 - **Model + WASM locales y gitignored** (`public/models/hand_landmarker.task`, `public/wasm/` — regenerar según `public/models/README.txt`).
 - **La inferencia vive en el MAIN thread — un Worker es IMPOSIBLE con tasks-vision 0.10**: la librería no tiene ruta de ingesta CPU, toda imagen entra por textura WebGL (`_addBoundTextureAsImageToStream`), y los workers de WebKitGTK no tienen WebGL (probado: `GLctx.activeTexture` undefined con OffscreenCanvas; `Can't find variable: document` sin él). No re-intentar el worker.
@@ -39,3 +45,8 @@ Gotchas Linux/WebKitGTK (Tauri):
 - **Estado en `gestureStore`** (`status`/`statusDetail`/`fps`/`handsFrame`): GestureMonitor muestra backend + fps o el error real. Al apagar el pipeline el output se resetea a DEFAULT (un `active` rancio seguía rotando escenas 3D).
 - **Observabilidad remota**: `GET /api/skills/gestures/status` → `{enabled, status, detail, fps}` (skill-bus verb `gesture_status`) — el health-check del pipeline sin mirar la pantalla. Además `console.*` del webview sale a journald (`enable-write-console-messages-to-stdout` en lib.rs): `journalctl --user -u jarvis-ui | grep CONSOLE`.
 
+### Gotchas de cámara (2026-10)
+
+- **Regresión webkit2gtk 2.54.2**: un `<video srcObject>`, oculto o visible (medido en harness WebKitGTK aislado), queda en readyState 0 (0x0) y `play()` nunca resuelve (getUserMedia sí resuelve). `jarvis-ui.service` fija `WEBKIT_GST_ALLOW_PLAYBACK_OF_INVISIBLE_VIDEOS=1` (con ella: 640x360, play() en ~1,5 s). Síntoma sin ella: `starting` eterno y sin `[gestures] cámara activa`.
+- **Apertura única** (`cameraFeed.ts`): `openCamera()` comparte una sola promesa en vuelo y tiene timeout de 12 s (getUserMedia y play). `closeCamera()` con apertura en vuelo no libera: `startCamera` limpia al terminar si `wanted=false`. El pipeline no llama `closeCamera` tras `!alive` (el cleanup ya lo hizo).
+- Vigilante de frames (`FRAME_STALL_MS`): sin frames nuevos se resetea el output y el status vuelve a `starting`.

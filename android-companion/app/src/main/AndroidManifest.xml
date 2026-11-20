@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -22,6 +23,22 @@
          `adb shell appops set com.jarvis.companion SYSTEM_ALERT_WINDOW allow`.
          Sin ella el sistema descarta el arranque EN SILENCIO. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Modo pared (wall/WallService): Android 14 exige tipo para cada servicio
+         en primer plano. specialUse no tiene requisitos previos ni el tope de
+         6 h de dataSync en Android 15. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Modo pared, solo si se conceden por adb (ninguna app los obtiene sola):
+         - WRITE_SECURE_SETTINGS (`pm grant`): el WindowManager de fábrica del
+           HA109 BORRA enabled_accessibility_services en cada cambio de ventana
+           con foco (DisplayContent.enableNfxAccessibility, ver docs). La pared
+           vuelve a activar su servicio de accesibilidad en cuanto lo borran.
+         - PACKAGE_USAGE_STATS (`appops set … GET_USAGE_STATS allow`): saber qué
+           app está delante aunque la accesibilidad esté caída en ese momento.
+         En la tablet y el móvil nadie los concede y no hacen nada. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- Android 11+ hides other packages unless declared. Without this,
          `openMoonlight` cannot even tell whether Moonlight is installed:
@@ -36,6 +53,16 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="market" />
+        </intent>
+        <!-- Modo pared: el mosaico lista y lanza las apps de TV del proyector
+             (y las de launcher normal como respaldo). -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
 
@@ -162,6 +189,104 @@
             android:name=".ReporterService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!-- ===== Modo pared (paquete wall): todo inactivo sin Config.wallMode ===== -->
+
+        <!-- La pared: decoder + warp + inicio con mosaico. No exportada: la
+             abren el servicio, el boot y WallConfigActivity. Afinidad propia
+             para no mezclarse con la tarea del WebView. -->
+        <activity
+            android:name=".wall.WallActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.jarvis.companion.wall"
+            android:screenOrientation="landscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|smallestScreenSize|uiMode" />
+
+        <!-- Control del keystone del proyector (tablet → proyector, sin PC). -->
+        <activity
+            android:name=".wall.KeystoneActivity"
+            android:label="Keystone"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Keystone de hardware por HTTP (8451), vivo desde el arranque. -->
+        <service
+            android:name=".wall.KeystoneService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keystone_http" />
+        </service>
+
+        <!-- Inicio del proyector (lo abre HomeTrampolineActivity). Sin GL ni red. -->
+        <activity
+            android:name=".wall.LauncherActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.jarvis.companion.launcher"
+            android:screenOrientation="landscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|smallestScreenSize|uiMode" />
+
+        <!-- HOME del proyector. DESHABILITADA aquí: en la tablet y el móvil
+             (mismo APK) un candidato a HOME más haría que el sistema
+             preguntara qué launcher usar. WallHome.syncTrampoline la habilita
+             solo con wallMode && homeMode. Sin GL ni red: si crashea en bucle
+             con ADB apagado el proyector queda inservible. -->
+        <activity
+            android:name=".wall.HomeTrampolineActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Configuración por `am start` con extras. WRITE_SECURE_SETTINGS la
+             tiene el shell de adb y ninguna app de terceros: nadie más puede
+             apuntar la pared a otro server. -->
+        <activity
+            android:name=".wall.WallConfigActivity"
+            android:exported="true"
+            android:permission="android.permission.WRITE_SECURE_SETTINGS"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
+
+        <service
+            android:name=".wall.WallService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Cliente de pantalla: mantiene la conexión con el servidor de la pared mientras otra app está delante" />
+        </service>
+
+        <service
+            android:name=".wall.WallAccessibilityService"
+            android:exported="true"
+            android:label="@string/wall_a11y_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/wall_accessibility" />
+        </service>
 
         <receiver
             android:name=".BootReceiver"

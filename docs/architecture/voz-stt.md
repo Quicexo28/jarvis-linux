@@ -40,3 +40,10 @@ FastAPI port 8790. faster-whisper (`medium`, CPU, int8) + Silero VAD.
 - **Enrollment augmentation** (`SPEAKER_AUGMENT=1` default): each on-disk reference WAV is also embedded in synthetic reverb/distance/noise variants at load and in `create-voiceprint.sh`. The encrypted voiceprint stores whatever was embedded at generation time; augmentation of `.enc`-only speakers is impossible (needs audio).
 - **Linux keyring fallback.** If `secret-tool`/libsecret is unavailable (no keyring daemon), `linuxKeyring.js` falls back to `~/.config/jarvis/machine.key`. Encrypted owner voiceprint at `backend/voice/python/owner_voiceprint.enc`.
 
+
+## Corte y voz única
+
+- El player del TTS (`sh -c 'ffmpeg | paplay'`, `handlers/jarvis.js`) se lanza `detached` (grupo propio) y se corta con `killProcessGroup` (`lib/ttsPlayer.js`): SIGKILL al grupo. Medido: `player.kill()` solo mataba `sh` y ffmpeg+paplay seguían sonando 5719 ms; con el grupo mueren en ~20 ms. `playerClosed` evita matar un pgid reciclado.
+- `stopActiveTts` (módulo) mantiene una sola voz por máquina: cada sesión nueva silencia la anterior antes de arrancar su player. `stop()` también termina los upstreams abiertos; con `aborted` no reintentan.
+- En `AwakeApp.tsx` (`handleSttFinal`) la orden de parar (`isStopOnly` con Jarvis hablando o pensando) se evalúa antes del filtro de eco y del gate de wake_word, para que "para" no muera como eco ni por ventana de 15 s cerrada.
+- `setTtsDucking` no tiene efecto real: el audio sale por paplay en el servidor, no por el AudioContext del renderer. Solo documentado, sin cambio.

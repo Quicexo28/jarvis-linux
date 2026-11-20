@@ -1,11 +1,12 @@
 /**
  * Jarvis Remote — the single app for phone and tablet.
  *
- * One shell, five tabs: chat with the brain, a direct PC remote (media,
- * volume, windows, clipboard), the machines panel (distributed agents +
- * remote desktop), house control and device/system status. The Android companion
- * loads exactly this page in a WebView, so features live here once and the APK
- * only adds what a WebView cannot do (background reporting, native dictation).
+ * One shell, six tabs: chat with the brain, a direct PC remote (media,
+ * volume, windows, clipboard), the projector keystone (native screen), the machines
+ * panel (distributed agents + remote desktop), house control and device/system
+ * status. The Android companion loads exactly this page in a WebView, so
+ * features live here once and the APK only adds what a WebView cannot do
+ * (background reporting, native dictation).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { S, T, dotStyle } from './theme'
@@ -14,11 +15,12 @@ import { HomeTab } from './HomeTab'
 import { PcTab } from './PcTab'
 import { StatusTab } from './StatusTab'
 import { MandoTab } from './MandoTab'
+import { ProyectorTab } from './ProyectorTab'
 import { useOnline, useTelemetry, useLocationReporting, usePresenceReporting } from './hooks'
 import { sendTurn } from './api'
 import { AuthSheet } from './AuthSheet'
 
-type TabId = 'chat' | 'mando' | 'pc' | 'casa' | 'estado'
+type TabId = 'chat' | 'mando' | 'proyector' | 'pc' | 'casa' | 'estado'
 
 // Inline SVG paths, not emoji or box-drawing glyphs: the Android WebView font
 // stack renders several of those as tofu boxes.
@@ -27,6 +29,7 @@ const TABS: { id: TabId; label: string; icon: string }[] = [
   // PC primero; equipos, casa y estado son consulta ocasional.
   { id: 'chat',   label: 'Jarvis', icon: 'M4 5h16v11H9l-5 4z' },
   { id: 'mando',  label: 'Mando',  icon: 'M6 8h12a4 4 0 0 1 0 8H6a4 4 0 0 1 0-8zM8 11v2M7 12h2M15.5 12h.01M17.5 12h.01' },
+  { id: 'proyector', label: 'Proyector',  icon: 'M3 11h18v7H3zM14 14.5a2 2 0 1 0 4 0a2 2 0 1 0-4 0M6 14.5h5M7 11 5 5M12 11V5M17 11l2-6' },
   { id: 'pc',     label: 'Equipos', icon: 'M3 5h18v11H3zM8 20h8' },
   { id: 'casa',   label: 'Casa',   icon: 'M4 11 12 4l8 7v9H4z' },
   { id: 'estado', label: 'Estado', icon: 'M4 18a8 8 0 1 1 16 0M12 14l4-4' },
@@ -115,6 +118,7 @@ export function RemoteApp() {
         <div style={S.column}>
           {tab === 'chat'   && <ChatTab messages={messages} sending={sending} onSend={(t) => onSend(t)} onNotice={setNotice} />}
           {tab === 'mando'  && <MandoTab onNotice={setNotice} />}
+          {tab === 'proyector' && <ProyectorTab onNotice={setNotice} />}
           {tab === 'casa'   && <HomeTab onNotice={setNotice} />}
           {tab === 'pc'     && <PcTab onNotice={setNotice} />}
           {tab === 'estado' && <StatusTab online={online} telemetry={telemetry} geo={geo} />}

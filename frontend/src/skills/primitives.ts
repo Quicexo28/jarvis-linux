@@ -338,6 +338,9 @@ async function viewOpen(payload: { view?: string } = {}): Promise<unknown> {
 
 async function viewClose(): Promise<unknown> {
   const store = useJarvisStore.getState()
+  // Un pinch pegado también cuenta como algo que cerrar: quien pide cerrar debe saberlo.
+  const hadPinch = store.pinchZoomProgress !== 0
+  store.setPinchZoomProgress(0)
   if (store.zoomedMode != null) {
     store.setZoomedMode(null)
     return { closed: 'zoom' }
@@ -346,7 +349,7 @@ async function viewClose(): Promise<unknown> {
     store.setRingLevel('main')
     return { closed: 'sub_ring' }
   }
-  return { closed: 'noop' }
+  return { closed: hadPinch ? 'pinch' : 'noop' }
 }
 
 async function viewCurrent(): Promise<unknown> {

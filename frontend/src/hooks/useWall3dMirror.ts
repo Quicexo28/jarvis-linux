@@ -7,6 +7,15 @@ import { getApiBase } from '../api/client'
 
 const WALL_WS = 'name:proj'
 
+/**
+ * Apagado a propósito: `projmap` (workspace `name:proj`) es ahora la superficie
+ * de casting de wall-server, y la ventana `JarvisWall` allí saldría emitida
+ * encima de lo que se mande desde la pestaña «Pared». Con esto en `false` el
+ * visor lo pinta siempre la ventana principal (dueño `main`) y la de la pared
+ * no se muestra nunca.
+ */
+const WALL_3D_ON_PROJECTOR = false
+
 /** Cuánto vale una lectura de `powered` antes de volver a preguntar. */
 const POWERED_TTL_MS = 15_000
 /** Cada cuánto se refresca en segundo plano mientras la app vive. */
@@ -72,6 +81,7 @@ export function useWall3dMirror(): Wall3dOwner {
   const [owner, setOwner] = useState<Wall3dOwner>('main')
 
   useEffect(() => {
+    if (!WALL_3D_ON_PROJECTOR) { tauriInvoke('set_wall', { visible: false }); return }
     let alive = true
 
     function apply(powered: boolean, open: boolean, objects: unknown[], scene: unknown) {

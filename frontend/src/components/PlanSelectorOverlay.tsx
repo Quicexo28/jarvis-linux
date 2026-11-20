@@ -5,9 +5,10 @@ interface PlanSelectorOverlayProps {
   plans: SavedPlan[]
   onSelect: (key: string) => void
   onSkip: () => void
+  onCancel: () => void
 }
 
-export function PlanSelectorOverlay({ plans, onSelect, onSkip }: PlanSelectorOverlayProps) {
+export function PlanSelectorOverlay({ plans, onSelect, onSkip, onCancel }: PlanSelectorOverlayProps) {
   useEffect(() => {
     if (plans.length === 0) onSkip()
   }, [plans.length, onSkip])
@@ -33,6 +34,9 @@ export function PlanSelectorOverlay({ plans, onSelect, onSkip }: PlanSelectorOve
         </div>
         <button className="hud-btn" onClick={onSkip} style={{ marginTop: 8 }}>
           <span className="hud-btn-label">Continuar sin plano</span>
+        </button>
+        <button className="hud-btn" onClick={onCancel} style={{ marginTop: 8 }}>
+          <span className="hud-btn-label">← Volver</span>
         </button>
       </div>
     </div>

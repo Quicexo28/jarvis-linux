@@ -21,6 +21,8 @@ export type NativeBridge = {
   battery(): string
   /** Bring the Moonlight app to the front. "launched" | "store" | "error". */
   openMoonlight?(): string
+  /** Abre la pantalla nativa de ajuste del proyector (keystone). */
+  openKeystone?(): void
   /** Base64 SPKI of the Keystore key for risky actions; "" if unsupported. */
   elevationKey?(): string
   /** Fingerprint/PIN prompt, then sign; result on window.__jarvisSigned. */
