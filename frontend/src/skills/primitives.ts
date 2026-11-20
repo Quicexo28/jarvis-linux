@@ -327,7 +327,7 @@ const VALID_MODES: ReadonlyArray<Mode> = [
 ]
 
 const VALID_OVERLAYS: ReadonlyArray<OverlayName> = [
-  'terminal', 'gesture_debug', 'speaker_config',
+  'terminal', 'gesture_debug', 'speaker_config', 'text_input',
 ]
 
 async function viewOpen(payload: { view?: string } = {}): Promise<unknown> {

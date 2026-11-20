@@ -279,7 +279,7 @@ export async function handleNotifyNow(req, res) {
 /* ----- VIEW / NAVIGATION ----- */
 
 const VALID_VIEWS = ['home','house','plan2d','plan3d','space','cloud','system','mobile','utils','timer','chrono','vault']
-const VALID_OVERLAYS = ['terminal','gesture_debug','clap_trainer','speaker_config']
+const VALID_OVERLAYS = ['terminal','gesture_debug','clap_trainer','speaker_config','text_input']
 
 export async function handleViewOpen(req, res) {
   return withBody(req, (body) => {

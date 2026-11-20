@@ -1784,3 +1784,29 @@ html, #root { background: transparent; }
   from { width: 6px;  height: 6px;  opacity: 0.95; }
   to   { width: 46px; height: 46px; opacity: 0; }
 }
+
+/* Cuadro de texto para escribirle a Jarvis (overlay `text_input`). */
+.text-input-box {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  width: min(640px, 90vw);
+  z-index: 60;
+  padding: 10px 12px;
+  background: rgba(10, 14, 20, 0.88);
+  border: 1px solid var(--hud-indicator);
+  backdrop-filter: blur(8px);
+}
+.text-input-log { margin-bottom: 8px; font-size: 13px; line-height: 1.4; color: #c8f4ff; max-height: 120px; overflow-y: auto; }
+.text-input-line--user { opacity: 0.7; }
+.text-input-row { display: flex; gap: 8px; align-items: center; }
+.text-input-field { flex: 1; }
+.text-input-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--hud-indicator);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.text-input-btn:disabled { opacity: 0.4; cursor: default; }

@@ -13,6 +13,7 @@ import { GesturePointer } from './components/GesturePointer'
 import { GestureDebugView } from './components/GestureDebugView'
 import { SpeakerIdPanel } from './components/SpeakerIdPanel'
 import { SpeakerConfigWindow } from './components/SpeakerConfigWindow'
+import { TextInputBox } from './components/TextInputBox'
 import { TtsTestWidget } from './components/TtsTestWidget'
 import { ObsidianStatusBadge } from './components/ObsidianStatusBadge'
 import { PanelSection } from './components/PanelSection'
@@ -248,6 +249,8 @@ export function AwakeApp() {
   const setGestureDebugOpen = useUiStore(s => s.setGestureDebugOpen)
   const speakerConfigOpen = useUiStore(s => s.speakerConfigOpen)
   const setSpeakerConfigOpen = useUiStore(s => s.setSpeakerConfigOpen)
+  const textInputOpen = useUiStore(s => s.textInputOpen)
+  const setTextInputOpen = useUiStore(s => s.setTextInputOpen)
   const terminalOpen = useUiStore(s => s.terminalOpen)
   const setTerminalOpen = useUiStore(s => s.setTerminalOpen)
   const pttActive         = useJarvisStore(s => s.pttActive)
@@ -550,13 +553,16 @@ export function AwakeApp() {
 
   // Local STT (faster-whisper) — always-on when voice enabled.
   // Each final transcript is sent to the backend for intent classification + response.
-  const handleSttFinal = useCallback((text: string, speakerConfidence: number, sttSpeakerName?: string, meta?: { speakerConfidenceRaw?: number; avgLogprob?: number; confidence?: number }) => {
+  const handleSttFinal = useCallback((text: string, speakerConfidence: number, sttSpeakerName?: string, meta?: { speakerConfidenceRaw?: number; avgLogprob?: number; confidence?: number; typed?: boolean }) => {
     if (!text.trim()) return
+    // Texto escrito en el cuadro: no hay micrófono, así que no aplican la
+    // confianza de voz, el filtro de eco ni la palabra de activación.
+    const typed = !!meta?.typed
 
     // Minimum confidence required even outside of barge-in. TTS echo through
     // the mic returns conf ≈ 0 (speaker is Jarvis, not owner). Real owner
     // utterances should be >= 0.55 after lowering the voiceprint threshold.
-    if (speakerConfidence < 0.55) {
+    if (!typed && speakerConfidence < 0.55) {
       console.log(`[turn] ignored (low conf ${speakerConfidence?.toFixed?.(2)}): "${text}"`)
       return
     }
@@ -573,7 +579,7 @@ export function AwakeApp() {
     // común (el filtro de eco la descartaría si Jarvis la dijo) y la ventana de
     // wake_word puede haber cerrado mientras habla.
     const stopOrder = (speakingRef.current || turnBusyRef.current) && isStopOnly(text)
-    if (echoActive && !stopOrder && !hasRealSpeech(text, spokenTextRef.current)) {
+    if (!typed && echoActive && !stopOrder && !hasRealSpeech(text, spokenTextRef.current)) {
       console.log(`[turn] ignored (self-echo, no novel words): "${text}"`)
       return
     }
@@ -582,7 +588,7 @@ export function AwakeApp() {
     // window is open. Hearing "jarvis" opens it (and this same utterance is
     // handled, with the wake word stripped). Each accepted turn re-arms the
     // window so a back-and-forth keeps going without repeating "jarvis".
-    if (voiceMode === 'wake_word') {
+    if (voiceMode === 'wake_word' && !typed) {
       const heard = hasWakePhrase(text)
       if (!wakeListening && !heard && !stopOrder) {
         console.log(`[wake] gated (no wake word): "${text}"`)
@@ -927,6 +933,13 @@ export function AwakeApp() {
         </button>
         <button
           className="status-badge-btn"
+          title="Escribirle a Jarvis"
+          onClick={() => setTextInputOpen(!textInputOpen)}
+        >
+          <Badge tone={textInputOpen ? 'ok' : 'idle'}>texto</Badge>
+        </button>
+        <button
+          className="status-badge-btn"
           title="Pipeline de gestos"
           onClick={() => setGestureEnabled(!gestureEnabled)}
         >
@@ -1113,6 +1126,12 @@ export function AwakeApp() {
 
       {gestureDebugOpen && <GestureDebugView onClose={() => setGestureDebugOpen(false)} />}
       {speakerConfigOpen && <SpeakerConfigWindow onClose={() => setSpeakerConfigOpen(false)} />}
+      {textInputOpen && (
+        <TextInputBox
+          onSubmit={(text) => handleSttFinal(text, 1, undefined, { typed: true })}
+          onClose={() => setTextInputOpen(false)}
+        />
+      )}
 
       {/* Self-controlled via displayStore — Jarvis pushes content over the bus. */}
       <DisplayCard />

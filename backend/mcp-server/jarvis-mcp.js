@@ -220,11 +220,11 @@ const TOOLS = [
   },
   {
     name: 'open_overlay',
-    description: 'Abre una ventana auxiliar: terminal (CLI Jarvis), gesture_debug (debug de gestos), gesture_trainer (entrenar gestos ML), clap_trainer (entrenar aplauso), speaker_config (configurar voz/speaker ID).',
+    description: 'Abre una ventana auxiliar: terminal (CLI Jarvis), gesture_debug (debug de gestos), gesture_trainer (entrenar gestos ML), clap_trainer (entrenar aplauso), speaker_config (configurar voz/speaker ID), text_input (cuadro de texto donde el señor escribe órdenes a Jarvis; se envían por el mismo flujo que la voz y quedan visibles en la conversación).',
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', enum: ['terminal','gesture_debug','gesture_trainer','clap_trainer','speaker_config'] },
+        name: { type: 'string', enum: ['terminal','gesture_debug','gesture_trainer','clap_trainer','speaker_config','text_input'] },
       },
       required: ['name'],
     },
@@ -236,7 +236,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', enum: ['terminal','gesture_debug','gesture_trainer','clap_trainer','speaker_config'] },
+        name: { type: 'string', enum: ['terminal','gesture_debug','gesture_trainer','clap_trainer','speaker_config','text_input'] },
       },
       required: ['name'],
     },
