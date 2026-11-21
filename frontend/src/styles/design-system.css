@@ -1789,7 +1789,7 @@ html, #root { background: transparent; }
 .text-input-box {
   position: fixed;
   left: 50%;
-  bottom: 28px;
+  bottom: 140px; /* por encima del histograma de escucha (ListeningOverlay: bottom 40 + alto 90) */
   transform: translateX(-50%);
   width: min(640px, 90vw);
   z-index: 60;
