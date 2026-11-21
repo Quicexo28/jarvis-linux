@@ -52,39 +52,3 @@ export function slotWithHysteresis(
   if (d > numSlots / 2) d -= numSlots
   return Math.abs(d) <= 0.5 + margin ? prevSlot : nearest
 }
-
-/** Estado de un seguidor de muelle. Se muta EN SITIO: cero asignaciones por frame. */
-export interface SpringState { x: number; v: number }
-
-/**
- * Avanza `s` hacia `target` con un muelle CRÍTICAMENTE amortiguado
- * (ë = −2ω·ė − ω²·e), integrado de forma EXACTA para el paso `dt` (segundos).
- *
- * Por qué así y no un lerp por frame:
- *  - El lerp anterior (`k·6` con `k = 1 − 0.005^dt`) multiplicaba FUERA del
- *    exponente: el factor pasa de 1 con frames de más de 34 ms y de 2 con más de
- *    76 ms. En este WebKitGTK, con la inferencia de MediaPipe en el main thread,
- *    esos frames son normales → el anillo se pasaba del objetivo y oscilaba:
- *    el temblor del arrastre con el puño. La solución exacta es estable con
- *    cualquier `dt` y NO sobrepasa un objetivo quieto.
- *  - El objetivo llega a escalones (~25 Hz, una muestra del pipeline). Un
- *    seguidor de primer orden copia cada escalón con un salto de velocidad
- *    (tirones a 25 Hz); el de segundo orden da velocidad continua.
- * Retardo sobre un movimiento a velocidad constante: 2/ω segundos.
- */
-export function springFollow(s: SpringState, target: number, omega: number, dt: number): void {
-  const e0 = s.x - target
-  const c = s.v + omega * e0
-  const decay = Math.exp(-omega * dt)
-  s.x = target + (e0 + c * dt) * decay
-  s.v = (s.v - omega * c * dt) * decay
-}
-
-/**
- * Fracción de un lerp por frame INDEPENDIENTE del frame rate: con `rate` en 1/s,
- * dos frames de 16 ms avanzan exactamente lo mismo que uno de 32 ms, y el
- * resultado nunca pasa de 1 (no hay sobreimpulso por un frame largo).
- */
-export function dampFactor(rate: number, dt: number): number {
-  return 1 - Math.exp(-rate * dt)
-}

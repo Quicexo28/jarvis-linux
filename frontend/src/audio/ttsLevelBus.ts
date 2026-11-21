@@ -22,7 +22,6 @@ let lastV = 0
 /** A reply started (TTS session opened). Resets the timeline. */
 export function ttsBusStart(): void {
   speaking = true
-  holoAwake = true
   anchorMs = 0
   points = []
 }
@@ -54,22 +53,10 @@ let thinking = false
 
 export function ttsBusThinking(on: boolean): void {
   thinking = on
-  if (on) holoAwake = true
 }
 
 export function isTtsThinking(): boolean {
   return thinking
-}
-
-// ---------------------------------------------------------------------------
-// Boot state: from app launch until Jarvis's first activity (first turn or
-// first spoken reply) the hologram stays "not yet active" — a bare point.
-// One-way latch; never resets until page reload.
-
-let holoAwake = false
-
-export function isHoloAwake(): boolean {
-  return holoAwake
 }
 
 /**

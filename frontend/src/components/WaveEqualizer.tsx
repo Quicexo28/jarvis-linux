@@ -69,7 +69,7 @@ export function WaveEqualizer({ label, active = true, reactive = true, style }: 
     let cancelled = false
 
     // Micro COMPARTIDO (audio/micFeed.ts). Este componente está montado en
-    // permanencia dentro de ListeningOverlay: con getUserMedia propio sumaba un
+    // permanencia en el aviso de PTT: con getUserMedia propio sumaba un
     // stream más al churn que hace SIGSEGV al cliente PipeWire de WebKitGTK.
     if (reactive) {
       acquireMic()

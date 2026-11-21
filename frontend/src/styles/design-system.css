@@ -203,59 +203,7 @@ body {
 
 /* --- Listening layer (LISTENING state — transparent floating dot) --- */
 html, #root { background: transparent; }
-.listening-layer {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  z-index: 500;
-  -webkit-app-region: drag;
-}
-.listening-dot {
-  position: relative;
-  width: 160px;
-  height: 160px;
-  display: block;
-}
-.dot-halo {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 140px;
-  height: 140px;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgba(0,240,255,0.55) 0%,
-    rgba(0,240,255,0.28) 28%,
-    rgba(0,89,255,0.18)  55%,
-    rgba(0,89,255,0.0)   80%
-  );
-  filter: blur(6px);
-  transform: translate(-50%, -50%) scale(1);
-  transition: opacity 80ms linear, transform 80ms linear;
-  pointer-events: none;
-  z-index: 1;
-  animation: halo-breathe 2.4s ease-in-out infinite;
-}
-.dot-core {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #b8f5ff 0%, #00f0ff 55%, #008cff 100%);
-  box-shadow:
-    0 0 16px rgba(0,240,255,0.95),
-    0 0 38px rgba(0,240,255,0.55),
-    0 0 72px rgba(0,89,255,0.35);
-  transform: translate(-50%, -50%) scale(1);
-  transition: transform 80ms linear;
-  z-index: 2;
-}
+
 @keyframes halo-breathe {
   0%, 100% { filter: blur(6px)  brightness(1); }
   50%       { filter: blur(10px) brightness(1.2); }
@@ -292,150 +240,6 @@ html, #root { background: transparent; }
   transition: background 0.15s, box-shadow 0.15s;
 }
 .world-back-btn:hover { background: rgba(0,240,255,0.12); box-shadow: var(--glow-sm); }
-
-/* --- Hologram label (drei Html) --- */
-.hologram-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: 'JetBrains Mono', 'Space Grotesk', monospace;
-  font-size: 9px;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  color: var(--hue-info);
-  text-shadow: 0 0 8px rgba(0,240,255,0.65);
-  pointer-events: none;
-  white-space: nowrap;
-  padding: 3px 10px 3px 4px;
-  background: linear-gradient(90deg, rgba(0,240,255,0.14), rgba(0,89,255,0.04) 70%, transparent);
-  border-left: 2px solid var(--hue-info);
-  /* Esquina recortada: placa de HUD, no píldora. */
-  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 0 100%);
-}
-.hologram-label__code {
-  font-size: 8px;
-  padding: 1px 4px;
-  color: #03080d;
-  background: var(--hue-info);
-  text-shadow: none;
-  letter-spacing: 0.08em;
-}
-
-/* --- Voice: mini dot (non-core screens, top-right below HUD toggles) --- */
-.voice-dot-mini {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--primary);
-  box-shadow: 0 0 6px var(--primary), 0 0 12px rgba(0, 240, 255, 0.4);
-  animation: voice-dot-pulse 1.2s ease-in-out infinite;
-  margin-left: 8px;
-}
-
-@keyframes voice-dot-pulse {
-  0%, 100% { opacity: 0.6; transform: scale(1); }
-  50%      { opacity: 1; transform: scale(1.3); }
-}
-
-/* --- Voice: gradient glow for core panel --- */
-.core-voice-glow {
-  position: absolute;
-  inset: 0;
-  border-radius: 12px;
-  pointer-events: none;
-  background: linear-gradient(
-    180deg,
-    rgba(0, 240, 255, 0.15) 0%,
-    rgba(0, 140, 255, 0.08) 40%,
-    rgba(100, 255, 218, 0.12) 70%,
-    transparent 100%
-  );
-  transition: opacity 80ms linear, transform 80ms linear;
-  animation: core-glow-shift 2s ease-in-out infinite;
-  z-index: 0;
-}
-
-@keyframes core-glow-shift {
-  0%, 100% { filter: hue-rotate(0deg) brightness(1); }
-  50%      { filter: hue-rotate(15deg) brightness(1.2); }
-}
-
-/* --- Voice hint (after clap detection) --- */
-.voice-hint {
-  font-size: 11px;
-  color: var(--text-dim);
-  letter-spacing: 0.06em;
-}
-
-/* --- Voice Halo (AWAKE state prominent feedback) --- */
-.voice-halo {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  z-index: 45;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.voice-halo__halo {
-  position: absolute;
-  width: 180px;
-  height: 180px;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgba(102, 252, 255, 0.6) 0%,
-    rgba(0, 240, 255, 0.35) 30%,
-    rgba(0, 89, 255, 0.18) 55%,
-    rgba(0, 89, 255, 0.0) 80%
-  );
-  filter: blur(8px);
-  transition: opacity 80ms linear, transform 80ms linear;
-  animation: voice-halo-breathe 1.2s ease-in-out infinite;
-}
-
-.voice-halo__core {
-  position: absolute;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #ffffff 0%, #66fcff 40%, #00f0ff 80%);
-  box-shadow:
-    0 0 20px rgba(0, 240, 255, 0.95),
-    0 0 50px rgba(0, 240, 255, 0.6),
-    0 0 90px rgba(0, 89, 255, 0.4);
-  transition: transform 80ms linear;
-}
-
-.voice-halo--processing .voice-halo__halo {
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgba(255, 215, 0, 0.5) 0%,
-    rgba(255, 180, 0, 0.25) 35%,
-    rgba(200, 120, 0, 0.1) 60%,
-    transparent 80%
-  );
-  animation: voice-halo-rotate 2s linear infinite;
-}
-
-.voice-halo--processing .voice-halo__core {
-  background: radial-gradient(circle at 35% 35%, #fff8e1 0%, #ffd700 55%, #ff9800 100%);
-  box-shadow: 0 0 20px rgba(255, 215, 0, 0.8), 0 0 50px rgba(255, 180, 0, 0.4);
-}
-
-@keyframes voice-halo-breathe {
-  0%, 100% { filter: blur(8px) brightness(1); }
-  50%      { filter: blur(12px) brightness(1.3); }
-}
-
-@keyframes voice-halo-rotate {
-  0%   { transform: scale(1) rotate(0deg); filter: blur(8px); }
-  50%  { transform: scale(1.1) rotate(180deg); filter: blur(10px) brightness(1.2); }
-  100% { transform: scale(1) rotate(360deg); filter: blur(8px); }
-}
 
 /* --- App root --- */
 .jarvis-app { position: fixed; inset: 0; background: var(--bg); overflow: hidden; }
@@ -515,9 +319,6 @@ html, #root { background: transparent; }
   40%  { box-shadow: 0 0 14px rgba(0, 240, 255, 0.3); }
   100% { box-shadow: 0 0 4px rgba(0, 240, 255, 0.08); }
 }
-
-.core-reply { font-size: 13px; color: var(--primary); line-height: 1.6; min-height: 20px; }
-.core-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* --- Core Terminal --- */
 .core-terminal {
@@ -608,14 +409,6 @@ html, #root { background: transparent; }
 .core-terminal-body .xterm-viewport::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 240, 255, 0.4);
 }
-.proc-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.proc-dot.on { background: #64ffda; box-shadow: 0 0 4px #64ffda; }
-.proc-dot.off { background: #ff5252; }
 
 /* --- Top status bar --- */
 .status-bar {
@@ -816,8 +609,6 @@ html, #root { background: transparent; }
   opacity: 0;
 }
 
-/* --- HudInput --- */
-.hud-input-wrap   { position: relative; width: 100%; overflow: hidden; }
 .hud-input {
   width: 100%;
   background: none;
@@ -830,15 +621,6 @@ html, #root { background: transparent; }
   padding: 6px 0 8px;
 }
 .hud-input::placeholder { color: var(--text-dim); }
-.hud-input-line   { position: absolute; bottom: 0; left: 0; width: 100%; height: 1px; background: rgba(0,240,255,0.2); }
-.hud-input-sweep  {
-  position: absolute;
-  bottom: 0; left: -50px;
-  height: 2px; width: 50px;
-  background: linear-gradient(90deg, transparent, rgba(0,240,255,0.9), transparent);
-  animation: hud-input-sweep 0.65s ease-out forwards;
-}
-.hud-input-wrap--focused .hud-input-line { background: rgba(0,240,255,0.35); }
 
 /* --- Keyframes HUD --- */
 @keyframes hud-scan {
@@ -849,93 +631,11 @@ html, #root { background: transparent; }
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0);   }
 }
-@keyframes hud-input-sweep {
-  from { left: -50px; opacity: 1; }
-  to   { left: 110%;  opacity: 0; }
-}
-
-/* --- Hologram hover panel (drei Html) --- */
-.hologram-hover-panel {
-  background: rgba(0,240,255,0.055);
-  border: 1px solid rgba(0,240,255,0.28);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  padding: 10px 14px;
-  min-width: 145px;
-  border-radius: 3px;
-  pointer-events: none;
-  animation: hud-content-reveal 0.18s ease-out forwards;
-}
-.hhp-mode {
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  color: #00f0ff;
-  text-transform: uppercase;
-  font-family: var(--font);
-}
-.hhp-desc {
-  font-size: 9px;
-  color: rgba(200,244,255,0.5);
-  margin-top: 5px;
-  line-height: 1.4;
-  font-family: var(--font);
-}
-.hhp-cta {
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  color: rgba(0,240,255,0.38);
-  margin-top: 8px;
-  text-transform: uppercase;
-  font-family: var(--font);
-}
-
-/* --- Carousel nav indicator --- */
-.carousel-nav {
-  position: fixed;
-  bottom: 28px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 10px;
-  pointer-events: none;
-  z-index: 100;
-}
-.carousel-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: rgba(0,240,255,0.2);
-  transition: background 0.3s, box-shadow 0.3s;
-}
-.carousel-dot.active {
-  background: #00f0ff;
-  box-shadow: 0 0 8px rgba(0,240,255,0.7);
-}
-
-/* --- Stat line (System panel) --- */
-.hud-stat {
-  font-size: 11px;
-  color: rgba(200,244,255,0.6);
-  letter-spacing: 0.08em;
-  padding: 5px 0;
-  border-bottom: 1px solid rgba(0,240,255,0.06);
-}
-.hud-stat:last-child { border-bottom: none; }
 
 /* --- Carousel ring dim + panel slide-in (added by carousel feature) --- */
 :root {
   --ring-dim: 1;
   --panel-slide-dur: 120ms;
-}
-
-.jarvis-app[data-panel-open="true"] .world-layer {
-  --ring-dim: 0.35;
-  filter: brightness(var(--ring-dim));
-  transition: filter 240ms ease;
-}
-.jarvis-app[data-panel-open="false"] .world-layer {
-  --ring-dim: 1;
-  transition: filter 240ms ease;
 }
 
 /* === Holographic materialization === */
@@ -1345,7 +1045,6 @@ html, #root { background: transparent; }
 .chrono-lap-split { color: var(--text); }
 .chrono-lap-total { color: var(--text-dim); text-align: right; }
 
-
 /* ═══════════════════════════════════════════════════════════════════
    Primitivas de información — PanelSection / StatRow / HoloMeter / Badge
    Sustituyen los estilos inline repetidos en AwakeApp.tsx. El hue llega
@@ -1486,19 +1185,6 @@ html, #root { background: transparent; }
   50%      { opacity: 0.35; transform: scale(0.7); }
 }
 
-/* --- Rejilla de tarjetas: la disposición por defecto de un panel ancho --- */
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--s3);
-}
-.info-card {
-  padding: var(--s3);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--r-sm);
-  background: rgba(0, 240, 255, 0.02);
-}
-
 /* ═══════════════════════════════════════════════════════════════════
    Grafo de conocimiento (modo `vault`)
    El lienzo ocupa todo; el HUD es una columna a la derecha que NO
@@ -1626,7 +1312,6 @@ html, #root { background: transparent; }
   transition: border-color 0.15s, color 0.15s;
 }
 .graph-link-chip:hover { border-color: var(--hue-info); color: var(--hue-info); }
-
 
 /* --- Bloque del QR (panel System) --- */
 .qr-block { display: flex; gap: var(--s3); align-items: flex-start; }
@@ -1789,7 +1474,7 @@ html, #root { background: transparent; }
 .text-input-box {
   position: fixed;
   left: 50%;
-  bottom: 140px; /* por encima del histograma de escucha (ListeningOverlay: bottom 40 + alto 90) */
+  bottom: 140px; /* por encima del histograma de escucha del aviso de PTT */
   transform: translateX(-50%);
   width: min(640px, 90vw);
   z-index: 60;

@@ -32,7 +32,7 @@ export const navigationCapabilities: Capability[] = [
   {
     id: 'nav.back',
     domain: 'navigation',
-    description: 'Cierra la vista actual y vuelve atrás (al carrusel o al nivel anterior).',
+    description: 'Cierra la vista actual y vuelve atrás (al menú de modos o al nivel anterior).',
     params: { type: 'object', properties: {} },
     run: () => {
       const s = useJarvisStore.getState()
@@ -44,7 +44,7 @@ export const navigationCapabilities: Capability[] = [
   {
     id: 'nav.ring.rotate',
     domain: 'navigation',
-    description: 'Gira el carrusel principal de modos. dir=1 derecha (siguiente), dir=-1 izquierda (anterior).',
+    description: 'Mueve el resalte del dial principal de modos. dir=1 derecha (siguiente), dir=-1 izquierda (anterior).',
     params: {
       type: 'object',
       properties: { dir: { type: 'number', description: '1 o -1', enum: [1, -1] } },
@@ -53,18 +53,18 @@ export const navigationCapabilities: Capability[] = [
     run: (params) => {
       const s = useJarvisStore.getState()
       if (s.zoomedMode != null) {
-        return { ok: false, detail: 'No puedo girar el carrusel con una vista abierta' }
+        return { ok: false, detail: 'No puedo mover el dial con una vista abierta' }
       }
       const dir = (params.dir as number) >= 0 ? 1 : -1
       s.rotateRing(dir)
       const next = useJarvisStore.getState().activeRingMode
-      return { ok: true, detail: `Giré el carrusel a ${labelOf(next)}`, data: { activeRingMode: next } }
+      return { ok: true, detail: `Moví el dial a ${labelOf(next)}`, data: { activeRingMode: next } }
     },
   },
   {
     id: 'nav.ring.enter',
     domain: 'navigation',
-    description: 'Entra al modo enfocado en el carrusel (o abre el sub-anillo de Casa).',
+    description: 'Entra al modo resaltado en el dial (o abre el sub-anillo de Casa).',
     params: { type: 'object', properties: {} },
     run: () => {
       const s = useJarvisStore.getState()
@@ -107,7 +107,7 @@ export const navigationCapabilities: Capability[] = [
     params: { type: 'object', properties: {} },
     run: () => {
       const snap = buildSnapshot()
-      const where = snap.zoomedMode ? labelOf(snap.zoomedMode) : `carrusel en ${labelOf(snap.activeRingMode)}`
+      const where = snap.zoomedMode ? labelOf(snap.zoomedMode) : `dial en ${labelOf(snap.activeRingMode)}`
       const plan = snap.activePlanKey ? `, proyecto ${snap.activePlanKey}` : ''
       return {
         ok: true,

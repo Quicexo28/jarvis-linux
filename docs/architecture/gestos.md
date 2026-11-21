@@ -27,6 +27,8 @@ Funciones (contrato de producto): MANO DE PUNTERO — puño=arrastrar/rotar (del
 
 > **Nota (2026-11-21):** el carrusel 3D se sustituyó por el Núcleo (orbe + dial, ver `frontend-ui.md`). El puño ahora mueve el RESALTE del dial y solo con el dial principal visible. `RING_DRAG_SENSITIVITY` y el muelle `springFollow` se calibraron para el carrusel: hay que re-medir en vivo.
 
+> **Histórico:** `RingGroup`, `springFollow` y `RING_FOLLOW_OMEGA` se eliminaron el 2026-11-21 junto con el anillo 3D (fase 1b). La lección sobre `1 − base^dt` sigue valiendo para cualquier seguidor por frame.
+
 **Arrastre del anillo con el puño: temblor (2026-11).** El anillo (`RingGroup`, WorldScene) seguía a `ringAngle` con `angle += diff · k·6`, `k = 1 − 0.005^dt`: el 6 iba FUERA del exponente, así que el factor pasaba de 1 con frames >34 ms y de 2 con >76 ms. Con la inferencia de MediaPipe en el main thread esos frames son normales → sobreimpulso y oscilación alrededor del objetivo (el "tiembla, se siente inestable"). La escala de cada holograma (`lerp(…, k·6)`) tenía el mismo bug y "latía" al girar. Ahora:
 - El anillo sigue con un **muelle crítico integrado exacto** (`springFollow` en `state/ringSnap.ts`, `RING_FOLLOW_OMEGA`): estable con cualquier `dt`, sin sobreimpulso, y con velocidad continua — un seguidor de primer orden copiaba los escalones de ~25 Hz del pipeline como tirones. Coste: retardo 2/ω (50 ms con ω=40).
 - Los lerp por frame de hologramas usan `dampFactor(rate, dt) = 1 − e^(−rate·dt)`, con tasas que igualan a 60 fps el comportamiento anterior.

@@ -11,7 +11,7 @@ export const PLAN3D_VIEWPOINT_STORAGE_KEY = 'jarvis.plan3d.viewpoint.v1'
 /**
  * Composición de los anillos — FUENTE ÚNICA.
  *
- * Estas listas estaban triplicadas (`state/jarvisStore.ts`, `scenes/WorldScene.tsx`
+ * Estas listas estaban triplicadas (`state/jarvisStore.ts`, el anillo 3D
  * y una cuarta copia local dentro de `AwakeApp.tsx`), más un `MAIN_RING_SLOTS = 5`
  * escrito a mano al lado. Añadir un slot obligaba a acertar en los cuatro sitios;
  * fallar en el del snap hacía que soltar el arrastre seleccionara el modo

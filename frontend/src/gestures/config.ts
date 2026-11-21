@@ -126,14 +126,11 @@ export const IDLE_FRAME_INTERVAL_MS = 200
 /** detectForVideo lanzando en runtime → recrear el landmarker sin tocar la cámara. */
 export const LANDMARKER_MAX_RESTARTS = 3
 
-// --- Consumers (AwakeApp / WorldScene) — iguales que en v1 ---
+// --- Consumers (AwakeApp / useNavigation) ---
 export const PINCH_ENTER_THRESHOLD = 2.0
-export const PINCH_SCALE_MULTIPLIER = 2.0
-export const PINCH_APPROACH_DISTANCE = 3.0
-export const PINCH_DISSOLVE_START = 0.7
 export const PINCH_VIGNETTE_START = 0.5
 /**
- * Arrastre del carrusel: SLOTS por unidad de `grab.deltaX` (deltaX 1.0 = mover
+ * Arrastre del resalte del dial con el puño: SLOTS por unidad de `grab.deltaX` (deltaX 1.0 = mover
  * la mano de un borde al otro del encuadre, ya normalizado por tamaño de palma).
  * Con 7, un gesto cómodo de ~1/3 del encuadre mueve ~2,3 de los 6 slots y la
  * vuelta completa cabe en un solo barrido. Era 4.0 cuando el valor se integraba
@@ -142,13 +139,6 @@ export const PINCH_VIGNETTE_START = 0.5
  * número es ahora literal — subirlo mueve MÁS anillo por el mismo gesto.
  */
 export const RING_DRAG_SENSITIVITY = 7.0
-/**
- * Muelle crítico con el que el anillo (WorldScene `RingGroup`) sigue a su
- * objetivo, en rad/s. Retardo en movimiento = 2/ω (40 → 50 ms); asentado al 99 %
- * tras un snap ≈ 6,6/ω (≈170 ms). Más bajo = más suave pero más "detrás" de la
- * mano; más alto = vuelven a notarse los escalones de ~25 Hz del pipeline.
- */
-export const RING_FOLLOW_OMEGA = 40
 /**
  * Histéresis del slot resaltado durante el arrastre, en slots: para cambiar de
  * modo el ángulo debe pasar la frontera x.5 por este margen. Holgado frente al
