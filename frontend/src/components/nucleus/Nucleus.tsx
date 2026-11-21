@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useJarvisStore } from '../../state/jarvisStore'
 import { useOrbState } from '../../hooks/useOrbState'
-import { dialItems, nucleusLevel, parentArcs, subArcs, uniformArcs } from '../../lib/nucleus'
+import { dialItems, nucleusLevel, parentArcs, subArcs, uniformArcs, type Arc } from '../../lib/nucleus'
 import { modeMeta, MAIN_RING } from '../../constants'
 import type { Mode } from '../../types'
 import { Orb } from './Orb'
@@ -18,6 +18,8 @@ interface Props {
   onBack: () => void
 }
 
+/** Radio exterior del dial principal ya encogido (262 × 0,6): de ahí nace el sub-dial. */
+const PARENT_EDGE = 157
 const noop = () => {}
 const MAIN_ARCS = uniformArcs(MAIN_RING.length)
 
@@ -45,6 +47,8 @@ export function Nucleus({ listening, onOrb, onEnter, onBack }: Props) {
   )
   // Al volver de un sub-dial, el principal crece desde su tamaño encogido en vez de aparecer de golpe.
   const fromSub = useRef(false)
+  const lastParent = useRef<readonly Arc[]>(MAIN_ARCS)
+  if (layout) lastParent.current = layout.arcs
   const back = ringLevel === 'main' && fromSub.current
   useEffect(() => { fromSub.current = ringLevel !== 'main' }, [ringLevel])
   const level = nucleusLevel(zoomedMode, menuOpen, ringLevel)
@@ -57,11 +61,11 @@ export function Nucleus({ listening, onOrb, onEnter, onBack }: Props) {
   return (
     <div className={`nx nx--${level}`} data-orb={orb}>
       <div className="nx-stage">
-        {!layout ? <Dial items={MAIN_RING} arcs={MAIN_ARCS} enter={back ? 'back' : undefined} active={active} visible={level === 'menu'} onPick={onEnter} onHover={setActive} />
+        {!layout ? <Dial items={MAIN_RING} arcs={MAIN_ARCS} fromArcs={back ? lastParent.current : undefined} enter={back ? 'back' : undefined} active={active} visible={level === 'menu'} onPick={onEnter} onHover={setActive} />
           : <>
               {/* Dial principal encogido: el padre elegido queda resaltado y un clic vuelve a él. */}
-              <Dial role="parent" items={MAIN_RING} arcs={layout.arcs} active={parent} visible onPick={onBack} onHover={noop} />
-              <Dial key={ringLevel} role="sub" items={subItems} arcs={subArcs(subItems.length, layout.mid)} active={active} visible onPick={onEnter} onHover={setActive} />
+              <Dial role="parent" items={MAIN_RING} arcs={layout.arcs} fromArcs={MAIN_ARCS} active={parent} visible onPick={onBack} onHover={noop} />
+              <Dial key={ringLevel} role="sub" items={subItems} arcs={subArcs(subItems.length, layout.mid)} origin={{ x: PARENT_EDGE * Math.cos(layout.mid), y: PARENT_EDGE * Math.sin(layout.mid) }} active={active} visible onPick={onEnter} onHover={setActive} />
             </>}
         <Orb state={orb} onClick={onOrb} />
       </div>

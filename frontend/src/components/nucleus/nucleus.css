@@ -33,9 +33,9 @@
 /* El padre elegido se ensancha hacia el sub-dial: es el que se expandió. */
 .nx-dial--parent .nx-seg.is-on path { fill: rgba(0,240,255,.34); stroke-width: 3; animation: nx-pulse-on .9s ease-out both; }
 @keyframes nx-pulse-on { from { fill: rgba(0,240,255,.05); stroke-width: 1.2; } }
-/* El sub-dial se despliega desde el centro girando hacia su sitio; cada tramo entra escalonado. */
-.nx--menu .nx-dial--sub { animation: nx-sub-in .65s .15s cubic-bezier(.2,.8,.2,1) both; }
-@keyframes nx-sub-in { from { opacity: 0; transform: scale(.55) rotate(-24deg); } to { opacity: 1; transform: none; } }
+/* El sub-dial brota del borde de la entrada que lo abre (transform-origin en Dial) y crece hasta su sitio; cada tramo entra escalonado. */
+.nx--menu .nx-dial--sub { animation: nx-sub-in .6s .3s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes nx-sub-in { from { opacity: 0; transform: scale(.3); } to { opacity: 1; transform: none; } }
 .nx-dial--sub .nx-seg { animation: nx-seg-in .5s calc(.35s + var(--i) * 90ms) cubic-bezier(.2,.8,.2,1) both; }
 @keyframes nx-seg-in { from { opacity: 0; } to { opacity: 1; } }
 .nx-ring circle { fill: none; transform-origin: 0 0; }
