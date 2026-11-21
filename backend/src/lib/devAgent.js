@@ -248,7 +248,7 @@ async function applyChanges(rec) {
     // Assets are embedded in the Tauri binary — build BEFORE restarting the UI or
     // the restarted process serves stale code (CLAUDE.md).
     const build = await runCommand({
-      command: 'npm run tauri:build -- --no-bundle',
+      command: 'npm run tauri:build',
       cwd: join(REPO_ROOT, 'frontend'),
       timeoutMs: BUILD_TIMEOUT_MS,
     })
