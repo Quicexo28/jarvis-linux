@@ -264,6 +264,21 @@ html, #root { background: transparent; }
 }
 .mode-panel::-webkit-scrollbar { display: none; }
 
+/* Panel ancho (Sistema, Nube): va bajo el título, a todo el ancho, y reparte las secciones en columnas. */
+.mode-panel--grid {
+  width: calc(100vw - var(--safe-edge) * 2);
+  max-width: none;
+  top: calc(50% - 110px);
+  max-height: calc(100vh - 260px);
+}
+.mode-panel--grid .hud-panel-content {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--s5) 28px;
+  align-items: start;
+}
+.mode-panel--grid .panel-section { margin-bottom: 0; }
+
 /* --- Core conversation panel --- */
 .core-panel {
   position: fixed;

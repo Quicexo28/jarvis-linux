@@ -28,7 +28,7 @@ export function SystemPanel({ exiting }: { exiting: boolean }) {
   const host = telemetry.data?.host
 
   return (
-    <HudPanel mode="Sistema" exiting={exiting} className="mode-panel">
+    <HudPanel mode="Sistema" exiting={exiting} className="mode-panel mode-panel--grid">
       <PanelSection
         title="Conexión móvil"
         tone={status?.connected ? 'ok' : 'idle'}

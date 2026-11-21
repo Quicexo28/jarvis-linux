@@ -8,7 +8,7 @@ import { useJarvisStore } from '../../state/jarvisStore'
 export function CloudPanel({ exiting }: { exiting: boolean }) {
   const setZoomedMode = useJarvisStore(s => s.setZoomedMode)
   return (
-    <HudPanel mode="Nube" exiting={exiting} className="mode-panel">
+    <HudPanel mode="Nube" exiting={exiting} className="mode-panel mode-panel--grid">
       <PanelSection title="Sincronización" tone="idle" meta="pendiente">
         <StatRow label="Backup de voz" value="no" tone="idle" />
         <StatRow label="Planos 2D/3D" value="no" tone="idle" />
