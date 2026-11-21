@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { isTauri, tauriInvoke, tauriListen, getWindowLabel } from './platform/tauri'
 import { useBootStore } from './state/bootStore'
 import { useJarvisStore } from './state/jarvisStore'
@@ -53,6 +53,8 @@ export default function App() {
   const setPttActive = useJarvisStore((s) => s.setPttActive)
   const pttActive    = useJarvisStore((s) => s.pttActive)
   const [transitionDone, setTransitionDone] = useState(false)
+  // La animación de inicio suena una vez por arranque de la app: despertar de nuevo (Super+J, aplauso, voz) no la repite.
+  const introPlayed = useRef(false)
   const [awakeVisible, setAwakeVisible]     = useState(false)
   const [mobileState, setMobileState]       = useState<MobileState>(
     hasMobileSignal() ? 'checking' : 'desktop'
@@ -204,7 +206,7 @@ export default function App() {
 
   useEffect(() => {
     if (bootState !== 'AWAKE' || transitionDone) return
-    const t = setTimeout(() => setAwakeVisible(true), 600)
+    const t = setTimeout(() => setAwakeVisible(true), introPlayed.current ? 0 : 600)
     return () => clearTimeout(t)
   }, [bootState, transitionDone])
 
@@ -242,8 +244,8 @@ export default function App() {
   return (
     <>
       <DormantLayer />
-      {bootState === 'AWAKE' && !transitionDone && (
-        <RadialTransition onComplete={() => setTransitionDone(true)} />
+      {bootState === 'AWAKE' && !transitionDone && !introPlayed.current && (
+        <RadialTransition onComplete={() => { introPlayed.current = true; setTransitionDone(true) }} />
       )}
       {bootState === 'AWAKE' && (
         <div style={{ opacity: awakeVisible ? 1 : 0, transition: 'opacity 0.2s ease', position: 'fixed', inset: 0, background: 'radial-gradient(ellipse at 50% 55%, #040d1a 0%, #03080d 55%, #010507 100%)' }}>
