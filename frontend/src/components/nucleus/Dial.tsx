@@ -1,10 +1,10 @@
 import { useMemo } from 'react'
-import { dialSegment } from '../../lib/nucleus'
+import { arcSegment, type Arc } from '../../lib/nucleus'
 import { modeMeta } from '../../constants'
 import type { Mode } from '../../types'
 
 /** Radios (unidades del viewBox) de cada anillo. El sub-dial ocupa la corona exterior; el principal, ya encogido, queda dentro. */
-const RADII = { main: [156, 262], parent: [156, 262], sub: [190, 290] } as const
+const RADII = { main: [156, 262], parent: [156, 262], sub: [170, 270] } as const
 
 /** main: dial principal · parent: el principal ya encogido (hay un sub-dial abierto) · sub: el sub-dial de Casa/Útiles. */
 export type DialRole = keyof typeof RADII
@@ -14,6 +14,8 @@ interface Props {
   /** Resaltado (ratón, flechas, puño). */
   active: Mode
   visible: boolean
+  /** Ángulos de cada entrada. */
+  arcs: readonly Arc[]
   role?: DialRole
   onPick: (mode: Mode) => void
   onHover: (mode: Mode) => void
@@ -25,14 +27,12 @@ interface Props {
  * que el 25 % de la pantalla se descarta). `.gesture-hover` se estila igual que
  * el resalte, porque los eventos sintéticos no activan `:hover` ni `mouseenter`.
  */
-export function Dial({ items, active, visible, role = 'main', onPick, onHover }: Props) {
+export function Dial({ items, arcs, active, visible, role = 'main', onPick, onHover }: Props) {
   const [r0, r1] = RADII[role]
-  const segs = useMemo(() => items.map((_, i) => dialSegment(i, items.length, r0, r1)), [items, r0, r1])
+  const segs = useMemo(() => arcs.map(([a, b]) => arcSegment(a, b, r0, r1)), [arcs, r0, r1])
   return (
     <svg className={`nx-dial nx-dial--${role}${items.length <= 3 ? ' nx-dial--few' : ''}`} viewBox="-300 -300 600 600" aria-hidden={!visible}>
-      {role === 'sub'
-        ? <g className="nx-ring nx-ring--c"><circle r="297" /></g>
-        : <>
+      {role !== 'sub' && <>
             <g className="nx-ring nx-ring--c"><circle r="287" /></g>
             <g className="nx-ring nx-ring--a"><circle r="140" /></g>
             <g className="nx-ring nx-ring--b"><circle r="132" /></g>

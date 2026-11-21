@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  nucleusLevel, dialItems, activation, backStep, keyAction, isTypingTarget, isActivatable, orbStateOf, dialSegment,
+  nucleusLevel, dialItems, activation, backStep, keyAction, isTypingTarget, isActivatable, orbStateOf, dialSegment, parentArcs, subArcs, uniformArcs, SUB_STEP,
 } from './nucleus'
 
 describe('nucleusLevel', () => {
@@ -110,5 +110,23 @@ describe('dialSegment', () => {
   })
   it('con una sola entrada el arco es mayor de media vuelta', () => {
     expect(dialSegment(0, 1, 150, 260).d).toContain(' 0 1 1 ')
+  })
+})
+
+describe('sub-dial como arco', () => {
+  it('el principal amplía la entrada elegida y sigue sumando una vuelta', () => {
+    const { arcs, span } = parentArcs(6, 1, 3)
+    expect(span).toBeCloseTo(3 * SUB_STEP)
+    expect(arcs[1][1] - arcs[1][0]).toBeCloseTo(span)
+    expect(arcs[0][1] - arcs[0][0]).toBeLessThan(2 * Math.PI / 6) // las demás se encogen
+    expect(arcs[5][1] - arcs[0][0]).toBeCloseTo(2 * Math.PI)
+  })
+  it('el sub-dial queda centrado sobre la entrada ampliada y no ocupa la vuelta entera', () => {
+    const { arcs, mid } = parentArcs(6, 1, 3)
+    const sub = subArcs(3, mid)
+    expect((sub[0][0] + sub[2][1]) / 2).toBeCloseTo(mid)
+    expect(sub[2][1] - sub[0][0]).toBeLessThan(Math.PI * 1.2)
+    expect(uniformArcs(6)).toHaveLength(6)
+    expect(arcs[1][0] + (arcs[1][1] - arcs[1][0]) / 2).toBeCloseTo(mid)
   })
 })

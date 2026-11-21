@@ -105,8 +105,13 @@ const f = (n: number) => n.toFixed(2)
 /** Segmento `i` de `n` entre los radios `r0` y `r1`. El primero arranca arriba y se reparte en sentido horario. */
 export function dialSegment(i: number, n: number, r0: number, r1: number, gap = 0.03): DialSegment {
   const step = (2 * Math.PI) / n
-  const a0 = -Math.PI / 2 + i * step + gap
-  const a1 = -Math.PI / 2 + (i + 1) * step - gap
+  return arcSegment(-Math.PI / 2 + i * step, -Math.PI / 2 + (i + 1) * step, r0, r1, gap)
+}
+
+/** Tramo entre dos ángulos (radianes, 0 = derecha, horario) y dos radios. */
+export function arcSegment(from: number, to: number, r0: number, r1: number, gap = 0.03): DialSegment {
+  const a0 = from + gap
+  const a1 = to - gap
   const am = (a0 + a1) / 2
   const large = a1 - a0 > Math.PI ? 1 : 0
   const at = (r: number, a: number) => `${f(r * Math.cos(a))},${f(r * Math.sin(a))}`
@@ -116,4 +121,40 @@ export function dialSegment(i: number, n: number, r0: number, r1: number, gap = 
     cx: Number(f(rm * Math.cos(am))),
     cy: Number(f(rm * Math.sin(am))),
   }
+}
+
+export type Arc = readonly [from: number, to: number]
+
+/** Reparto uniforme de la vuelta entera; el primero arranca arriba. */
+export function uniformArcs(n: number): Arc[] {
+  const step = (2 * Math.PI) / n
+  return Array.from({ length: n }, (_, i) => [-Math.PI / 2 + i * step, -Math.PI / 2 + (i + 1) * step] as Arc)
+}
+
+/** Ángulo que ocupa cada entrada de un sub-dial: un sub-dial es un arco, no un círculo. */
+export const SUB_STEP = (48 * Math.PI) / 180
+
+/**
+ * Dial principal con una entrada ampliada: la elegida ocupa tanto arco como su sub-dial
+ * y las demás se reparten el resto. `mid` es hacia dónde mira la elegida: ahí se abre el sub-dial.
+ */
+export function parentArcs(n: number, focus: number, subCount: number): { arcs: Arc[]; mid: number; span: number } {
+  const span = Math.min(subCount * SUB_STEP, Math.PI * 1.2)
+  const rest = (2 * Math.PI - span) / (n - 1)
+  let at = -Math.PI / 2
+  let mid = 0
+  const arcs = Array.from({ length: n }, (_, i) => {
+    const w = i === focus ? span : rest
+    if (i === focus) mid = at + w / 2
+    const arc = [at, at + w] as Arc
+    at += w
+    return arc
+  })
+  return { arcs, mid, span }
+}
+
+/** Arco del sub-dial: `count` tramos iguales centrados en `mid`, sobre la entrada ampliada. */
+export function subArcs(count: number, mid: number): Arc[] {
+  const total = count * SUB_STEP
+  return Array.from({ length: count }, (_, i) => [mid - total / 2 + i * SUB_STEP, mid - total / 2 + (i + 1) * SUB_STEP] as Arc)
 }
