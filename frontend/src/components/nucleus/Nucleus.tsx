@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useJarvisStore } from '../../state/jarvisStore'
 import { useOrbState } from '../../hooks/useOrbState'
 import { dialItems, nucleusLevel, parentArcs, subArcs, uniformArcs, type Arc } from '../../lib/nucleus'
@@ -20,6 +20,8 @@ interface Props {
 
 /** Radio exterior del dial principal ya encogido (262 × 0,6): de ahí nace el sub-dial. */
 const PARENT_EDGE = 157
+/** Debe coincidir con `nx-sub-out` en nucleus.css. */
+const SUB_OUT_MS = 300
 const noop = () => {}
 const MAIN_ARCS = uniformArcs(MAIN_RING.length)
 
@@ -47,10 +49,23 @@ export function Nucleus({ listening, onOrb, onEnter, onBack }: Props) {
   )
   // Al volver de un sub-dial, el principal crece desde su tamaño encogido en vez de aparecer de golpe.
   const fromSub = useRef(false)
+  const subSnap = useRef<{ items: Mode[]; arcs: readonly Arc[]; origin: { x: number; y: number } } | null>(null)
   const lastParent = useRef<readonly Arc[]>(MAIN_ARCS)
-  if (layout) lastParent.current = layout.arcs
+  if (layout) {
+    lastParent.current = layout.arcs
+    subSnap.current = { items: subItems, arcs: subArcs(subItems.length, layout.mid), origin: { x: PARENT_EDGE * Math.cos(layout.mid), y: PARENT_EDGE * Math.sin(layout.mid) } }
+  }
   const back = ringLevel === 'main' && fromSub.current
   useEffect(() => { fromSub.current = ringLevel !== 'main' }, [ringLevel])
+  // Al salir, el sub-dial no desaparece de golpe: se queda una copia que se pliega hacia su entrada.
+  const [leaving, setLeaving] = useState(false)
+  useEffect(() => {
+    if (ringLevel !== 'main') { setLeaving(false); return }
+    if (!subSnap.current) return
+    setLeaving(true)
+    const t = setTimeout(() => { setLeaving(false); subSnap.current = null }, SUB_OUT_MS)
+    return () => clearTimeout(t)
+  }, [ringLevel])
   const level = nucleusLevel(zoomedMode, menuOpen, ringLevel)
   const caption =
     orb === 'listen' ? 'escuchando…'
@@ -61,7 +76,12 @@ export function Nucleus({ listening, onOrb, onEnter, onBack }: Props) {
   return (
     <div className={`nx nx--${level}`} data-orb={orb}>
       <div className="nx-stage">
-        {!layout ? <Dial items={MAIN_RING} arcs={MAIN_ARCS} fromArcs={back ? lastParent.current : undefined} enter={back ? 'back' : undefined} active={active} visible={level === 'menu'} onPick={onEnter} onHover={setActive} />
+        {!layout ? <>
+              {leaving && subSnap.current && (
+                <Dial key="out" role="sub" enter="out" items={subSnap.current.items} arcs={subSnap.current.arcs} origin={subSnap.current.origin} active={active} visible={false} onPick={noop} onHover={noop} />
+              )}
+              <Dial items={MAIN_RING} arcs={MAIN_ARCS} fromArcs={back ? lastParent.current : undefined} enter={back ? 'back' : undefined} active={active} visible={level === 'menu'} onPick={onEnter} onHover={setActive} />
+            </>
           : <>
               {/* Dial principal encogido: el padre elegido queda resaltado y un clic vuelve a él. */}
               <Dial role="parent" items={MAIN_RING} arcs={layout.arcs} fromArcs={MAIN_ARCS} active={parent} visible onPick={onBack} onHover={noop} />

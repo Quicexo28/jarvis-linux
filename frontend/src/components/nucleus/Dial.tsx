@@ -7,7 +7,7 @@ import type { Mode } from '../../types'
 const RADII = { main: [156, 262], parent: [156, 262], sub: [170, 270] } as const
 
 /** Duración de la expansión; igual que la de `nx-parent-in` en nucleus.css. */
-const EXPAND_MS = 600
+const EXPAND_MS = 450
 
 /** main: dial principal · parent: el principal ya encogido (hay un sub-dial abierto) · sub: el sub-dial de Casa/Útiles. */
 export type DialRole = keyof typeof RADII
@@ -24,8 +24,8 @@ interface Props {
   origin?: { x: number; y: number }
   /** Si se da, los segmentos se estiran desde estos ángulos hasta `arcs` (expansión del dial). */
   fromArcs?: readonly Arc[]
-  /** 'back': el principal vuelve de un sub-dial (crece desde su tamaño encogido). */
-  enter?: 'back'
+  /** back: el principal vuelve de un sub-dial (crece desde su tamaño encogido) · out: el sub-dial que se despide. */
+  enter?: 'back' | 'out'
   onPick: (mode: Mode) => void
   onHover: (mode: Mode) => void
 }

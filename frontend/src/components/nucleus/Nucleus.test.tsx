@@ -82,8 +82,8 @@ describe('Núcleo · teclado', () => {
     expect(host.querySelectorAll('.nx-dial--parent .nx-seg')).toHaveLength(6) // el principal sigue, encogido
     press('Escape')
     expect(st().ringLevel).toBe('main')
-    expect(host.querySelectorAll('.nx-seg')).toHaveLength(6)
-    expect(host.querySelector('.nx-dial--sub')).toBeNull()
+    expect(host.querySelectorAll('.nx-dial--main .nx-seg')).toHaveLength(6)
+    expect(host.querySelector('.nx-dial--sub:not(.nx-dial--out)')).toBeNull() // el sub-dial solo queda como copia que se pliega
   })
 
   it('Útiles abre un sub-dial de dos', () => {
