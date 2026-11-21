@@ -17,6 +17,8 @@ interface Props {
   /** Ángulos de cada entrada. */
   arcs: readonly Arc[]
   role?: DialRole
+  /** 'back': el principal vuelve de un sub-dial (crece desde su tamaño encogido). */
+  enter?: 'back'
   onPick: (mode: Mode) => void
   onHover: (mode: Mode) => void
 }
@@ -27,11 +29,11 @@ interface Props {
  * que el 25 % de la pantalla se descarta). `.gesture-hover` se estila igual que
  * el resalte, porque los eventos sintéticos no activan `:hover` ni `mouseenter`.
  */
-export function Dial({ items, arcs, active, visible, role = 'main', onPick, onHover }: Props) {
+export function Dial({ items, arcs, active, visible, role = 'main', enter, onPick, onHover }: Props) {
   const [r0, r1] = RADII[role]
   const segs = useMemo(() => arcs.map(([a, b]) => arcSegment(a, b, r0, r1)), [arcs, r0, r1])
   return (
-    <svg className={`nx-dial nx-dial--${role}${items.length <= 3 ? ' nx-dial--few' : ''}`} viewBox="-300 -300 600 600" aria-hidden={!visible}>
+    <svg className={`nx-dial nx-dial--${role}${enter ? ` nx-dial--${enter}` : ''}${items.length <= 3 ? ' nx-dial--few' : ''}`} viewBox="-300 -300 600 600" aria-hidden={!visible}>
       {role !== 'sub' && <>
             <g className="nx-ring nx-ring--c"><circle r="287" /></g>
             <g className="nx-ring nx-ring--a"><circle r="140" /></g>
@@ -48,7 +50,7 @@ export function Dial({ items, arcs, active, visible, role = 'main', onPick, onHo
             role="button"
             tabIndex={visible ? 0 : -1}
             aria-label={role === 'parent' ? `${label}, volver al dial principal` : `${label}, tecla ${i + 1}`}
-            style={{ transitionDelay: `${i * 40}ms` }}
+            style={{ transitionDelay: `${i * 40}ms`, ['--i' as string]: i }}
             onMouseEnter={() => onHover(mode)}
             onFocus={() => onHover(mode)}
             onClick={pick}

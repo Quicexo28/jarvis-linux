@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useJarvisStore } from '../../state/jarvisStore'
 import { useOrbState } from '../../hooks/useOrbState'
 import { dialItems, nucleusLevel, parentArcs, subArcs, uniformArcs } from '../../lib/nucleus'
@@ -43,6 +43,10 @@ export function Nucleus({ listening, onOrb, onEnter, onBack }: Props) {
     () => ringLevel === 'main' ? null : parentArcs(MAIN_RING.length, MAIN_RING.indexOf(parent), subItems.length),
     [ringLevel, parent, subItems.length],
   )
+  // Al volver de un sub-dial, el principal crece desde su tamaño encogido en vez de aparecer de golpe.
+  const fromSub = useRef(false)
+  const back = ringLevel === 'main' && fromSub.current
+  useEffect(() => { fromSub.current = ringLevel !== 'main' }, [ringLevel])
   const level = nucleusLevel(zoomedMode, menuOpen, ringLevel)
   const caption =
     orb === 'listen' ? 'escuchando…'
@@ -53,7 +57,7 @@ export function Nucleus({ listening, onOrb, onEnter, onBack }: Props) {
   return (
     <div className={`nx nx--${level}`} data-orb={orb}>
       <div className="nx-stage">
-        {!layout ? <Dial items={MAIN_RING} arcs={MAIN_ARCS} active={active} visible={level === 'menu'} onPick={onEnter} onHover={setActive} />
+        {!layout ? <Dial items={MAIN_RING} arcs={MAIN_ARCS} enter={back ? 'back' : undefined} active={active} visible={level === 'menu'} onPick={onEnter} onHover={setActive} />
           : <>
               {/* Dial principal encogido: el padre elegido queda resaltado y un clic vuelve a él. */}
               <Dial role="parent" items={MAIN_RING} arcs={layout.arcs} active={parent} visible onPick={onBack} onHover={noop} />

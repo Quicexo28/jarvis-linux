@@ -24,13 +24,20 @@
   transition: opacity .5s, transform .7s cubic-bezier(.2,.8,.2,1);
 }
 .nx--menu .nx-dial { opacity: 1; transform: none; }
-.nx--menu .nx-dial--parent { transform: scale(.6); opacity: .8; }
+.nx--menu .nx-dial--parent { transform: scale(.6); opacity: .8; animation: nx-parent-in .6s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes nx-parent-in { from { transform: scale(1); opacity: 1; } to { transform: scale(.6); opacity: .8; } }
+.nx--menu .nx-dial--back { animation: nx-main-back .6s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes nx-main-back { from { transform: scale(.6); opacity: .8; } to { transform: none; opacity: 1; } }
 .nx-dial--parent .nx-ring--c, .nx-dial--parent .nx-seg-n { display: none; }
 .nx-dial--parent .nx-seg-t { font-size: 20px; letter-spacing: .12em; }
 /* El padre elegido se ensancha hacia el sub-dial: es el que se expandió. */
-.nx-dial--parent .nx-seg.is-on path { fill: rgba(0,240,255,.34); stroke-width: 3; }
-.nx--menu .nx-dial--sub { animation: nx-sub-in .7s cubic-bezier(.2,.8,.2,1) both; }
-@keyframes nx-sub-in { from { opacity: 0; transform: scale(.45) rotate(-30deg); } to { opacity: 1; transform: none; } }
+.nx-dial--parent .nx-seg.is-on path { fill: rgba(0,240,255,.34); stroke-width: 3; animation: nx-pulse-on .9s ease-out both; }
+@keyframes nx-pulse-on { from { fill: rgba(0,240,255,.05); stroke-width: 1.2; } }
+/* El sub-dial se despliega desde el centro girando hacia su sitio; cada tramo entra escalonado. */
+.nx--menu .nx-dial--sub { animation: nx-sub-in .65s .15s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes nx-sub-in { from { opacity: 0; transform: scale(.55) rotate(-24deg); } to { opacity: 1; transform: none; } }
+.nx-dial--sub .nx-seg { animation: nx-seg-in .5s calc(.35s + var(--i) * 90ms) cubic-bezier(.2,.8,.2,1) both; }
+@keyframes nx-seg-in { from { opacity: 0; } to { opacity: 1; } }
 .nx-ring circle { fill: none; transform-origin: 0 0; }
 .nx-ring { animation: nx-spin 60s linear infinite; animation-play-state: paused; transform-origin: 0 0; }
 .nx--menu .nx-ring { animation-play-state: running; }
@@ -178,6 +185,6 @@
   .nx-status { font-size: 11px; letter-spacing: .2em; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .nx-ring, .nx-glow, .nx-rp, .nx-tk, .nx-spin, .nx-scan, .nx-globe { animation: none !important; }
+  .nx-dial, .nx-seg, .nx-seg path, .nx-ring, .nx-glow, .nx-rp, .nx-tk, .nx-spin, .nx-scan, .nx-globe { animation: none !important; }
   .nx-stage, .nx-dial, .nx-orb { transition-duration: .01s; }
 }
