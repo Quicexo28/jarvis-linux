@@ -34,8 +34,8 @@ export function RadialTransition({ onComplete }: Props) {
       const elapsed = now - startTime
       ctx.clearRect(0, 0, w, h)
 
-      if (elapsed > 100 && elapsed < 700) {
-        const progress = Math.min(1, (elapsed - 100) / 500)
+      if (elapsed > 60 && elapsed < 460) {
+        const progress = Math.min(1, (elapsed - 60) / 340)
         const radius = maxRadius * Math.pow(progress, 0.65)
 
         const gradient = ctx.createRadialGradient(ox, oy, 0, ox, oy, radius)
@@ -58,11 +58,11 @@ export function RadialTransition({ onComplete }: Props) {
         ctx.shadowBlur = 0
       }
 
-      if (elapsed >= 600) {
-        canvas.style.opacity = String(Math.max(0, 1 - (elapsed - 600) / 200))
+      if (elapsed >= 380) {
+        canvas.style.opacity = String(Math.max(0, 1 - (elapsed - 380) / 140))
       }
 
-      if (elapsed < 800) {
+      if (elapsed < 520) {
         rafId = requestAnimationFrame(draw)
       } else {
         done.current()

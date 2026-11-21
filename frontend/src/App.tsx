@@ -206,7 +206,7 @@ export default function App() {
 
   useEffect(() => {
     if (bootState !== 'AWAKE' || transitionDone) return
-    const t = setTimeout(() => setAwakeVisible(true), introPlayed.current ? 0 : 600)
+    const t = setTimeout(() => setAwakeVisible(true), introPlayed.current ? 0 : 380)
     return () => clearTimeout(t)
   }, [bootState, transitionDone])
 
