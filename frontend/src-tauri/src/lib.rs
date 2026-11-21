@@ -67,6 +67,10 @@ fn focus_window(window: tauri::WebviewWindow, workspace: Option<String>) {
             .status().ok();
     }
     window.show().ok();
+    // Hyprland quita la pantalla completa al cambiar de workspace: la ventana nace
+    // con ella (windowrule), se aparca en `special:jarvis` al dormir y volvía sin ella,
+    // con margen y borde. Se reafirma aquí, que es por donde pasa todo despertar.
+    window.set_fullscreen(true).ok();
     window.set_focus().ok();
 }
 

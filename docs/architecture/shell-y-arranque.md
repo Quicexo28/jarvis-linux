@@ -12,7 +12,7 @@ Source `scripts/linux/hyprland-jarvis.conf` from `~/.config/hypr/hyprland.conf` 
 
 Two deployment modes exist:
 
-1. **Tauri** (`frontend/src-tauri/`) — Rust shell wrapping the Vite frontend. Registers **Super+J** as a global shortcut via `tauri_plugin_global_shortcut`, emitting a `jarvis:wake` Tauri event that `App.tsx` listens to with `listen('jarvis:wake', ...)`. Window is fullscreen, decorations off, transparent. The Tauri binary is self-contained; no backend process management.
+1. **Tauri** (`frontend/src-tauri/`) — Rust shell wrapping the Vite frontend. Registers **Super+J** as a global shortcut via `tauri_plugin_global_shortcut`, emitting a `jarvis:wake` Tauri event that `App.tsx` listens to with `listen('jarvis:wake', ...)`. Window is fullscreen, decorations off, **opaque** (`transparent: false`, `backgroundColor #03080d`): una ventana transparente deja sin pintar lo que no se anima en WebKitGTK (ver `frontend-ui.md` § Ventana principal OPACA). En DORMANT no pinta nada y se aparca en `special:jarvis`; sigue viva para el aplauso y el bus de despertar. The Tauri binary is self-contained; no backend process management.
 
 2. **Chromium app-mode** — backend serves the built frontend as static files (`handlers/static.js`). `jarvis-ui.service` runs Chromium against `http://localhost:8788`. Super+J requires a separate trigger (Hyprland keybinding → backend API, or `jarvis-wake.service`).
 
