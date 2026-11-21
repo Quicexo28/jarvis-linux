@@ -19,7 +19,6 @@ import io
 import json
 import os
 import re
-import struct
 import threading
 import urllib.request
 import tempfile

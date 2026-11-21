@@ -616,20 +616,6 @@ export function migrateStraySpeakers() {
   return { ok: true, skipped: true, reason: 'vault_v2_no_speakers' }
 }
 
-// Reads owner profile from 01-Perfil/<owner>.md
-export async function getPersonalization(speakerName) {
-  if (!isConfigured()) return null
-  const root = getVaultPath()
-  const file = join(root, '01-Perfil', `${sanitizeName(OWNER_NAME())}.md`)
-  if (!existsSync(file)) return null
-  try {
-    const content = readFileSync(file, 'utf-8')
-    return content.replace(/^---[\s\S]*?---\n+/, '').trim()
-  } catch {
-    return null
-  }
-}
-
 // --- Productividad: tareas del día y marcarlas como hechas ---
 
 function normTask(s) {

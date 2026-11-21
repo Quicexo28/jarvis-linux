@@ -10,7 +10,7 @@ Este archivo solo trae lo que aplica a cualquier tarea. El detalle vive en `docs
 |---|---|
 | `backend/src/` | Servidor HTTP+WS (`server.js`), `handlers/`, `lib/`, `agent/`, `services/` |
 | `backend/mcp-server/` | Paquete Node aparte: expone las skills como tools MCP (stdio, `.mcp.json`) |
-| `backend/voice/python/` | `stt_service.py`, `xtts_service.py`, `wake_service.py`, `embed_service.py` (venv propio) |
+| `backend/voice/python/` | `stt_service.py`, `edge_tts_service.py`, `wake_service.py`, `embed_service.py` (venv propio) |
 | `backend/data/` | Estado y secretos locales (gitignored): `secrets.local.json`, `jarvis.db`, jobs |
 | `frontend/src/` | UI React + zustand; `gestures/`, `audio/`, `lib/sim/`, `state/` |
 | `frontend/src-tauri/` | Shell Rust (Super+J, ventana fullscreen transparente) |

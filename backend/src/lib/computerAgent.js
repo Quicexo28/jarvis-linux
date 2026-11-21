@@ -28,6 +28,7 @@ import { homedir } from 'os'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { deliver } from './proactive.js'
+import { readJsonFile } from './jsonFile.js'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dir, '..', '..', '..')
@@ -95,7 +96,7 @@ function appendLog(id, text) {
 }
 
 export function getComputerJob(id) {
-  try { return JSON.parse(readFileSync(jobPath(id), 'utf-8')) } catch { return null }
+  return readJsonFile(jobPath(id), null)
 }
 
 export function listComputerJobs(limit = 5) {

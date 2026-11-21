@@ -6,7 +6,7 @@ edge-tts package. Default voice: `en-US-RyanMultilingualNeural`, which
 auto-detects per-utterance language, so the same voice speaks Spanish
 naturally when the input text is Spanish.
 
-Same WebSocket protocol as xtts_service.py / cosyvoice_service.py so the
+Same WebSocket protocol the old XTTS/CosyVoice engines used, so the
 Node proxy and frontend client are engine-agnostic:
 
   GET  /health             -> { ok, engine, voice, sr, rtf_estimate, ... }
@@ -126,7 +126,7 @@ def preprocess_text(text: str) -> str:
     return text
 
 
-# --- Jarvis FX (mirrors xtts_service.py — both engines share timbre) --------
+# --- Jarvis FX (timbre shared with the original XTTS voice) ------------------
 
 def _make_reverb_ir(sr: int, length_s: float = 0.18, decay: float = 6.5, seed: int = 7) -> np.ndarray:
     n = int(length_s * sr)

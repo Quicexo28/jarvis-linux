@@ -1,46 +1,16 @@
-# XTTS-v2 voice cloning service
+# Servicios de voz (Python)
 
-Local Coqui XTTS-v2 server that clones the speaker in `../samples/` and exposes
-an HTTP endpoint for the Node backend to synthesize Jarvis's voice.
+Cada servicio es una unit de usuario (`scripts/linux/jarvis-*.service`) y corre con `.venv/bin/python`.
 
-## Setup
+| Servicio | Archivo | Puerto | Qué hace |
+|---|---|---|---|
+| `jarvis-stt` | `stt_service.py` | 8790 | Voz a texto (faster-whisper), VAD, speaker-id |
+| `jarvis-tts` | `edge_tts_service.py` | 8789 | Texto a voz (edge-tts) con efecto Jarvis. Habla el protocolo WS que antes usaba XTTS |
+| `jarvis-wake` | `wake_service.py` | 8791 | Palabra de activación |
+| `jarvis-embed` | `embed_service.py` | — | Embeddings para el recall |
 
-Already done. The venv is at `.venv/` (Python 3.11.15, PyTorch 2.5.1+cu121,
-coqui-tts, fastapi, uvicorn). To recreate it from scratch:
+`speaker_id.py` lo importa `stt_service.py`. Los tests están en `tests/`.
 
-```powershell
-uv venv --python 3.11 .venv
-uv pip install --python .venv/Scripts/python.exe torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-uv pip install --python .venv/Scripts/python.exe coqui-tts "transformers>=4.50,<5.0" fastapi "uvicorn[standard]" soundfile
-```
+Instalar dependencias: `.venv/bin/pip install -r requirements.txt`, y reiniciar el servicio tocado.
 
-## Run
-
-```powershell
-.\start.cmd
-```
-
-Or:
-
-```powershell
-$env:COQUI_TOS_AGREED = "1"
-.\.venv\Scripts\python.exe xtts_service.py
-```
-
-Listens on `http://127.0.0.1:8789`. Override port with `$env:XTTS_PORT = "9000"`.
-
-The first run downloads the XTTS-v2 model (~2 GB) into the user-cache dir.
-Subsequent runs start in ~5-10 s (model load).
-
-## API
-
-- `GET  /health`      — returns `{ ok, device, reference }`.
-- `POST /synthesize`  — body `{ "text": "...", "lang": "es" }`, returns `audio/wav`.
-
-## How the Node backend uses it
-
-`backend/src/handlers/jarvis.js::handleJarvisTts` proxies
-`POST /api/jarvis/tts` → `POST http://127.0.0.1:8789/synthesize` and pipes the
-WAV back. The frontend (`ListeningLayer.triggerWake`) plays the WAV via the
-HTML `<audio>` element. If this service is down, the frontend silently falls
-back to the browser's `speechSynthesis`.
+**Clonar la voz (no activo).** `../samples/jarvis-01.mp3` es el audio de referencia. El motor XTTS-v2 que lo usaba se borró en la limpieza de nov 2026; está en el historial de git (`git log --diff-filter=D -- backend/voice/python/xtts_service.py`).

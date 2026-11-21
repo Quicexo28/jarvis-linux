@@ -257,8 +257,3 @@ export function startProactiveLoop() {
   if (typeof timer.unref === 'function') timer.unref()
   console.log(`[proactive] loop armed: cada ${Math.round(INTERVAL_MS() / 60e3)} min, máx ${MAX_PER_DAY()}/día`)
 }
-
-export function stopProactiveLoop() {
-  if (timer) clearInterval(timer)
-  timer = null
-}

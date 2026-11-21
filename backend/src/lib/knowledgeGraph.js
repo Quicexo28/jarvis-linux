@@ -561,12 +561,3 @@ export function getGraph(opts = {}) {
   cache = { key, stamp, graph }
   return graph
 }
-
-/** Tira la caché (tests, y cualquier cosa que reescriba el vault a mano). */
-export function clearGraphCache() {
-  cache = null
-}
-
-/** Relación exportada para el modo `vault` del frontend y para los tests. */
-export const NODE_TYPES = ['note', 'tag', 'fact', 'conversation', 'ghost']
-export const EDGE_KINDS = ['link', 'tag', 'mention', 'fact']

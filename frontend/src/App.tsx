@@ -29,7 +29,6 @@ import {
   clearMobileToken,
   clearApiBase,
 } from './api/client'
-import './App.css'
 
 type MobileState = 'checking' | 'mobile' | 'expired' | 'desktop'
 

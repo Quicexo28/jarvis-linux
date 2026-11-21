@@ -159,10 +159,6 @@ export function startChronoTicker() {
   }, 100)
 }
 
-export function stopChronoTicker() {
-  if (tickHandle) { clearInterval(tickHandle); tickHandle = null }
-}
-
 export function formatChrono(ms: number): string {
   const totalCs = Math.max(0, Math.floor(ms / 10))
   const cs = totalCs % 100

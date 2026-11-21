@@ -95,23 +95,6 @@ export type ClapEvent =
   | { type: 'double'; gapMs: number; similarity: number }
   | { type: 'rejected'; reason: 'sustained' | 'gap' | 'similarity'; detail: number }
 
-/**
- * Planitud espectral = media geométrica / media aritmética. Sólo se usa para
- * telemetría de calibración: como gate NO sirve con el audio del AEC (ver nota
- * de cabecera).
- */
-export function spectralFlatness(freq: Uint8Array): number {
-  let logSum = 0, linSum = 0
-  const n = freq.length
-  if (n === 0) return 0
-  for (let i = 0; i < n; i++) {
-    const v = freq[i] + 1 // +1 evita log(0)
-    logSum += Math.log(v)
-    linSum += v
-  }
-  return Math.exp(logSum / n) / (linSum / n)
-}
-
 /** Fracción del espectro que cae por debajo de `lowBins`. */
 export function lowBandShare(freq: Uint8Array, lowBins: number): number {
   let low = 0, total = 0

@@ -216,8 +216,6 @@ export type SimSystemSpec = NBodySpec | BlackHoleSpec | DynamicsSpec | FieldSpec
 
 export type SimSystem = SimSystemSpec['system']
 
-export const SIM_SYSTEMS: SimSystem[] = ['nbody', 'blackhole', 'dynamics', 'field', 'ode']
-
 /** Fields every simulation accepts on top of its system-specific ones. */
 export interface SimCommon {
   /** Integrator step in simulation units. Fixed — never tied to frame time. */

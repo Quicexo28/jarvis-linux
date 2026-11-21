@@ -22,10 +22,6 @@ export function registerSpeaker(fn: Speaker): () => void {
   return () => { if (speaker === fn) speaker = null }
 }
 
-export function hasSpeaker(): boolean {
-  return speaker !== null
-}
-
 /** Speak through the renderer's own TTS path. Throws when nothing can speak. */
 export async function speakThroughRenderer(text: string): Promise<void> {
   if (!speaker) throw new Error('no_speaker')

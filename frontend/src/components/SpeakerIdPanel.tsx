@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getApiBase } from '../api/client'
+import { apiFetch } from '../api/client'
 import { HudBtn } from './HudBtn'
 import { useJarvisStore } from '../state/jarvisStore'
 
@@ -29,7 +29,7 @@ export function SpeakerIdPanel({ onOpenConfig }: { onOpenConfig: () => void }) {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${getApiBase()}/api/speaker-id/status`)
+      const res = await apiFetch(`/api/speaker-id/status`)
       const data = await res.json()
       if (data.ok) {
         setStatus(data as SpeakerStatus)

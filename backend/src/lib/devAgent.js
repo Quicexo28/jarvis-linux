@@ -30,13 +30,14 @@
  */
 
 import { spawn } from 'child_process'
-import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, appendFileSync } from 'fs'
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { runCommand, gitCheckpoint, scheduleRestart } from './selfCode.js'
 import { getCodeDir, sessionAsk } from './claudeCli.js'
 import { notifyJarvis } from './cloudStorage.js'
 import { requestClient as skillBusRequest, hasClient as skillBusHasClient } from './skillBus.js'
+import { readJsonFile } from './jsonFile.js'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 // backend/src/lib -> repo root is three levels up.
@@ -106,12 +107,7 @@ function appendLog(id, text) {
 
 /** Read a job record from disk (survives the backend restart the job triggers). */
 export function getDevJob(id) {
-  try {
-    const rec = JSON.parse(readFileSync(jobPath(id), 'utf-8'))
-    return rec
-  } catch {
-    return null
-  }
+  return readJsonFile(jobPath(id), null)
 }
 
 /** Most recent jobs, newest first. */
@@ -122,7 +118,7 @@ export function listDevJobs(limit = 10) {
     files = readdirSync(JOBS_DIR).filter((f) => f.endsWith('.json')).sort().reverse().slice(0, limit)
   } catch {}
   return files.map((f) => {
-    try { return JSON.parse(readFileSync(join(JOBS_DIR, f), 'utf-8')) } catch { return null }
+    return readJsonFile(join(JOBS_DIR, f), null)
   }).filter(Boolean)
 }
 

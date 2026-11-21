@@ -25,6 +25,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { json, readBody } from '../lib/http.js'
+import { sleep } from '../lib/sleep.js'
 
 const run = promisify(execFile)
 
@@ -53,7 +54,6 @@ const cfg = () => ({
   wall: process.env.JARVIS_PROJECTOR_WALL === '1',
 })
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /* ------------------------------------------------------------------ adb */
 

@@ -188,10 +188,6 @@ export function startTimerTicker() {
   }, 250)
 }
 
-export function stopTimerTicker() {
-  if (tickHandle) { clearInterval(tickHandle); tickHandle = null }
-}
-
 export function formatHms(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000))
   const h = Math.floor(s / 3600)

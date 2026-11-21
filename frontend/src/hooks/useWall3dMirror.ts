@@ -3,7 +3,7 @@ import { tauriEmit, tauriInvoke, tauriListen } from '../platform/tauri'
 import { useModel3dStore } from '../state/model3dStore'
 import { useSimStore } from '../state/simStore'
 import { WALL_EVENT, WALL_READY_EVENT, WALL_SIM_EVENT } from '../WallPage'
-import { getApiBase } from '../api/client'
+import { apiFetch } from '../api/client'
 
 const WALL_WS = 'name:proj'
 
@@ -41,7 +41,7 @@ function refreshPowered(): Promise<boolean> {
   poweredInflight = (async () => {
     let value = false
     try {
-      const res = await fetch(`${getApiBase()}/api/skills/projector/status`, {
+      const res = await apiFetch(`/api/skills/projector/status`, {
         signal: AbortSignal.timeout(4000),
       })
       value = res.ok ? Boolean((await res.json())?.powered) : false

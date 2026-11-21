@@ -1,13 +1,9 @@
 /**
  * Natural-language parser for timer / chrono voice commands.
  *
- * Two paths: a fast regex-only parser for the common cases (covers
- * "pon temporizador de 10 minutos", "pausa el timer", "agrega 5 minutos",
- * "cancela el cronómetro"), and a Claude haiku fallback for anything weird.
- * The regex path is preferred because it's instant — voice latency matters.
+ * Solo extracción por regex (instantánea: la latencia de voz importa):
+ * duración ("10 minutos", "media hora") y etiqueta del temporizador/cronómetro.
  */
-
-import { runClaude } from './claudeCli.js'
 
 const NUM_WORDS = {
   un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6,
@@ -81,91 +77,4 @@ export function extractLabel(text, kind /* 'timer'|'chrono' */) {
     }
   }
   return null
-}
-
-// Map verb keywords to canonical actions. Note we deliberately omit bare
-// "para" / "paralo" — the Spanish preposition "para" collides with phrases
-// like "para la pasta", flipping starts into pauses. We rely on "pausa",
-// "pausalo", "detente", "stop" for unambiguous pause intent.
-const ACTION_MAP = [
-  { re: /\b(pausa(r|lo|la|me)?|p[aá]usa(lo|la|me)?|det[eé]n(lo|la|te|me)?|stop)\b/i, action: 'pause' },
-  { re: /\b(reanud(a|ar)|continu(a|ar)|resume|sigue)\b/i, action: 'resume' },
-  { re: /\b(agrega|a[ñn]ade|suma|aumenta|extiende|al[aá]rga(lo|la|me)?)\b/i, action: 'add' },
-  { re: /\b(cancela(r)?|elimina(r)?|borra(r)?|quita(r)?|qu[ií]tame)\b/i, action: 'cancel' },
-  { re: /\b(reinici(a|ar)|resetea(r)?|reset)\b/i, action: 'reset' },
-  { re: /\b(marca\s+vuelta|lap|vuelta\s+nueva)\b/i, action: 'lap' },
-  { re: /\b(pon(me|le)?|inicia(r)?|empieza(r)?|arranca(r)?|comienza(r)?|crea(r)?|nuevo|nueva|activa(r)?|abre|prende|echa\s+a\s+andar)\b/i, action: 'start' },
-]
-
-function detectAction(text) {
-  for (const { re, action } of ACTION_MAP) {
-    if (re.test(text)) return action
-  }
-  return 'start' // default — most utterances are starts
-}
-
-/**
- * Parse a timer voice command.
- * Returns { action, label, durationMs?, deltaMs? } or null if unparseable.
- *
- * action ∈ 'start' | 'pause' | 'resume' | 'add' | 'cancel' | 'reset'
- */
-export async function parseTimerCommand(text) {
-  const action = detectAction(text)
-  const label = extractLabel(text, 'timer')
-  const duration = extractDurationMs(text)
-
-  if (action === 'start') {
-    if (duration && duration >= 1000) return { action, label, durationMs: duration }
-    // Try Claude haiku as fallback when no number found.
-    const ai = await aiParseTimer(text).catch(() => null)
-    if (ai && ai.durationMs && ai.durationMs >= 1000) {
-      return { action: 'start', label: ai.label ?? label, durationMs: ai.durationMs }
-    }
-    return null
-  }
-
-  if (action === 'add') {
-    if (duration && duration >= 1000) return { action, label, deltaMs: duration }
-    return null
-  }
-
-  // pause/resume/cancel/reset don't need a duration.
-  return { action, label }
-}
-
-/**
- * Parse a chronometer voice command.
- * Returns { action, label } — chrono never has a duration.
- *
- * action ∈ 'start' | 'pause' | 'resume' | 'reset' | 'lap' | 'cancel'
- */
-export function parseChronoCommand(text) {
-  const action = detectAction(text)
-  const label = extractLabel(text, 'chrono')
-  return { action, label }
-}
-
-const AI_SYSTEM = `Eres un parser de comandos de temporizador. Recibes una frase en español
-y devuelves SOLO JSON con esta forma: {"durationMs": number, "label": string|null}.
-- "durationMs": duración total en milisegundos. Si dice "media hora" → 1800000.
-- "label": breve etiqueta (objeto/actividad), o null si no se menciona.
-Si no encuentras una duración, devuelve {"error":"no_duration"}.`
-
-async function aiParseTimer(text) {
-  const raw = await runClaude(`Frase: "${text}"`, {
-    systemPromptText: AI_SYSTEM,
-    timeoutMs: 8000,
-    model: 'haiku',
-    fallbackReply: '',
-    namespace: 'jarvis-timer-parser',
-  })
-  const m = raw.match(/\{[\s\S]*\}/)
-  if (!m) return null
-  let obj
-  try { obj = JSON.parse(m[0]) } catch { return null }
-  if (obj.error) return null
-  const ms = Number(obj.durationMs)
-  if (!ms || ms < 1000) return null
-  return { durationMs: ms, label: obj.label && typeof obj.label === 'string' ? obj.label : null }
 }

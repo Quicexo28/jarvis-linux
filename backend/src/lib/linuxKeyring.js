@@ -96,8 +96,3 @@ export function dpapiDecrypt(cipherB64) {
 export function dpapiEncryptRaw(plain) {
   return Buffer.from(dpapiEncrypt(plain), 'base64')
 }
-
-/** Decrypt a raw blob Buffer. */
-export function dpapiDecryptRaw(blobBuf) {
-  return dpapiDecrypt(Buffer.from(blobBuf).toString('base64'))
-}

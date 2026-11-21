@@ -157,8 +157,3 @@ export function releaseMic(): void {
     if (refs === 0) hardClose()
   }, LINGER_MS)
 }
-
-/** El stream vivo, si lo hay (para consumidores que sólo miran). */
-export function getMicStream(): MediaStream | null {
-  return isLive(stream) ? stream : null
-}

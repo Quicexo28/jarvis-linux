@@ -10,10 +10,11 @@
  * right after a build and for matched invocations from speech.js.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { writeFileSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { Readable } from 'stream'
+import { readJsonFile } from './jsonFile.js'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = join(__dir, '..', '..', 'data')
@@ -25,12 +26,7 @@ function norm(s) {
 
 /** @returns {Array<{slug,path,method,description,triggers,createdAt}>} */
 export function loadManifest() {
-  try {
-    if (!existsSync(MANIFEST_PATH)) return []
-    return JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'))
-  } catch {
-    return []
-  }
+  return readJsonFile(MANIFEST_PATH, [])
 }
 
 /** Upsert a skill entry by slug. */

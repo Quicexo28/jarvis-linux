@@ -2,7 +2,6 @@ export type Mode = 'home' | 'house' | 'plan2d' | 'plan3d' | 'space' | 'cloud' | 
 // 'vault' se excluye igual que plan2d/plan3d/space: su hologramita vive en el
 // anillo, pero al entrar SUSTITUYE el lienzo entero (es un grafo navegable, no
 // un panel lateral).
-export type HoloMode = Exclude<Mode, 'plan2d' | 'plan3d' | 'space' | 'mobile' | 'vault'>
 export type WallType = 'solid' | 'low'
 export type Segment = { x1: number; y1: number; x2: number; y2: number; wallType?: WallType }
 export type SavedPlan = { room: string; name: string; segments: Segment[]; updatedAt: string }

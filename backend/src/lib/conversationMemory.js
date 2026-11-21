@@ -24,7 +24,3 @@ export function getConversationContext() {
     .map(t => `${t.role === 'user' ? 'Usuario' : 'Jarvis'}: ${t.text}`)
     .join('\n')
 }
-
-export function clearMemory() {
-  turns.length = 0
-}

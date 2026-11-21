@@ -6,7 +6,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { handleHealth } from './handlers/health.js'
 import { handleModules } from './handlers/modules.js'
-import { handleDeviceAction, handleJarvisTurn, handleJarvisWake, handleJarvisTts, handleFillerWav, handleAgentHealth, handleElevateStatus, handleElevateEnroll, handleElevateChallenge, handleElevate } from './handlers/jarvis.js'
+import { handleDeviceAction, handleJarvisTurn, handleJarvisWake, handleJarvisTts, handleAgentHealth, handleElevateStatus, handleElevateEnroll, handleElevateChallenge, handleElevate } from './handlers/jarvis.js'
 import { handleTelemetry } from './handlers/telemetry.js'
 import { handleSttTranscribe } from './handlers/stt.js'
 import { handleVisionScreen, handleVisionCamera } from './handlers/vision.js'
@@ -108,7 +108,6 @@ export const routes = [
   { method: 'POST', path: '/api/skills/gestures/toggle', handler: handleGestureToggle },
   { method: 'GET', path: '/api/skills/gestures/status', handler: handleGestureStatus },
   { method: 'POST', path: '/api/jarvis/tts',           handler: handleJarvisTts },
-  { method: 'GET',  path: '/api/jarvis/filler',         handler: handleFillerWav },
   { method: 'POST', path: '/api/jarvis/stt',           handler: handleSttTranscribe },
   { method: 'POST', path: '/api/jarvis/process-speech', handler: handleProcessSpeech },
   { method: 'POST', path: '/api/jarvis/converse',       handler: handleConverse },

@@ -1,6 +1,3 @@
-import { createReadStream } from 'fs'
-import { stat } from 'fs/promises'
-import { join } from 'path'
 import { json, readBody } from '../lib/http.js'
 import { appendDeviceAction } from '../lib/obsidian.js'
 import { getAgentStatus } from '../agent/bridge.js'
@@ -11,29 +8,6 @@ import { splitForTts } from '../lib/ttsChunks.js'
 import { killProcessGroup } from '../lib/ttsPlayer.js'
 import { consumeTicket, elevationStatus, enrollDevice, issueChallenge, elevate } from '../lib/riskAuth.js'
 import { riskDeniedSince } from '../lib/toolRisk.js'
-
-const FILLER_DIR = join(import.meta.dirname, '..', '..', 'voice', 'cache', 'fillers')
-const FILLER_NAME_RE = /^filler-[a-z0-9-]{1,32}$/
-
-export async function handleFillerWav(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host}`)
-  const name = url.searchParams.get('name') ?? ''
-  if (!FILLER_NAME_RE.test(name)) {
-    return json(res, 400, { ok: false, error: 'invalid_name' })
-  }
-  const filePath = join(FILLER_DIR, `${name}.wav`)
-  try {
-    const info = await stat(filePath)
-    res.statusCode = 200
-    res.setHeader('Content-Type', 'audio/wav')
-    res.setHeader('Content-Length', String(info.size))
-    res.setHeader('Cache-Control', 'public, max-age=3600')
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    createReadStream(filePath).pipe(res)
-  } catch {
-    return json(res, 404, { ok: false, error: 'not_rendered' })
-  }
-}
 
 const WAKE_PROMPT = 'Eres Jarvis, asistente personal de Santiago, al estilo del Jarvis de Iron Man. Tratas al usuario de "señor". Responde SOLO con 2 a 5 palabras confirmando que estas atento ("A sus ordenes, señor", "Aqui estoy, señor"). Sin preguntas, sin saludos largos, sin emojis.'
 

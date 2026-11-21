@@ -43,9 +43,3 @@ export function startCloudflareTunnel(port) {
 export function getTunnelUrl() {
   return tunnelUrl
 }
-
-export function stopCloudflareTunnel() {
-  child?.kill()
-  child = null
-  tunnelUrl = null
-}

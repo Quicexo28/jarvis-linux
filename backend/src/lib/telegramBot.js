@@ -4,6 +4,7 @@ import path from 'node:path'
 import QRCode from 'qrcode'
 import { notifyJarvis, telegramDisabled } from './cloudStorage.js'
 import { listReminders, cancelReminder } from './reminders.js'
+import { sleep } from './sleep.js'
 
 const PORT = process.env.PORT ?? '8788'
 const FALLBACK_CHAT_ID = '2017358997'
@@ -326,10 +327,6 @@ async function poll(token, chatId) {
     }
   }
   console.log('[telegramBot] polling stopped')
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function clearWebhook(token, prefix) {

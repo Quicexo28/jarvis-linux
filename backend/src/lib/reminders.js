@@ -9,11 +9,12 @@
  * parsed by Claude haiku in parseReminder() — robust against free phrasing.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { writeFileSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { runClaude } from './claudeCli.js'
 import { notifyJarvis } from './cloudStorage.js'
+import { readJsonFile } from './jsonFile.js'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = join(__dir, '..', '..', 'data')
@@ -22,12 +23,7 @@ const STORE = join(DATA_DIR, 'reminders.json')
 const REPEAT_MS = { hourly: 3600e3, daily: 86400e3, weekly: 604800e3 }
 
 export function loadReminders() {
-  try {
-    if (!existsSync(STORE)) return []
-    return JSON.parse(readFileSync(STORE, 'utf-8'))
-  } catch {
-    return []
-  }
+  return readJsonFile(STORE, [])
 }
 
 function save(list) {
@@ -102,10 +98,6 @@ export function startScheduler(intervalMs = 30000) {
   timer = setInterval(() => { tick().catch(() => {}) }, intervalMs)
   if (typeof timer.unref === 'function') timer.unref() // don't keep process alive in tests
   console.log('[reminders] scheduler started')
-}
-
-export function stopScheduler() {
-  if (timer) { clearInterval(timer); timer = null }
 }
 
 const PARSE_SYSTEM = `Eres un parser de recordatorios. Recibes una frase en español y la hora actual.

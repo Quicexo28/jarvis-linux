@@ -114,8 +114,3 @@ export async function startPdfWatcher() {
 
   console.log(`[vaultWatcher] watching ${vault} for PDF/DOCX/image files`)
 }
-
-export function stopPdfWatcher() {
-  watcher?.close()
-  watcher = null
-}

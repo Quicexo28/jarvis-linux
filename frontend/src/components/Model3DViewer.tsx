@@ -13,6 +13,7 @@
  * (roll=Z, horizontal=Y, vertical=X), 1:1 angular, persists on release.
  */
 
+import { HUE, BG } from '../lib/theme'
 import React, { Component, useRef, useMemo, useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
@@ -71,10 +72,10 @@ function tauAlpha(dtSec: number, tauMs: number): number {
 
 /** Distinct colors auto-assigned to objects without an explicit color.
  *  HUD family — matches the app's dominant #00f0ff cyan aesthetic. */
-const PALETTE = ['#00f0ff', '#64ffda', '#ffd700', '#c8f4ff', '#0059ff', '#ff8a80', '#38d5ff', '#7fa6b8']
+const PALETTE = [HUE.info, HUE.ok, HUE.attn, '#c8f4ff', HUE.deep, '#ff8a80', '#38d5ff', '#7fa6b8']
 
 /** Extra-dimension gradient endpoint for w-colored polytopes (HUD gold). */
-const W_COLOR_FAR = '#ffd700'
+const W_COLOR_FAR = HUE.attn
 
 /** Kinds that are meaningless without a coordinate frame → axes auto-on.
  *  Plain shapes (primitive/parametric/curve/...) stay frameless unless
@@ -228,8 +229,8 @@ function ArrowMesh({ from, to, color, radius = 0.035, head = true, opacity = 1 }
 /* ---- Axes + reference grid (math frame: z up) ---- */
 
 const AXES: { dir: Vec3; color: string; label: string }[] = [
-  { dir: [1, 0, 0], color: '#00f0ff', label: 'x' },
-  { dir: [0, 1, 0], color: '#64ffda', label: 'y' },
+  { dir: [1, 0, 0], color: HUE.info, label: 'x' },
+  { dir: [0, 1, 0], color: HUE.ok, label: 'y' },
   { dir: [0, 0, 1], color: '#c8f4ff', label: 'z' },
 ]
 
@@ -1065,10 +1066,10 @@ function Scene({ objects, colors, sceneOpts, hiddenIds, gestureEnabled }: {
         </>
       ) : (
         <>
-          <color attach="background" args={[sceneOpts.background ?? '#03080d']} />
-          <ambientLight intensity={0.45} color="#00f0ff" />
+          <color attach="background" args={[sceneOpts.background ?? BG]} />
+          <ambientLight intensity={0.45} color={HUE.info} />
           <pointLight position={[5, 8, 5]} intensity={1.2} color="#ffffff" />
-          <pointLight position={[-5, -3, -5]} intensity={0.6} color="#0059ff" />
+          <pointLight position={[-5, -3, -5]} intensity={0.6} color={HUE.deep} />
         </>
       )}
       {!gestureEnabled && <OrbitControls makeDefault enablePan={true} />}
@@ -1119,7 +1120,7 @@ function SimHud() {
 
   const btn: React.CSSProperties = {
     background: 'rgba(0,240,255,0.10)', border: '1px solid rgba(0,240,255,0.42)',
-    borderRadius: 4, color: '#00f0ff', cursor: 'pointer', padding: '3px 10px', fontSize: 11,
+    borderRadius: 4, color: HUE.info, cursor: 'pointer', padding: '3px 10px', fontSize: 11,
   }
 
   return (
@@ -1131,7 +1132,7 @@ function SimHud() {
       backdropFilter: 'blur(8px)', fontSize: 12, color: '#ccd6f6',
     }}>
       {title && (
-        <div style={{ color: '#00f0ff', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase' }}>
+        <div style={{ color: HUE.info, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase' }}>
           {title}
         </div>
       )}
@@ -1230,7 +1231,7 @@ export function Model3DViewer() {
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '10px 20px', color: '#00f0ff', fontSize: 13, letterSpacing: 1,
+        padding: '10px 20px', color: HUE.info, fontSize: 13, letterSpacing: 1,
         textTransform: 'uppercase', borderBottom: '1px solid rgba(0,240,255,0.18)',
       }}>
         <span>{title}</span>
@@ -1305,7 +1306,7 @@ export function Model3DViewer() {
             <span>¿Activar gestos para el visor 3D?</span>
             <button
               onClick={() => { setGestureEnabled(true); setShowGesturePrompt(false) }}
-              style={{ background: 'rgba(0,240,255,0.12)', border: '1px solid rgba(0,240,255,0.5)', borderRadius: 4, color: '#00f0ff', cursor: 'pointer', padding: '3px 10px', fontSize: 11 }}
+              style={{ background: 'rgba(0,240,255,0.12)', border: '1px solid rgba(0,240,255,0.5)', borderRadius: 4, color: HUE.info, cursor: 'pointer', padding: '3px 10px', fontSize: 11 }}
             >Sí</button>
             <button
               onClick={() => setShowGesturePrompt(false)}

@@ -9,7 +9,7 @@ import { getTtsLevel, isTtsSpeaking, isTtsThinking, isHoloAwake } from '../audio
 import { PINCH_SCALE_MULTIPLIER, PINCH_APPROACH_DISTANCE, PINCH_DISSOLVE_START, RING_FOLLOW_OMEGA } from '../gestures/config'
 import { springFollow, dampFactor, type SpringState } from '../state/ringSnap'
 import { modeMeta, MAIN_RING, SUB_RING, SUB_RING_UTILS } from '../constants'
-import { FOLDER_HUE, HUE } from '../lib/theme'
+import { BG, FOLDER_HUE, HUE } from '../lib/theme'
 import { HoloClock, HoloBase, HoloReticle, HoloFloor, Glow, HoloMaterial, useHoloMaterial, getGlowTexture } from './holoKit'
 import type { Mode } from '../types'
 
@@ -96,7 +96,7 @@ function CosmicBackground() {
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
-      <pointsMaterial color="#00f0ff" size={0.018} transparent opacity={0.38} sizeAttenuation />
+      <pointsMaterial color={HUE.info} size={0.018} transparent opacity={0.38} sizeAttenuation />
     </points>
   )
 }
@@ -176,7 +176,7 @@ export function NeuralFireGeo({ active }: { active: boolean }) {
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
     return new THREE.LineSegments(
       geo,
-      new THREE.LineBasicMaterial({ color: '#00f0ff', transparent: true, opacity: 0.12 })
+      new THREE.LineBasicMaterial({ color: HUE.info, transparent: true, opacity: 0.12 })
     )
   }, [edges, nodes])
 
@@ -276,11 +276,11 @@ export function NeuralFireGeo({ active }: { active: boolean }) {
       <primitive object={edgeLinesObj} />
       <instancedMesh ref={instRef} args={[undefined, undefined, N_NODES]}>
         <sphereGeometry args={[0.055, 8, 8]} />
-        <meshStandardMaterial color="#ffffff" emissive="#00f0ff" emissiveIntensity={1.4} toneMapped={false} />
+        <meshStandardMaterial color="#ffffff" emissive={HUE.info} emissiveIntensity={1.4} toneMapped={false} />
       </instancedMesh>
       <mesh ref={glowRef}>
         <sphereGeometry args={[0.15, 16, 16]} />
-        <meshBasicMaterial color="#00f0ff" transparent opacity={0.18} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.18} />
       </mesh>
       <mesh ref={shellRef} material={shellMat}>
         <icosahedronGeometry args={[1.34, 4]} />
@@ -314,11 +314,11 @@ function HouseGeoFallback({ active }: { active: boolean }) {
       </mesh>
       <mesh>
         <boxGeometry args={[2.8, 1.6, 2.0]} />
-        <meshBasicMaterial color="#00f0ff" wireframe transparent opacity={0.45} />
+        <meshBasicMaterial color={HUE.info} wireframe transparent opacity={0.45} />
       </mesh>
       <mesh position={[0, 1.4, 0]} rotation={[0, Math.PI / 4, 0]}>
         <coneGeometry args={[2.1, 1.2, 4, 1, true]} />
-        <meshBasicMaterial color="#00f0ff" wireframe transparent opacity={0.38} />
+        <meshBasicMaterial color={HUE.info} wireframe transparent opacity={0.38} />
       </mesh>
       <mesh ref={win1} position={[-0.6, 0.2, 1.01]}>
         <planeGeometry args={[0.55, 0.45]} />
@@ -461,7 +461,7 @@ function Plan2DGeo({ active }: { active: boolean }) {
     [new THREE.Vector3(-0.2, 0, 0.8), new THREE.Vector3(1.5, 0, 0.8)],
   ].map(pts => new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(pts),
-    new THREE.LineBasicMaterial({ color: '#00f0ff', linewidth: 2 })
+    new THREE.LineBasicMaterial({ color: HUE.info, linewidth: 2 })
   )), [])
 
   return (
@@ -470,7 +470,7 @@ function Plan2DGeo({ active }: { active: boolean }) {
         <bufferGeometry ref={gridGeoRef}>
           <bufferAttribute attach="attributes-position" args={[basePositions, 3]} />
         </bufferGeometry>
-        <pointsMaterial color="#00f0ff" size={0.055} transparent opacity={0.7} sizeAttenuation />
+        <pointsMaterial color={HUE.info} size={0.055} transparent opacity={0.7} sizeAttenuation />
       </points>
       {wallLines.map((ln, i) => <primitive key={i} object={ln} />)}
       <mesh ref={sweepRef} position={[0, 0.25, 0]} rotation={[0, Math.PI / 2, 0]}>
@@ -480,13 +480,13 @@ function Plan2DGeo({ active }: { active: boolean }) {
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[4.5, 4.5]} />
-        <meshBasicMaterial color="#00f0ff" wireframe transparent opacity={0.08} />
+        <meshBasicMaterial color={HUE.info} wireframe transparent opacity={0.08} />
       </mesh>
       {[[-2.25, 0, 0], [2.25, 0, 0], [0, 0, -2.25], [0, 0, 2.25]].map((pos, i) => (
         <mesh key={i} position={pos as [number,number,number]}
           rotation={[0, i < 2 ? Math.PI / 2 : 0, 0]}>
           <boxGeometry args={[4.5, 0.02, 0.02]} />
-          <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={1.5} color="#000" toneMapped={false} />
+          <meshStandardMaterial emissive={HUE.info} emissiveIntensity={1.5} color="#000" toneMapped={false} />
         </mesh>
       ))}
     </group>
@@ -531,7 +531,7 @@ function Plan3DGeo({ active }: { active: boolean }) {
           </mesh>
           <mesh position={[0, y, 0]}>
             <boxGeometry args={[2.4, 0.07, 1.8]} />
-            <meshBasicMaterial color="#00f0ff" wireframe transparent opacity={0.5} />
+            <meshBasicMaterial color={HUE.info} wireframe transparent opacity={0.5} />
           </mesh>
         </group>
       ))}
@@ -539,7 +539,7 @@ function Plan3DGeo({ active }: { active: boolean }) {
         {[[-1.17, 0.9], [1.17, 0.9], [-1.17, -0.9 + 0.03], [1.17, -0.9 + 0.03]].map(([x, z], i) => (
           <mesh key={i} position={[x as number, 0.9, z as number]}>
             <boxGeometry args={[0.06, 1.86, 0.06]} />
-            <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={1} color="#001520" toneMapped={false} />
+            <meshStandardMaterial emissive={HUE.info} emissiveIntensity={1} color="#001520" toneMapped={false} />
           </mesh>
         ))}
         {[
@@ -550,7 +550,7 @@ function Plan3DGeo({ active }: { active: boolean }) {
         ].map(({ pos, rot, w, h }, i) => (
           <mesh key={i} position={pos} rotation={rot}>
             <planeGeometry args={[w, h, 4, 4]} />
-            <meshBasicMaterial color="#00f0ff" wireframe transparent opacity={0.25} side={THREE.DoubleSide} />
+            <meshBasicMaterial color={HUE.info} wireframe transparent opacity={0.25} side={THREE.DoubleSide} />
           </mesh>
         ))}
       </group>
@@ -594,7 +594,7 @@ function SpaceGeo({ active }: { active: boolean }) {
     <group rotation={[0.25, 0, 0]}>
       <mesh ref={ringRef}>
         <torusGeometry args={[1.1, 0.065, 20, 140]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={3} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={3} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <circleGeometry args={[1.03, 64]} />
@@ -602,22 +602,22 @@ function SpaceGeo({ active }: { active: boolean }) {
       </mesh>
       <mesh>
         <circleGeometry args={[0.6, 32]} />
-        <meshBasicMaterial color="#00f0ff" transparent opacity={0.06} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.06} side={THREE.DoubleSide} />
       </mesh>
       <Glow color={HUE.deep} scale={3.2} opacity={0.55} />
       <Glow scale={1.4} opacity={0.35} />
       <mesh ref={arcRef}>
         <torusGeometry args={[0.95, 0.008, 8, 80]} />
-        <meshBasicMaterial color="#0059ff" transparent opacity={0.5} />
+        <meshBasicMaterial color={HUE.deep} transparent opacity={0.5} />
       </mesh>
       <instancedMesh ref={instRef} args={[undefined, undefined, 60]}>
         <sphereGeometry args={[0.022, 6, 6]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={5} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={5} color="#001520" toneMapped={false} />
       </instancedMesh>
       {[0, Math.PI / 2].map((rot, i) => (
         <mesh key={i} rotation={[0, 0, rot]}>
           <boxGeometry args={[2.5, 0.008, 0.008]} />
-          <meshBasicMaterial color="#00f0ff" transparent opacity={0.15} />
+          <meshBasicMaterial color={HUE.info} transparent opacity={0.15} />
         </mesh>
       ))}
     </group>
@@ -680,21 +680,21 @@ function HexTorusGeo({ active }: { active: boolean }) {
       <Glow scale={1.5} opacity={0.4} />
       <mesh ref={ring1Ref}>
         <torusGeometry args={[0.9, 0.06, 6, 24]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={active ? 3.5 : 2.0} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={active ? 3.5 : 2.0} color="#001520" toneMapped={false} />
       </mesh>
       <mesh ref={ring2Ref} rotation={[Math.PI / 3, 0, 0]}>
         <torusGeometry args={[0.65, 0.03, 6, 18]} />
-        <meshBasicMaterial color="#0059ff" transparent opacity={0.55} />
+        <meshBasicMaterial color={HUE.deep} transparent opacity={0.55} />
       </mesh>
       {nodePos.map((pos, i) => (
         <mesh key={i} position={pos}>
           <octahedronGeometry args={[0.06, 0]} />
-          <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.2} color="#001520" toneMapped={false} />
+          <meshStandardMaterial emissive={HUE.info} emissiveIntensity={2.2} color="#001520" toneMapped={false} />
         </mesh>
       ))}
       <instancedMesh ref={instRef} args={[undefined, undefined, N_PART]}>
         <octahedronGeometry args={[1, 0]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={4.5} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={4.5} color="#001520" toneMapped={false} />
       </instancedMesh>
     </group>
   )
@@ -727,7 +727,7 @@ function UtilsGeo({ active }: { active: boolean }) {
     <group>
       <mesh ref={coreRef}>
         <icosahedronGeometry args={[0.4, 0]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" wireframe toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={2.5} color="#001520" wireframe toneMapped={false} />
       </mesh>
       <mesh material={coreMat}>
         <icosahedronGeometry args={[0.38, 0]} />
@@ -735,15 +735,15 @@ function UtilsGeo({ active }: { active: boolean }) {
       <Glow scale={1.3} opacity={0.4} />
       <mesh ref={r1}>
         <torusGeometry args={[0.85, 0.014, 8, 60]} />
-        <meshBasicMaterial color="#00f0ff" transparent opacity={0.55} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.55} />
       </mesh>
       <mesh ref={r2} rotation={[0, 0, Math.PI / 3]}>
         <torusGeometry args={[1.10, 0.011, 8, 60]} />
-        <meshBasicMaterial color="#0059ff" transparent opacity={0.45} />
+        <meshBasicMaterial color={HUE.deep} transparent opacity={0.45} />
       </mesh>
       <mesh ref={r3} rotation={[Math.PI / 4, 0, 0]}>
         <torusGeometry args={[1.40, 0.009, 8, 60]} />
-        <meshBasicMaterial color="#00f0ff" transparent opacity={0.30} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.30} />
       </mesh>
     </group>
   )
@@ -767,7 +767,7 @@ function TimerGeo({ active }: { active: boolean }) {
         new THREE.Vector3(Math.cos(a) * r1, Math.sin(a) * r1, 0),
         new THREE.Vector3(Math.cos(a) * r2, Math.sin(a) * r2, 0),
       ]),
-      new THREE.LineBasicMaterial({ color: '#00f0ff', transparent: true, opacity: i % 3 === 0 ? 0.9 : 0.45 })
+      new THREE.LineBasicMaterial({ color: HUE.info, transparent: true, opacity: i % 3 === 0 ? 0.9 : 0.45 })
     )
   }), [])
 
@@ -785,11 +785,11 @@ function TimerGeo({ active }: { active: boolean }) {
     <group rotation={[0.15, 0, 0]}>
       <mesh ref={ringRef}>
         <torusGeometry args={[1.0, 0.05, 12, 64]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={2.5} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <circleGeometry args={[0.95, 64]} />
-        <meshBasicMaterial color="#00f0ff" transparent opacity={0.07} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.07} side={THREE.DoubleSide} />
       </mesh>
       {tickLines.map((ln, i) => <primitive key={i} object={ln} />)}
       <mesh ref={arcRef}>
@@ -800,11 +800,11 @@ function TimerGeo({ active }: { active: boolean }) {
       <Glow scale={1.1} opacity={0.5} />
       <mesh ref={handRef}>
         <boxGeometry args={[0.05, 0.85, 0.02]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={4.5} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={4.5} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <sphereGeometry args={[0.08, 16, 16]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={4} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={4} color="#001520" toneMapped={false} />
       </mesh>
     </group>
   )
@@ -827,7 +827,7 @@ function ChronoGeo({ active }: { active: boolean }) {
         new THREE.Vector3(Math.cos(a) * r1, Math.sin(a) * r1, 0),
         new THREE.Vector3(Math.cos(a) * r2, Math.sin(a) * r2, 0),
       ]),
-      new THREE.LineBasicMaterial({ color: '#00f0ff', transparent: true, opacity: i % 5 === 0 ? 0.85 : 0.30 })
+      new THREE.LineBasicMaterial({ color: HUE.info, transparent: true, opacity: i % 5 === 0 ? 0.85 : 0.30 })
     )
   }), [])
 
@@ -845,15 +845,15 @@ function ChronoGeo({ active }: { active: boolean }) {
     <group rotation={[0.15, 0, 0]}>
       <mesh position={[0, 1.1, 0]}>
         <boxGeometry args={[0.25, 0.18, 0.05]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={2.5} color="#001520" toneMapped={false} />
       </mesh>
       <mesh ref={innerRef}>
         <torusGeometry args={[0.95, 0.06, 12, 64]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={3} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={3} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <torusGeometry args={[1.05, 0.012, 6, 64]} />
-        <meshBasicMaterial color="#00f0ff" transparent opacity={0.45} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.45} />
       </mesh>
       {subTicks.map((ln, i) => <primitive key={i} object={ln} />)}
       <group ref={crownRef}>
@@ -896,7 +896,7 @@ function HexDieGeo({ active }: { active: boolean }) {
     const edges = new THREE.EdgesGeometry(geo)
     return new THREE.LineSegments(
       edges,
-      new THREE.LineBasicMaterial({ color: '#00f0ff', transparent: true, opacity: 0.55 - i * 0.1 })
+      new THREE.LineBasicMaterial({ color: HUE.info, transparent: true, opacity: 0.55 - i * 0.1 })
     )
   }), [])
 
@@ -905,7 +905,7 @@ function HexDieGeo({ active }: { active: boolean }) {
     const end   = new THREE.Vector3(Math.cos(angle) * 1.4, 0, Math.sin(angle) * 1.4)
     return new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), end]),
-      new THREE.LineBasicMaterial({ color: '#00f0ff', transparent: true, opacity: 0.38 })
+      new THREE.LineBasicMaterial({ color: HUE.info, transparent: true, opacity: 0.38 })
     )
   }), [])
 
@@ -955,11 +955,11 @@ function HexDieGeo({ active }: { active: boolean }) {
     <group ref={groupRef} rotation={[Math.PI / 8, 0, 0]}>
       <mesh ref={dieRef}>
         <cylinderGeometry args={[0.38, 0.38, 0.07, 6]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={2.5} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={2.5} color="#001520" toneMapped={false} />
       </mesh>
       <mesh>
         <cylinderGeometry args={[0.40, 0.40, 0.085, 6]} />
-        <meshBasicMaterial color="#00f0ff" wireframe transparent opacity={0.45} />
+        <meshBasicMaterial color={HUE.info} wireframe transparent opacity={0.45} />
       </mesh>
       {hexFrames.map((ln, i) => <primitive key={i} object={ln} />)}
       {pinLines.map((ln, i) => <primitive key={i} object={ln} />)}
@@ -970,15 +970,15 @@ function HexDieGeo({ active }: { active: boolean }) {
       <Glow scale={1.4} opacity={0.5} />
       <instancedMesh ref={microRef} args={[undefined, undefined, 12]}>
         <boxGeometry args={[0.07, 0.07, 0.07]} />
-        <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={3} color="#001520" toneMapped={false} />
+        <meshStandardMaterial emissive={HUE.info} emissiveIntensity={3} color="#001520" toneMapped={false} />
       </instancedMesh>
       <mesh ref={ring1Ref}>
         <torusGeometry args={[1.1, 0.012, 6, 48]} />
-        <meshBasicMaterial color="#00f0ff" transparent opacity={0.55} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.55} />
       </mesh>
       <mesh ref={ring2Ref} rotation={[Math.PI / 3, 0, 0]}>
         <torusGeometry args={[1.55, 0.009, 6, 48]} />
-        <meshBasicMaterial color="#00f0ff" transparent opacity={0.35} />
+        <meshBasicMaterial color={HUE.info} transparent opacity={0.35} />
       </mesh>
     </group>
   )
@@ -1533,9 +1533,9 @@ function SceneContent() {
       <HoloClock />
       <CosmicBackground />
       <HoloFloor />
-      <ambientLight color="#00f0ff" intensity={0.12} />
-      <pointLight position={[0, 8, -4]} color="#0059ff" intensity={1.2} />
-      <pointLight position={[0, -5, -8]} color="#00f0ff" intensity={0.4} />
+      <ambientLight color={HUE.info} intensity={0.12} />
+      <pointLight position={[0, 8, -4]} color={HUE.deep} intensity={1.2} />
+      <pointLight position={[0, -5, -8]} color={HUE.info} intensity={0.4} />
       <RingController />
     </>
   )
@@ -1548,7 +1548,7 @@ export function WorldScene() {
   return (
     <Canvas
       camera={{ position: [0, 0, 0], fov: 72, near: 0.1, far: 200 }}
-      style={{ position: 'fixed', inset: 0, background: '#03080d' }}
+      style={{ position: 'fixed', inset: 0, background: BG }}
       gl={{ antialias: true, alpha: false }}
     >
       <SceneContent />

@@ -110,11 +110,6 @@ interface AppearanceRow {
   night?: string
 }
 
-/** Un cuerpo del que no se sabe nada: esfera de color plano, quieta. */
-export const DEFAULT_APPEARANCE: BodyAppearance = {
-  texture: undefined, tilt: 0, rotationPeriod: 0, emissive: false,
-}
-
 const ROWS: Record<string, AppearanceRow> = {
   // El Sol gira DIFERENCIALMENTE (25.05 d en el ecuador, 34 d cerca del polo);
   // 25.38 d es el periodo sidéreo de Carrington, el que se usa por convenio.

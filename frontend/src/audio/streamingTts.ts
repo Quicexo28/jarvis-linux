@@ -28,16 +28,6 @@ let masterGain: GainNode | null = null
 
 
 /**
- * Public accessor for the single shared AudioContext + worklet so other
- * audio sources (e.g. pre-rendered filler WAVs) can play through the same
- * output device at the same sample rate without instantiating a second
- * context.
- */
-export async function getSharedAudioContext(): Promise<AudioContext> {
-  return getCtx()
-}
-
-/**
  * Duck (fade-out) or restore (fade-in) TTS playback volume.
  * Used for barge-in: call setTtsDucking(true) when user starts speaking
  * and setTtsDucking(false) when they stop or a final transcript arrives.

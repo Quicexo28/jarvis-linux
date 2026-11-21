@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getApiBase } from '../api/client'
+import { HUE } from '../lib/theme'
+import { apiFetch } from '../api/client'
 import { HudBtn } from './HudBtn'
 import { useJarvisStore } from '../state/jarvisStore'
 
@@ -95,6 +96,7 @@ interface SpeakerSystemStatus {
 }
 
 const DEFAULT_THRESHOLD = 0.55
+const BACKEND_DOWN = 'No se pudo contactar con el backend.'
 const THRESHOLD_MIN = 0.30
 const THRESHOLD_MAX = 0.95
 
@@ -158,7 +160,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
 
   const fetchSpeakers = useCallback(async () => {
     try {
-      const res = await fetch(`${getApiBase()}/api/speaker-id/speakers`)
+      const res = await apiFetch(`/api/speaker-id/speakers`)
       const data = await res.json()
       if (data.ok && data.speakers) {
         setSpeakers(data.speakers)
@@ -169,32 +171,32 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
           setSpeakerName('')
         }
       }
-    } catch {}
+    } catch { setMessage(BACKEND_DOWN) }
   }, [setSpeakerName])
 
   const fetchSamples = useCallback(async () => {
     try {
-      const res = await fetch(`${getApiBase()}/api/speaker-id/samples?speaker=${encodeURIComponent(activeSpeaker)}`)
+      const res = await apiFetch(`/api/speaker-id/samples?speaker=${encodeURIComponent(activeSpeaker)}`)
       const data = await res.json()
       if (data.ok) setSamples(data.samples ?? [])
-    } catch {}
+    } catch { setMessage(BACKEND_DOWN) }
   }, [activeSpeaker])
 
   const fetchRejected = useCallback(async () => {
     if (!activeSpeaker) { setRejected([]); return }
     try {
-      const res = await fetch(`${getApiBase()}/api/speaker-id/rejected?speaker=${encodeURIComponent(activeSpeaker)}`)
+      const res = await apiFetch(`/api/speaker-id/rejected?speaker=${encodeURIComponent(activeSpeaker)}`)
       const data = await res.json()
       if (data.ok) setRejected(data.samples ?? [])
-    } catch {}
+    } catch { setMessage(BACKEND_DOWN) }
   }, [activeSpeaker])
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${getApiBase()}/api/speaker-id/status`)
+      const res = await apiFetch(`/api/speaker-id/status`)
       const data = await res.json()
       if (data.ok) setSysStatus(data as SpeakerSystemStatus)
-    } catch {}
+    } catch { setMessage(BACKEND_DOWN) }
   }, [])
 
   useEffect(() => {
@@ -223,7 +225,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
     const name = newSpeakerDraft.trim()
     if (!name) return
     try {
-      const res = await fetch(`${getApiBase()}/api/speaker-id/speakers`, {
+      const res = await apiFetch(`/api/speaker-id/speakers`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -235,14 +237,14 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
         setSpeakerName(data.name)
         fetchSpeakers()
       }
-    } catch {}
+    } catch { setMessage(BACKEND_DOWN) }
   }
 
   const deleteSpeaker = async (name: string) => {
     const ok = window.confirm(`Eliminar perfil "${name}" y TODAS sus muestras. ¿Continuar?`)
     if (!ok) return
     try {
-      const res = await fetch(`${getApiBase()}/api/speaker-id/speakers?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/speaker-id/speakers?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
       if (res.status === 403) {
         setMessage('Ese nombre corresponde a la huella owner protegida — no se puede eliminar desde aquí.')
         return
@@ -255,7 +257,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
       }
       setSpeakers(prev => prev.filter(s => s.name !== name))
       fetchSpeakers()
-    } catch {}
+    } catch { setMessage(BACKEND_DOWN) }
   }
 
   const cleanupRecording = useCallback(() => {
@@ -283,7 +285,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
     setStatus('loading')
     setMessage('Subiendo muestra...')
     try {
-      const res = await fetch(`${getApiBase()}/api/speaker-id/samples?speaker=${encodeURIComponent(activeSpeaker)}`, {
+      const res = await apiFetch(`/api/speaker-id/samples?speaker=${encodeURIComponent(activeSpeaker)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'audio/wav' },
         body: blob,
@@ -300,7 +302,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
             setSessionStep(null)
             setMessage('Sesión completa: 5/5 condiciones grabadas. Re-calibrando Speaker ID...')
             try {
-              await fetch(`${getApiBase()}/api/speaker-id/reload`, { method: 'POST' })
+              await apiFetch(`/api/speaker-id/reload`, { method: 'POST' })
               setMessage('Sesión completa (5/5) y Speaker ID re-calibrado. Pide asignar estas muestras como huella base (owner) cuando quieras fijarlas.')
               fetchSpeakers()
             } catch {
@@ -441,16 +443,16 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
 
   const deleteSample = async (filename: string) => {
     try {
-      await fetch(`${getApiBase()}/api/speaker-id/samples?file=${encodeURIComponent(filename)}&speaker=${encodeURIComponent(activeSpeaker)}`, { method: 'DELETE' })
+      await apiFetch(`/api/speaker-id/samples?file=${encodeURIComponent(filename)}&speaker=${encodeURIComponent(activeSpeaker)}`, { method: 'DELETE' })
       fetchSamples()
       fetchSpeakers()
-    } catch {}
+    } catch { setMessage(BACKEND_DOWN) }
   }
 
   const restoreRejected = async (filename: string) => {
     try {
-      const res = await fetch(
-        `${getApiBase()}/api/speaker-id/rejected/restore?file=${encodeURIComponent(filename)}&speaker=${encodeURIComponent(activeSpeaker)}`,
+      const res = await apiFetch(
+        `/api/speaker-id/rejected/restore?file=${encodeURIComponent(filename)}&speaker=${encodeURIComponent(activeSpeaker)}`,
         { method: 'POST' }
       )
       const data = await res.json()
@@ -467,20 +469,20 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
 
   const deleteRejected = async (filename: string) => {
     try {
-      await fetch(
-        `${getApiBase()}/api/speaker-id/rejected?file=${encodeURIComponent(filename)}&speaker=${encodeURIComponent(activeSpeaker)}`,
+      await apiFetch(
+        `/api/speaker-id/rejected?file=${encodeURIComponent(filename)}&speaker=${encodeURIComponent(activeSpeaker)}`,
         { method: 'DELETE' }
       )
       fetchRejected()
       fetchSpeakers()
-    } catch {}
+    } catch { setMessage(BACKEND_DOWN) }
   }
 
   const reload = async () => {
     setStatus('loading')
     setMessage('Re-calibrando...')
     try {
-      const res = await fetch(`${getApiBase()}/api/speaker-id/reload`, { method: 'POST' })
+      const res = await apiFetch(`/api/speaker-id/reload`, { method: 'POST' })
       const data = await res.json()
       setMessage(data.ok ? 'Speaker ID recalibrado' : `Error: ${data.error}`)
       // Thresholds are preserved by the backend; refresh to reflect any changes.
@@ -505,8 +507,8 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
     setStatus('loading')
     setMessage('Borrando huella vieja...')
     try {
-      const res = await fetch(
-        `${getApiBase()}/api/speaker-id/reset?speaker=${encodeURIComponent(activeSpeaker)}`,
+      const res = await apiFetch(
+        `/api/speaker-id/reset?speaker=${encodeURIComponent(activeSpeaker)}`,
         { method: 'POST' }
       )
       const data = await res.json()
@@ -533,12 +535,12 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
     setThreshold(val)
     setSpeakers(prev => prev.map(s => s.name === activeSpeaker ? { ...s, threshold: val } : s))
     try {
-      await fetch(`${getApiBase()}/api/speaker-id/threshold`, {
+      await apiFetch(`/api/speaker-id/threshold`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: activeSpeaker, threshold: val }),
       })
-    } catch {}
+    } catch { setMessage(BACKEND_DOWN) }
   }
 
   const elapsed = RECORD_DURATION_S - remaining
@@ -568,7 +570,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 12, letterSpacing: '2px', color: '#00f0ff' }}>SPEAKER ID · CONFIGURACIÓN</span>
+          <span style={{ fontSize: 12, letterSpacing: '2px', color: HUE.info }}>SPEAKER ID · CONFIGURACIÓN</span>
           {voiceEnabled && noSamples && (
             <span style={{ fontSize: 9, color: '#ffb74d' }}>· enrolamiento pendiente</span>
           )}
@@ -578,7 +580,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
           style={{
             background: 'transparent',
             border: '1px solid #ff525244',
-            color: '#ff5252',
+            color: HUE.fail,
             padding: '4px 12px',
             fontSize: 10,
             letterSpacing: '2px',
@@ -610,8 +612,8 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                   onClick={() => { setActiveSpeaker(sp.name); setSpeakerName(sp.name) }}
                   style={{
                     background: sp.name === activeSpeaker ? 'rgba(0,229,255,0.15)' : 'rgba(255,255,255,0.04)',
-                    border: `1px solid ${sp.name === activeSpeaker ? '#00e5ff' : '#ffffff22'}`,
-                    color: sp.name === activeSpeaker ? '#00f0ff' : '#e0e0e0',
+                    border: `1px solid ${sp.name === activeSpeaker ? HUE.info : '#ffffff22'}`,
+                    color: sp.name === activeSpeaker ? HUE.info : '#e0e0e0',
                     padding: '5px 10px',
                     fontSize: 11,
                     borderRadius: 4,
@@ -656,7 +658,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                   marginTop: 8,
                   background: 'none',
                   border: '1px solid #ff525266',
-                  color: '#ff5252',
+                  color: HUE.fail,
                   fontSize: 9,
                   padding: '3px 8px',
                   borderRadius: 3,
@@ -680,7 +682,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontSize: 10, letterSpacing: '2px', color: '#ffd700' }}>
+                  <span style={{ fontSize: 10, letterSpacing: '2px', color: HUE.attn }}>
                     SESIÓN GUIADA · PASO {sessionStep + 1}/{SESSION_CONDITIONS.length}
                   </span>
                   <div style={{ display: 'flex', gap: 3 }}>
@@ -691,7 +693,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                           width: 14,
                           height: 4,
                           borderRadius: 2,
-                          background: i < sessionStep ? '#00e5ff' : i === sessionStep ? '#ffd700' : '#ffffff22',
+                          background: i < sessionStep ? HUE.info : i === sessionStep ? HUE.attn : '#ffffff22',
                         }}
                       />
                     ))}
@@ -708,7 +710,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
             <div
               style={{
                 background: 'rgba(0, 229, 255, 0.06)',
-                border: `1px solid ${recording ? '#00e5ff' : '#00e5ff33'}`,
+                border: `1px solid ${recording ? HUE.info : '#00e5ff33'}`,
                 borderRadius: 6,
                 padding: 16,
                 minHeight: 110,
@@ -724,7 +726,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                 style={{
                   fontSize: 16,
                   lineHeight: 1.4,
-                  color: recording ? '#00f0ff' : '#c8f4ff',
+                  color: recording ? HUE.info : '#c8f4ff',
                   fontFamily: "'Space Grotesk', sans-serif",
                 }}
               >
@@ -746,7 +748,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                 style={{
                   fontSize: 28,
                   fontVariantNumeric: 'tabular-nums',
-                  color: recording ? '#00f0ff' : '#5a7a85',
+                  color: recording ? HUE.info : '#5a7a85',
                   minWidth: 80,
                 }}
               >
@@ -833,7 +835,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                       style={{
                         background: 'none',
                         border: '1px solid #ff5252',
-                        color: '#ff5252',
+                        color: HUE.fail,
                         fontSize: 10,
                         padding: '2px 7px',
                         borderRadius: 3,
@@ -888,7 +890,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                       style={{
                         background: 'none',
                         border: '1px solid #00e5ff66',
-                        color: '#00e5ff',
+                        color: HUE.info,
                         fontSize: 9,
                         padding: '2px 7px',
                         borderRadius: 3,
@@ -902,7 +904,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                       style={{
                         background: 'none',
                         border: '1px solid #ff5252',
-                        color: '#ff5252',
+                        color: HUE.fail,
                         fontSize: 10,
                         padding: '2px 7px',
                         borderRadius: 3,
@@ -929,9 +931,9 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
                 value={threshold}
                 disabled={!activeSpeaker}
                 onChange={(e) => updateThreshold(Number(e.target.value))}
-                style={{ flex: 1, height: 4, accentColor: '#00e5ff', opacity: activeSpeaker ? 1 : 0.4 }}
+                style={{ flex: 1, height: 4, accentColor: HUE.info, opacity: activeSpeaker ? 1 : 0.4 }}
               />
-              <span style={{ fontSize: 12, color: '#00e5ff', minWidth: 40, textAlign: 'right' }}>
+              <span style={{ fontSize: 12, color: HUE.info, minWidth: 40, textAlign: 'right' }}>
                 {threshold.toFixed(2)}
               </span>
             </div>
@@ -1012,7 +1014,7 @@ export function SpeakerConfigWindow({ onClose }: { onClose: () => void }) {
             <div
               style={{
                 fontSize: 11,
-                color: '#ffd700',
+                color: HUE.attn,
                 opacity: 0.95,
                 padding: 10,
                 border: '1px solid #ffd70033',
@@ -1035,7 +1037,7 @@ function StatusRow({ label, value, highlight, warn }: {
   return (
     <>
       <span style={{ opacity: 0.55 }}>{label}</span>
-      <span style={{ color: warn ? '#ff8a80' : highlight ? '#00f0ff' : '#c8f4ff' }}>{value}</span>
+      <span style={{ color: warn ? '#ff8a80' : highlight ? HUE.info : '#c8f4ff' }}>{value}</span>
     </>
   )
 }
@@ -1050,7 +1052,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         background: 'rgba(255,255,255,0.015)',
       }}
     >
-      <div style={{ fontSize: 9, letterSpacing: '2px', color: '#00e5ff', opacity: 0.7, marginBottom: 10 }}>
+      <div style={{ fontSize: 9, letterSpacing: '2px', color: HUE.info, opacity: 0.7, marginBottom: 10 }}>
         {title}
       </div>
       {children}

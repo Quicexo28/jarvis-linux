@@ -757,8 +757,3 @@ export function startSelfHeal({ sessionStderr } = {}) {
   timer.unref?.()
   console.log(`[selfheal] armado: sondeo cada ${Math.round(PROBE_MS() / 60e3)} min, arreglo de código=${CODE_MODE()}`)
 }
-
-export function stopSelfHeal() {
-  if (timer) clearInterval(timer)
-  timer = null
-}

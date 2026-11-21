@@ -12,10 +12,10 @@
  * routes are not on its remote allowlist.
  */
 import { env } from 'node:process'
-import { readFileSync } from 'node:fs'
 import { json, readBody } from '../lib/http.js'
 import { notifyJarvis } from '../lib/cloudStorage.js'
 import { LOCAL_OPS, localMachineEntry, localMachineName, localOp } from '../lib/localAgent.js'
+import { readJsonFile } from '../lib/jsonFile.js'
 
 const HUB_CONTROL = env.HUB_CONTROL_URL ?? 'http://127.0.0.1:8795'
 const TOKENS_FILE = new URL('../../data/agent-tokens.json', import.meta.url)
@@ -46,11 +46,7 @@ async function hubFetch(path, init) {
  * one the UI must still list (to Wake-on-LAN it).
  */
 function knownMachineNames() {
-  try {
-    return Object.keys(JSON.parse(readFileSync(TOKENS_FILE, 'utf8')))
-  } catch {
-    return []
-  }
+  return Object.keys(readJsonFile(TOKENS_FILE, {}))
 }
 
 /**

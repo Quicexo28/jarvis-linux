@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getApiBase } from '../api/client'
+import { apiFetch } from '../api/client'
 
 interface ObsidianStatus {
   ok: boolean
@@ -17,7 +17,7 @@ export function ObsidianStatusBadge() {
     let cancelled = false
     async function fetchStatus() {
       try {
-        const res = await fetch(`${getApiBase()}/api/obsidian/status`)
+        const res = await apiFetch(`/api/obsidian/status`)
         const data = await res.json() as ObsidianStatus
         if (!cancelled) { setStatus(data); setLoading(false) }
       } catch {

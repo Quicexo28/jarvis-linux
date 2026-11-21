@@ -268,14 +268,6 @@ export const elevateChallenge = () =>
 export const elevate = (publicKey: string, challenge: string, signature: string, password: string) =>
   postJson<ElevateResult & { ticket?: string }>('/api/jarvis/elevate', { publicKey, challenge, signature, password })
 
-export function deviceAction(entity: string, action: string): Promise<unknown> {
-  return request('/api/jarvis/device-action', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ entity, action }),
-  })
-}
-
 /* ----- ambient context ----- */
 
 export type CtxDevice = {

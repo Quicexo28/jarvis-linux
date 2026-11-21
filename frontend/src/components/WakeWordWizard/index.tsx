@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { getApiBase } from '../../api/client'
+import { apiFetch } from '../../api/client'
 
 type Step = 'checking' | 'idle' | 'recording' | 'done' | 'error'
 
@@ -35,7 +35,7 @@ export function WakeWordWizard() {
 
   // Check calibration status on mount
   useEffect(() => {
-    fetch(`${getApiBase()}/api/jarvis/wake-status`)
+    apiFetch(`/api/jarvis/wake-status`)
       .then(r => r.json())
       .then(d => {
         if (!d.calibrated) { setVisible(true); setStep('idle') }
@@ -78,7 +78,7 @@ export function WakeWordWizard() {
 
   async function calibrate(samples: string[]) {
     try {
-      const res = await fetch(`${getApiBase()}/api/jarvis/wake-calibrate`, {
+      const res = await apiFetch(`/api/jarvis/wake-calibrate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ samples }),

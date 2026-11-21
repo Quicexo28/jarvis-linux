@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { spawn } from 'child_process'
+import { sleep } from './sleep.js'
 
 const CLOUD_ROOT = process.env.CLOUD_ROOT
   ?? path.join(os.homedir(), 'SyncthingCloud', 'TelegramCloud', 'Santi')
@@ -36,15 +37,6 @@ export function saveToCloud(content, filename, category) {
   const name = stampedName(filename)
   const outPath = path.join(datedDir(cat), name)
   fs.writeFileSync(outPath, typeof content === 'string' ? content : Buffer.from(content))
-  return { path: outPath, category: cat, filename: name }
-}
-
-export function copyToCloud(sourcePath, category) {
-  const filename = path.basename(sourcePath)
-  const cat = category || resolveCategory(filename)
-  const name = stampedName(filename)
-  const outPath = path.join(datedDir(cat), name)
-  fs.copyFileSync(sourcePath, outPath)
   return { path: outPath, category: cat, filename: name }
 }
 
@@ -259,8 +251,6 @@ async function clearCloudWebhook(token) {
   }
 }
 
-function cloudSleep(ms) { return new Promise(r => setTimeout(r, ms)) }
-
 let cloudRunning = false
 let cloudOffset = 0
 
@@ -269,10 +259,10 @@ async function pollCloud(token) {
   while (cloudRunning) {
     try {
       const r = await fetch(`${api}/getUpdates?offset=${cloudOffset}&timeout=30`)
-      if (!r.ok) { await cloudSleep(5000); continue }
+      if (!r.ok) { await sleep(5000); continue }
       const data = await r.json()
-      if (!data.ok) { await cloudSleep(5000); continue }
-      if (!data.result.length) { await cloudSleep(200); continue }
+      if (!data.ok) { await sleep(5000); continue }
+      if (!data.result.length) { await sleep(200); continue }
 
       for (const update of data.result) {
         cloudOffset = update.update_id + 1
@@ -289,7 +279,7 @@ async function pollCloud(token) {
       }
     } catch (e) {
       console.error('[cloudBot] poll error:', e?.message)
-      await cloudSleep(5000)
+      await sleep(5000)
     }
   }
   console.log('[cloudBot] polling stopped')

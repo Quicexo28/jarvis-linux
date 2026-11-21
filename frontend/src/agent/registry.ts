@@ -21,10 +21,6 @@ export function listCapabilities(): Capability[] {
   return [...capabilities.values()]
 }
 
-export function getCapability(id: string): Capability | undefined {
-  return capabilities.get(id)
-}
-
 // For tests / hot-reload isolation.
 export function resetRegistry(): void {
   capabilities.clear()

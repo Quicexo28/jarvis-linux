@@ -40,15 +40,17 @@ export function clearMobileToken(): void {
   localStorage.removeItem(MOBILE_TOKEN_KEY)
 }
 
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** `fetch` contra el backend: antepone la base y añade el token móvil si existe. No lanza por `!ok`. */
+export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = getMobileToken()
-  const extraHeaders: Record<string, string> = token
-    ? { Authorization: `Bearer ${token}` }
-    : {}
-  const res = await fetch(`${getApiBase()}${path}`, {
+  return fetch(`${getApiBase()}${path}`, {
     ...init,
-    headers: { ...(init?.headers as Record<string, string>), ...extraHeaders },
+    headers: { ...(init?.headers as Record<string, string>), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   })
+}
+
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<T>
 }

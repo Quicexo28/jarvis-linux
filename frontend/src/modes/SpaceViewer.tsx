@@ -7,7 +7,7 @@ import { GRID_CELLS, CELL_METERS } from '../constants'
 import { loadSavedPlans } from './Plan2DEditor'
 import { loadEntityStore, loadViewpointStore, EntityPrimitive } from './Plan3DViewer'
 import { useGestureStore } from '../state/gestureStore'
-import { getApiBase } from '../api/client'
+import { apiFetch } from '../api/client'
 
 function ImmersiveFirstPersonController({ viewpoint }: { viewpoint: Viewpoint }) {
   const { camera } = useThree()
@@ -175,7 +175,7 @@ export function SpaceViewer({ initialSelectedKey }: { initialSelectedKey?: strin
     const selectedAction = action || availableActions[selectedActionIdx] || focusedEntity.skillAction || focusedEntity.skillActions?.[0]
     if (!selectedAction) return
     try {
-      await fetch(`${getApiBase()}/api/jarvis/device-action`, {
+      await apiFetch(`/api/jarvis/device-action`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
