@@ -13,7 +13,7 @@ function Harness() {
   const nav = useNavigation()
   return (
     <>
-      <Nucleus listening={false} onOrb={nav.toggleMenu} onEnter={nav.enterMode} />
+      <Nucleus listening={false} onOrb={nav.toggleMenu} onEnter={nav.enterMode} onBack={nav.handleBack} />
       <StatusBar voiceActive={false} voiceHeard={false} onEnter={nav.enterMode} />
     </>
   )
@@ -78,17 +78,19 @@ describe('Núcleo · teclado', () => {
     press(' ')
     press('2')
     expect(st().ringLevel).toBe('house-sub')
-    expect(host.querySelectorAll('.nx-seg')).toHaveLength(3)
+    expect(host.querySelectorAll('.nx-dial--sub .nx-seg')).toHaveLength(3)
+    expect(host.querySelectorAll('.nx-dial--parent .nx-seg')).toHaveLength(6) // el principal sigue, encogido
     press('Escape')
     expect(st().ringLevel).toBe('main')
     expect(host.querySelectorAll('.nx-seg')).toHaveLength(6)
+    expect(host.querySelector('.nx-dial--sub')).toBeNull()
   })
 
   it('Útiles abre un sub-dial de dos', () => {
     press(' ')
     press('6')
     expect(st().ringLevel).toBe('utils-sub')
-    expect(host.querySelectorAll('.nx-seg')).toHaveLength(2)
+    expect(host.querySelectorAll('.nx-dial--sub .nx-seg')).toHaveLength(2)
   })
 
   it('desde dentro de un modo, las flechas cambian de modo', () => {

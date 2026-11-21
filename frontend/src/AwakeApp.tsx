@@ -95,7 +95,7 @@ export function AwakeApp() {
   return (
     <div className="jarvis-app" data-panel-open={isPanelMode ? 'true' : 'false'}>
 
-      <Nucleus listening={voiceHeard} onOrb={nav.toggleMenu} onEnter={nav.enterMode} />
+      <Nucleus listening={voiceHeard} onOrb={nav.toggleMenu} onEnter={nav.enterMode} onBack={nav.handleBack} />
 
       {/* Viñeta del pinch: avisa de que está a punto de activar. */}
       {pinchZoomProgress > PINCH_VIGNETTE_START && (

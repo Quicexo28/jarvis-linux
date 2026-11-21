@@ -3,14 +3,18 @@ import { dialSegment } from '../../lib/nucleus'
 import { modeMeta } from '../../constants'
 import type { Mode } from '../../types'
 
-const R0 = 156
-const R1 = 262
+/** Radios (unidades del viewBox) de cada anillo. El sub-dial ocupa la corona exterior; el principal, ya encogido, queda dentro. */
+const RADII = { main: [156, 262], parent: [156, 262], sub: [190, 290] } as const
+
+/** main: dial principal · parent: el principal ya encogido (hay un sub-dial abierto) · sub: el sub-dial de Casa/Útiles. */
+export type DialRole = keyof typeof RADII
 
 interface Props {
   items: Mode[]
   /** Resaltado (ratón, flechas, puño). */
   active: Mode
   visible: boolean
+  role?: DialRole
   onPick: (mode: Mode) => void
   onHover: (mode: Mode) => void
 }
@@ -21,13 +25,18 @@ interface Props {
  * que el 25 % de la pantalla se descarta). `.gesture-hover` se estila igual que
  * el resalte, porque los eventos sintéticos no activan `:hover` ni `mouseenter`.
  */
-export function Dial({ items, active, visible, onPick, onHover }: Props) {
-  const segs = useMemo(() => items.map((_, i) => dialSegment(i, items.length, R0, R1)), [items])
+export function Dial({ items, active, visible, role = 'main', onPick, onHover }: Props) {
+  const [r0, r1] = RADII[role]
+  const segs = useMemo(() => items.map((_, i) => dialSegment(i, items.length, r0, r1)), [items, r0, r1])
   return (
-    <svg className={`nx-dial${items.length <= 3 ? ' nx-dial--few' : ''}`} viewBox="-300 -300 600 600" aria-hidden={!visible}>
-      <g className="nx-ring nx-ring--c"><circle r="287" /></g>
-      <g className="nx-ring nx-ring--a"><circle r="140" /></g>
-      <g className="nx-ring nx-ring--b"><circle r="132" /></g>
+    <svg className={`nx-dial nx-dial--${role}${items.length <= 3 ? ' nx-dial--few' : ''}`} viewBox="-300 -300 600 600" aria-hidden={!visible}>
+      {role === 'sub'
+        ? <g className="nx-ring nx-ring--c"><circle r="297" /></g>
+        : <>
+            <g className="nx-ring nx-ring--c"><circle r="287" /></g>
+            <g className="nx-ring nx-ring--a"><circle r="140" /></g>
+            <g className="nx-ring nx-ring--b"><circle r="132" /></g>
+          </>}
       {items.map((mode, i) => {
         const s = segs[i]
         const label = modeMeta[mode].label
@@ -38,7 +47,7 @@ export function Dial({ items, active, visible, onPick, onHover }: Props) {
             className={`nx-seg${mode === active ? ' is-on' : ''}`}
             role="button"
             tabIndex={visible ? 0 : -1}
-            aria-label={`${label}, tecla ${i + 1}`}
+            aria-label={role === 'parent' ? `${label}, volver al dial principal` : `${label}, tecla ${i + 1}`}
             style={{ transitionDelay: `${i * 40}ms` }}
             onMouseEnter={() => onHover(mode)}
             onFocus={() => onHover(mode)}

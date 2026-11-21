@@ -24,6 +24,13 @@
   transition: opacity .5s, transform .7s cubic-bezier(.2,.8,.2,1);
 }
 .nx--menu .nx-dial { opacity: 1; transform: none; }
+.nx--menu .nx-dial--parent { transform: scale(.6); opacity: .8; }
+.nx-dial--parent .nx-ring--c, .nx-dial--parent .nx-seg-n { display: none; }
+.nx-dial--parent .nx-seg-t { font-size: 20px; letter-spacing: .12em; }
+/* El padre elegido se ensancha hacia el sub-dial: es el que se expandió. */
+.nx-dial--parent .nx-seg.is-on path { fill: rgba(0,240,255,.34); stroke-width: 3; }
+.nx--menu .nx-dial--sub { animation: nx-sub-in .7s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes nx-sub-in { from { opacity: 0; transform: scale(.45) rotate(-30deg); } to { opacity: 1; transform: none; } }
 .nx-ring circle { fill: none; transform-origin: 0 0; }
 .nx-ring { animation: nx-spin 60s linear infinite; animation-play-state: paused; transform-origin: 0 0; }
 .nx--menu .nx-ring { animation-play-state: running; }
