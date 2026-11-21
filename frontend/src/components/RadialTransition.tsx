@@ -19,8 +19,9 @@ export function RadialTransition({ onComplete }: Props) {
     canvas.height = h
 
     const ox = w / 2
-    const oy = h - 24
-    const maxRadius = Math.sqrt(w * w + h * h)
+    const oy = h / 2
+    // Desde el centro, llegar a las esquinas pide media diagonal.
+    const maxRadius = Math.sqrt(w * w + h * h) / 2
 
     const startTime = performance.now()
     let rafId = 0
