@@ -6,6 +6,10 @@ interface Props {
 
 export function RadialTransition({ onComplete }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  // En una ref: si fuera dependencia del efecto, cada render de App (el padre pasa una flecha nueva)
+  // reiniciaría la animación y saldría dos veces.
+  const done = useRef(onComplete)
+  done.current = onComplete
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -61,13 +65,13 @@ export function RadialTransition({ onComplete }: Props) {
       if (elapsed < 800) {
         rafId = requestAnimationFrame(draw)
       } else {
-        onComplete()
+        done.current()
       }
     }
 
     rafId = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(rafId)
-  }, [onComplete])
+  }, [])
 
   return (
     <canvas
