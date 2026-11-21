@@ -2,14 +2,12 @@ import { useEffect, useState } from 'react'
 import { HudPanel } from './HudPanel'
 import { HudBtn } from './HudBtn'
 import { useChronoStore, formatChrono, startChronoTicker, type ChronoEntry } from '../state/chronoStore'
-import type { CSSProperties } from 'react'
 
 interface ChronoPanelProps {
   exiting?: boolean
-  style?: CSSProperties
 }
 
-export function ChronoPanel({ exiting, style }: ChronoPanelProps) {
+export function ChronoPanel({ exiting }: ChronoPanelProps) {
   useEffect(() => { startChronoTicker() }, [])
   const chronos = useChronoStore((s) => s.chronos)
   const create = useChronoStore((s) => s.create)
@@ -29,7 +27,7 @@ export function ChronoPanel({ exiting, style }: ChronoPanelProps) {
   }
 
   return (
-    <HudPanel mode="Cronómetro" exiting={exiting} className="mode-panel mode-panel--wide" style={style}>
+    <HudPanel mode="Cronómetro" exiting={exiting} className="mode-panel mode-panel--wide">
       <div className="timer-panel">
         {chronos.length === 0 && !showForm && (
           <div className="timer-empty">

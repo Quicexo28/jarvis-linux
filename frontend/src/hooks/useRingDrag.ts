@@ -56,7 +56,8 @@ export function useRingDrag() {
         useModel3dStore.getState().open ||
         s.output.pinch.active
 
-      if (!g.active || blocked || jarvis.ringLevel !== 'main') { stop(); return }
+      // Solo con el dial principal a la vista: en reposo el resalte no se ve y girarlo no sirve.
+      if (!g.active || blocked || jarvis.ringLevel !== 'main' || !jarvis.menuOpen) { stop(); return }
 
       if (!dragging) {
         dragging = true

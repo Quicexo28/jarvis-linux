@@ -349,6 +349,10 @@ async function viewClose(): Promise<unknown> {
     store.setRingLevel('main')
     return { closed: 'sub_ring' }
   }
+  if (store.menuOpen) {
+    store.setMenuOpen(false)
+    return { closed: 'menu' }
+  }
   return { closed: hadPinch ? 'pinch' : 'noop' }
 }
 
@@ -361,6 +365,7 @@ async function viewCurrent(): Promise<unknown> {
     zoomedMode: j.zoomedMode,
     ringLevel: j.ringLevel,
     activeRingMode: j.activeRingMode,
+    menuOpen: j.menuOpen,
     bootState: b.bootState,
     overlays: {
       terminal: u.terminalOpen,

@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import { HudPanel } from '../HudPanel'
 import { HudBtn } from '../HudBtn'
 import { CoreTerminal } from '../CoreTerminal'
@@ -9,12 +8,11 @@ import { nextVoiceMode } from '../../lib/voiceMode'
 
 interface Props {
   exiting: boolean
-  style: CSSProperties
   /** Hay voz captando ahora mismo (wake abierta o PTT sostenido). */
   voiceHeard: boolean
 }
 
-export function CorePanel({ exiting, style, voiceHeard }: Props) {
+export function CorePanel({ exiting, voiceHeard }: Props) {
   const voiceMode = useJarvisStore(s => s.voiceMode)
   const setVoiceMode = useJarvisStore(s => s.setVoiceMode)
   const clapWakeEnabled = useJarvisStore(s => s.clapWakeEnabled)
@@ -24,7 +22,7 @@ export function CorePanel({ exiting, style, voiceHeard }: Props) {
   const setTerminalOpen = useUiStore(s => s.setTerminalOpen)
 
   return (
-    <HudPanel mode="Core" exiting={exiting} className={`core-panel${terminalOpen ? ' core-panel--expanded' : ''}`} style={style}>
+    <HudPanel mode="Core" exiting={exiting} className={`core-panel${terminalOpen ? ' core-panel--expanded' : ''}`}>
       {terminalOpen ? (
         <div className="core-terminal-wrapper core-terminal-enter">
           <CoreTerminal onClose={() => setTerminalOpen(false)} />

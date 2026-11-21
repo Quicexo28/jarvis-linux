@@ -4,3 +4,6 @@ const dom = (globalThis as { jsdom?: { window: Window } }).jsdom
 if (dom && !globalThis.localStorage) {
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: () => dom.window.localStorage })
 }
+
+// React 18+: sin esta marca, `act()` avisa en cada llamada de que el entorno no lo soporta.
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

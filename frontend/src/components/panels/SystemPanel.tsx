@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import { HudPanel } from '../HudPanel'
 import { HudBtn } from '../HudBtn'
 import { PanelSection } from '../PanelSection'
@@ -15,27 +14,21 @@ import { useMobileLink } from '../../hooks/useMobileLink'
 import { useSystemTelemetry } from '../../hooks/useSystemTelemetry'
 import { gestureTone } from '../../lib/gestureTone'
 
-interface Props {
-  exiting: boolean
-  style: CSSProperties
-  /** Panel abierto a pantalla completa (no solo por proximidad del pinch): solo entonces se consulta el backend. */
-  zoomed: boolean
-}
-
-export function SystemPanel({ exiting, style, zoomed }: Props) {
+/** Solo se monta con el modo abierto (o saliendo), así que siempre consulta al backend. */
+export function SystemPanel({ exiting }: { exiting: boolean }) {
   const setZoomedMode = useJarvisStore(s => s.setZoomedMode)
   const gestureEnabled = useGestureStore(s => s.enabled)
   const gestureStatus = useGestureStore(s => s.status)
   const gestureFps = useGestureStore(s => s.fps)
   const setGestureDebugOpen = useUiStore(s => s.setGestureDebugOpen)
   const setSpeakerConfigOpen = useUiStore(s => s.setSpeakerConfigOpen)
-  const mobile = useMobileLink(zoomed)
-  const telemetry = useSystemTelemetry(zoomed)
+  const mobile = useMobileLink(true)
+  const telemetry = useSystemTelemetry(true)
   const { token, status } = mobile
   const host = telemetry.data?.host
 
   return (
-    <HudPanel mode="System" exiting={exiting} className="mode-panel" style={style}>
+    <HudPanel mode="Sistema" exiting={exiting} className="mode-panel">
       <PanelSection
         title="Conexión móvil"
         tone={status?.connected ? 'ok' : 'idle'}

@@ -61,6 +61,8 @@ interface JarvisState {
 
   ringLevel: RingLevel
   activeRingMode: Mode
+  /** El dial de modos está abierto a mano. Un sub-anillo lo muestra aunque sea `false` (ver `lib/nucleus.ts`). */
+  menuOpen: boolean
   /** Continuous ring angle in slot units. Integer = at a slot. Updated while dragging. */
   /** Posición del carrusel en UNIDADES DE SLOT (ver `state/ringSnap.ts`). Es la
    *  FUENTE de la rotación del anillo principal: el renderer la sigue en vivo,
@@ -95,6 +97,7 @@ interface JarvisState {
 
   setPttActive: (active: boolean) => void
 
+  setMenuOpen: (open: boolean) => void
   setRingLevel: (level: RingLevel) => void
   rotateRing: (direction: -1 | 1) => void
   setActiveRingMode: (mode: Mode) => void
@@ -124,6 +127,7 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
 
   ringLevel: 'main',
   activeRingMode: 'home',
+  menuOpen: false,
   ringAngle: 0,
   ringDragging: false,
 
@@ -156,6 +160,8 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
     set({ speakerName })
   },
 
+  setMenuOpen: (menuOpen) => set({ menuOpen }),
+
   setRingLevel: (level) =>
     set({
       ringLevel: level,
@@ -177,7 +183,8 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
       : MAIN_RING
     const idx = list.indexOf(activeRingMode)
     const next = ((idx === -1 ? 0 : idx) + direction + list.length) % list.length
-    set({ activeRingMode: list[next], ringAngle: next })
+    // Girar sin ver el dial no tiene sentido (voz: «gira a la derecha»): lo deja a la vista.
+    set({ activeRingMode: list[next], ringAngle: next, menuOpen: true })
   },
 
   setRingAngle: (ringAngle) => set({ ringAngle }),

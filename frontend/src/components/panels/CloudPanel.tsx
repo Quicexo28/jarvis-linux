@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import { HudPanel } from '../HudPanel'
 import { HudBtn } from '../HudBtn'
 import { PanelSection } from '../PanelSection'
@@ -6,10 +5,10 @@ import { StatRow } from '../StatRow'
 import { ObsidianStatusBadge } from '../ObsidianStatusBadge'
 import { useJarvisStore } from '../../state/jarvisStore'
 
-export function CloudPanel({ exiting, style }: { exiting: boolean; style: CSSProperties }) {
+export function CloudPanel({ exiting }: { exiting: boolean }) {
   const setZoomedMode = useJarvisStore(s => s.setZoomedMode)
   return (
-    <HudPanel mode="Cloud" exiting={exiting} className="mode-panel" style={style}>
+    <HudPanel mode="Nube" exiting={exiting} className="mode-panel">
       <PanelSection title="Sincronización" tone="idle" meta="pendiente">
         <StatRow label="Backup de voz" value="no" tone="idle" />
         <StatRow label="Planos 2D/3D" value="no" tone="idle" />

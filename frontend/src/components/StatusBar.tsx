@@ -4,18 +4,24 @@ import { useGestureStore } from '../state/gestureStore'
 import { useUiStore } from '../state/uiStore'
 import { modeMeta } from '../constants'
 import { nextVoiceMode } from '../lib/voiceMode'
+import { dialItems, nucleusLevel } from '../lib/nucleus'
+import type { Mode } from '../types'
 import { gestureTone } from '../lib/gestureTone'
 
 interface Props {
   /** Voz captando (wake abierta o PTT sostenido). */
   voiceActive: boolean
   voiceHeard: boolean
+  /** Entrar a un modo desde la tira (mismo camino que el dial). */
+  onEnter: (mode: Mode) => void
 }
 
-/** Barra superior: marca, modo actual y los tres controles (voz, texto, gestos). */
-export function StatusBar({ voiceActive, voiceHeard }: Props) {
+/** Barra superior: marca, tira de modos (fuera del reposo) y los tres controles (voz, texto, gestos). */
+export function StatusBar({ voiceActive, voiceHeard, onEnter }: Props) {
   const zoomedMode = useJarvisStore(s => s.zoomedMode)
   const activeRingMode = useJarvisStore(s => s.activeRingMode)
+  const menuOpen = useJarvisStore(s => s.menuOpen)
+  const ringLevel = useJarvisStore(s => s.ringLevel)
   const voiceMode = useJarvisStore(s => s.voiceMode)
   const setVoiceMode = useJarvisStore(s => s.setVoiceMode)
   const gestureEnabled = useGestureStore(s => s.enabled)
@@ -24,13 +30,26 @@ export function StatusBar({ voiceActive, voiceHeard }: Props) {
   const textInputOpen = useUiStore(s => s.textInputOpen)
   const setTextInputOpen = useUiStore(s => s.setTextInputOpen)
 
+  const level = nucleusLevel(zoomedMode, menuOpen, ringLevel)
+  const current = zoomedMode ?? activeRingMode
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
   return (
     <div className="status-bar">
       <span className="status-brand">JARVIS</span>
       <span className="status-divider" />
-      <span className="mode-label">{modeMeta[zoomedMode ?? activeRingMode].label}</span>
+      <span className="status-spacer" />
+      {level === 'rest' ? (
+        <span className="mode-label">{modeMeta[current].label}</span>
+      ) : (
+        <nav className="nx-strip" aria-label="Modos">
+          {dialItems(ringLevel).map((m, i) => (
+            <button key={m} type="button" className={m === current ? 'is-on' : undefined} onClick={() => onEnter(m)}>
+              {String(i + 1).padStart(2, '0')} {modeMeta[m].label.toUpperCase()}
+            </button>
+          ))}
+        </nav>
+      )}
       <span className="status-spacer" />
       <button
         className="status-badge-btn"

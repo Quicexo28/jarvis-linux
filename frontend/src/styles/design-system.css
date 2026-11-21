@@ -447,7 +447,7 @@ html, #root { background: transparent; }
   right: var(--safe-edge);
   top: 50%;
   transform: translateY(-50%);
-  width: clamp(280px, 26vw, 380px);
+  width: clamp(300px, 28vw, 520px);
   max-width: calc(100vw - var(--safe-edge) - 24px);
   padding: 18px;
   display: flex;

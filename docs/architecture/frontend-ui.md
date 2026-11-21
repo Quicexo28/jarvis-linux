@@ -98,3 +98,27 @@ Mode ring: `main` (`home | house | system | cloud`) + `sub` (`plan3d | space | p
 - **Red del renderer: usa `apiFetch(path)` de `api/client.ts`** (base + token móvil, no lanza por `!ok`). `request<T>` lo usa y SÍ lanza. Un `fetch(`${getApiBase()}…`)` suelto se salta el token y falla por la web remota.
 - Colores: `HUE.*`/`BG` de `lib/theme.ts`, no hex en `.tsx`.
 - Tests: `src/test-setup.ts` restituye `localStorage` de jsdom (Node ≥ 25 lo tapa con un global `undefined`).
+
+### Núcleo: orbe + dial (2026-11)
+
+Sustituye al carrusel 3D (`WorldScene`). Tres niveles, derivados del store por `lib/nucleus.ts` (`nucleusLevel`): **reposo** (solo el orbe), **menú** (dial alrededor del orbe) y **modo** (orbe pequeño arriba a la izquierda + el panel o canvas del modo).
+
+- **Estado:** el store no cambia de significado (`ringLevel`, `activeRingMode`, `zoomedMode`, `rotateRing`, `setRingLevel`). Solo se añadió `menuOpen`. Un sub-anillo (`house-sub`, `utils-sub`) muestra su dial aunque `menuOpen` sea `false`: así la voz («abre casa») deja algo visible. `rotateRing` pone `menuOpen: true`; `view_close` con solo el menú abierto lo cierra y devuelve `{ closed: 'menu' }`. El verificador del backend comprueba esas postcondiciones.
+- **Una sola tabla de entradas: `hooks/useNavigation.ts`.** Clic (V suelta), pinch completo y Espacio/Enter → «activar» (reposo abre el menú, menú entra al modo resaltado). Atrás (V cerrada, Escape) sube UN nivel: selector de plano → modo → sub-anillo → menú → reposo. Con el visor 3D abierto, «atrás» por gesto cierra el visor. Flechas mueven el resalte (o cambian de modo desde dentro); `1…9` eligen una entrada. Toda la lógica de decisión es pura y vive en `lib/nucleus.ts` (con tests).
+- **Teclado: guardas.** Se ignora con foco en input/textarea/select/contenteditable, con el visor 3D abierto, con el selector de plano encima y con un modo de canvas abierto (`CANVAS_MODES`: Plano 2D, Espacio 3D, Inmersivo, Memoria; ahí solo cuenta Escape). Espacio/Enter con foco en un `button` o `[role=button]` los atiende ese elemento (si no, se activaría dos veces).
+- **Gestos y cursor de mano.** El orbe es un `<button>` y cada segmento del dial un `role="button"` propio, NO el SVG entero: el cursor descarta objetivos de más del 25 % de la pantalla. Los eventos sintéticos no activan `:hover`/`mouseenter`; por eso `.gesture-hover` se estila igual que el resalte (`.is-on`). El puño arrastra el resalte solo con el dial principal visible (`useRingDrag` exige `menuOpen`); en reposo no tendría efecto visible.
+- **El orbe usa señales reales.** Pensar y hablar vienen de `audio/ttsLevelBus` (fuera de React): `useOrbState` las sondea cada 100 ms y solo toca el estado de React cuando cambian; el nivel de voz se escribe en `--lv` (`useVoiceLevel`) sin pasar por React. Escuchar = `voiceHeard` de `useVoiceTurn` (ventana de wake abierta o PTT), no `sttListening`: en continuo el micro siempre está abierto.
+- **WebKitGTK:** solo se animan `transform` y `opacity`. Nada de `filter` animado ni sombras borrosas animadas; el halo del orbe es un degradado que respira.
+- **Pendiente de medir en pantalla real:** sensibilidad del puño sobre el dial (`RING_DRAG_SENSITIVITY` se calibró para un carrusel), tamaño del dial en el proyector y legibilidad en PIP (400×300).
+
+### Ventana principal OPACA (2026-11-21)
+
+**Síntoma:** tras quitar el canvas 3D del anillo, Jarvis se veía como un cuadrado oscuro (~700 px) en el centro y el escritorio a través del resto; ni la cabecera se pintaba. El cuadrado era la zona del halo del orbe, que pulsa.
+
+**Causa (confirmada con captura real, `grim` del workspace 1):** la ventana de Tauri era `transparent: true` y WebKitGTK 2.54.2 solo repinta la zona dañada: lo que no se anima (fondo, cabecera, dial) se queda sin pintar. El `<Canvas>` de `WorldScene` repintaba toda la ventana en cada cuadro y lo ocultaba sin querer. Es el mismo tipo de fallo que documenta `lib.rs` («WebKitGTK nunca limpia una ventana transparente»).
+
+**Arreglo:** `src-tauri/tauri.conf.json` → ventana `main` con `"transparent": false` y `"backgroundColor": "#03080d"`. **La transparencia no hacía falta:** en DORMANT `DormantLayer` no pinta nada (devuelve `null`) y la ventana se aparca en `special:jarvis` (`dormant_window`); sigue viva porque el aplauso y el bus de despertar corren en su JS. Las ventanas auxiliares (`ptt-overlay`, `wall`) NO cambian. Un intento intermedio con una capa a pantalla completa de opacidad animada (`.nx-repaint`) también funcionaba, pero era un parche: se quitó.
+
+**Verificado:** con la ventana opaca se pintan completos el reposo, el dial y el despertar tras dormir (`system/sleep` → `system/wake`).
+
+**Cómo comprobarlo sin estar delante:** `hyprctl dispatch workspace 1; sleep 4; grim -o eDP-1 /tmp/x.png; hyprctl dispatch workspace <el que tenías>`. Las capturas de Chromium de una vista previa NO detectan este fallo: Chromium pinta todo.

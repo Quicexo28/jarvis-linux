@@ -3,11 +3,9 @@ import { HudPanel } from './HudPanel'
 import { HudBtn } from './HudBtn'
 import { TimerDial } from './TimerDial'
 import { useTimerStore, formatHms, startTimerTicker, type TimerEntry } from '../state/timerStore'
-import type { CSSProperties } from 'react'
 
 interface TimerPanelProps {
   exiting?: boolean
-  style?: CSSProperties
 }
 
 const ADD_PRESETS_MS: ReadonlyArray<{ label: string; delta: number }> = [
@@ -18,7 +16,7 @@ const ADD_PRESETS_MS: ReadonlyArray<{ label: string; delta: number }> = [
 
 const NEW_PRESETS_MIN: ReadonlyArray<number> = [1, 3, 5, 10, 15, 20, 30, 45, 60]
 
-export function TimerPanel({ exiting, style }: TimerPanelProps) {
+export function TimerPanel({ exiting }: TimerPanelProps) {
   useEffect(() => { startTimerTicker() }, [])
   const timers = useTimerStore((s) => s.timers)
   const create = useTimerStore((s) => s.create)
@@ -46,7 +44,7 @@ export function TimerPanel({ exiting, style }: TimerPanelProps) {
   }
 
   return (
-    <HudPanel mode="Temporizador" exiting={exiting} className="mode-panel mode-panel--wide" style={style}>
+    <HudPanel mode="Temporizador" exiting={exiting} className="mode-panel mode-panel--wide">
       <div className="timer-panel">
         {timers.length === 0 && !showForm && (
           <div className="timer-empty">
