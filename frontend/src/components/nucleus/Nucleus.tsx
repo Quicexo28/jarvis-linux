@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useJarvisStore } from '../../state/jarvisStore'
 import { useOrbState } from '../../hooks/useOrbState'
 import { dialItems, nucleusLevel, parentArcs, subArcs, uniformArcs, type Arc } from '../../lib/nucleus'
@@ -20,8 +20,8 @@ interface Props {
 
 /** Radio exterior del dial principal ya encogido (262 × 0,6): de ahí nace el sub-dial. */
 const PARENT_EDGE = 157
-/** Debe coincidir con `nx-sub-out` en nucleus.css. */
-const SUB_OUT_MS = 300
+/** Lo que dura la vuelta al principal (`nx-main-back` y el tween de Dial): el sub-dial que se pliega dura 300 ms dentro de ese margen. */
+const SUB_OUT_MS = 450
 const noop = () => {}
 const MAIN_ARCS = uniformArcs(MAIN_RING.length)
 
@@ -48,18 +48,16 @@ export function Nucleus({ listening, onOrb, onEnter, onBack }: Props) {
     [ringLevel, parent, subItems.length],
   )
   // Al volver de un sub-dial, el principal crece desde su tamaño encogido en vez de aparecer de golpe.
-  const fromSub = useRef(false)
   const subSnap = useRef<{ items: Mode[]; arcs: readonly Arc[]; origin: { x: number; y: number } } | null>(null)
+  const [leaving, setLeaving] = useState(false)
   const lastParent = useRef<readonly Arc[]>(MAIN_ARCS)
   if (layout) {
     lastParent.current = layout.arcs
     subSnap.current = { items: subItems, arcs: subArcs(subItems.length, layout.mid), origin: { x: PARENT_EDGE * Math.cos(layout.mid), y: PARENT_EDGE * Math.sin(layout.mid) } }
   }
-  const back = ringLevel === 'main' && fromSub.current
-  useEffect(() => { fromSub.current = ringLevel !== 'main' }, [ringLevel])
+  const back = leaving
   // Al salir, el sub-dial no desaparece de golpe: se queda una copia que se pliega hacia su entrada.
-  const [leaving, setLeaving] = useState(false)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (ringLevel !== 'main') { setLeaving(false); return }
     if (!subSnap.current) return
     setLeaving(true)
